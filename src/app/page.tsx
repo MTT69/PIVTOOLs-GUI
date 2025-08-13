@@ -15,6 +15,7 @@ import VectorViewer from '@/components/viewer/VectorViewer';
 import { Download, Play, Save, Image as ImageIcon } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
+import Masking from '@/components/setup/Masking';
 
 // Default configuration
 const defaultConfig = {
@@ -184,7 +185,7 @@ export default function Home() {
           </p>
           
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-9 mb-6">
+            <TabsList className="grid grid-cols-10 mb-6">
               <TabsTrigger value="environment" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Environment
               </TabsTrigger>
@@ -211,6 +212,9 @@ export default function Home() {
               </TabsTrigger>
               <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Viewer
+              </TabsTrigger>
+              <TabsTrigger value="masking" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                Masking
               </TabsTrigger>
             </TabsList>
             
@@ -247,6 +251,11 @@ export default function Home() {
 
             <TabsContent value="viewer">
               <ImagePairViewer />
+            </TabsContent>
+
+            <TabsContent value="masking">
+              {/* Masking tab content */}
+              <Masking config={config} updateConfig={updateConfig} />
             </TabsContent>
           </Tabs>
         </div>
