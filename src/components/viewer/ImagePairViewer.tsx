@@ -331,7 +331,11 @@ function Colorbar({ vmin, vmax, colormap }: { vmin: number; vmax: number; colorm
 
 export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUrl?: string }) {
   const [camera, setCamera] = useState("Cam1");
-  const [index, setIndex] = useState<number>(17);
+  const [index, setIndex] = useState<number>(1);
+  // Add separate indices for raw and processed
+  const [rawIndex, setRawIndex] = useState<number>(1);
+  const [procIndex, setProcIndex] = useState<number>(1);
+  
   const [loading, setLoading] = useState(false);
   const [imgA, setImgA] = useState<string | null>(null);
   const [imgB, setImgB] = useState<string | null>(null);
@@ -341,19 +345,25 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
   const [dtype, setDtype] = useState<DType | null>(null);
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const [colormap, setColormap] = useState<"gray" | "viridis">("gray");
+  // Add back vmin/vmax for auto-limits and mirroring to raw controls
   const [vmin, setVmin] = useState(0);
   const [vmax, setVmax] = useState(255);
-  const [basePathIdx, setBasePathIdx] = useState<number>(0);
+  // Replace basePathIdx with sourcePathIdx and load options from localStorage
+  const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
+  const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
+    try { return JSON.parse(typeof window !== "undefined" ? localStorage.getItem("piv_source_paths") || "[]" : "[]"); } catch { return []; }
+  });
   const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
   const [procToggle, setProcToggle] = useState<"A" | "B">("A");
   const [procImgA, setProcImgA] = useState<string | null>(null);
   const [procImgB, setProcImgB] = useState<string | null>(null);
   const [procLoading, setProcLoading] = useState(false);
-  const [filters, setFilters] = useState<{type: "POD" | "time"}[]>([]);
+  const [filters, setFilters] = useState<{type: "POD" | "time", batch_size?: number}[]>([]);
+  // Shared temporal batch length applied to all temporal filters (time/POD)
+  const [temporalBatch, setTemporalBatch] = useState<number>(50);
 
   // Per-image controls
-  const [rawIndex, setRawIndex] = useState<number>(0); // index for raw image
-  const [procIndex, setProcIndex] = useState<number>(0); // index for processed image
+  const [rawIndexControl, setRawIndexControl] = useState<number>(0); // index for raw image
 
   // Per-image min/max
   const [rawVmin, setRawVmin] = useState(0);
@@ -365,6 +375,15 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
     if (bitDepth) return Math.pow(2, bitDepth) - 1;
     return 255;
   }, [bitDepth]);
+
+  // Camera dropdown options (Cam1, Cam2, ...)
+  const cameraDropdownOptions = useMemo(() => {
+    const opts: string[] = [];
+    for (let i = 1; i <= 10; i++) {
+      opts.push(`Cam${i}`);
+    }
+    return opts;
+  }, []);
 
   // Simple auto-detection of camera folders (Cam1, Cam2, ...)
   const cameraOptions = useMemo(() => {
@@ -388,14 +407,32 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
     setProcVmax(rawVmax);
   }, [procImgA, procImgB]);
 
-  async function fetchPair(auto = false) {
+  // Refresh on storage changes (if open in multiple tabs/windows)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "piv_source_paths") {
+        try { setSourcePaths(JSON.parse(e.newValue || "[]")); } catch {}
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Helper to show just the last segment of a path
+  const basename = (p: string) => {
+    if (!p) return "";
+    const parts = p.replace(/\\/g, "/").split("/");
+    return parts.filter(Boolean).pop() || p;
+  };
+
+  async function fetchPair(auto = false, silent = false) {
     if (!camera) {
-      if (!auto) alert("Please enter a camera folder name");
+      if (!auto && !silent) alert("Please enter a camera folder name");
       return;
     }
     try {
-      setLoading(true);
-      const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${index}&base_path_idx=${basePathIdx}`;
+      if (!silent) setLoading(true);
+      const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${index}&source_path_idx=${sourcePathIdx}`;
       const res = await fetch(url);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to fetch");
@@ -441,9 +478,9 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
       }
     } catch (e: any) {
       console.error(e);
-      alert(e.message || "Error fetching images");
+      if (!auto && !silent) alert(e.message || "Error fetching images");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -479,66 +516,354 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
     setVmax(Math.ceil(p99));
   }
 
-  // 3. Fetch processed images
-  async function fetchProcessedPair() {
-    setProcLoading(true);
+  // Fetch processed image for the current frame; if missing, run processing silently and retry once
+  async function fetchProcessedPair(silent = false) {
+    if (!camera) return;
     try {
-      const url = `${backendUrl}/get_processed_pair?idx=0&type=processed`;
-      const res = await fetch(url);
+      if (!silent) setProcLoading(true);
+      const params = new URLSearchParams();
+      params.set("type", "processed");
+      params.set("frame", String(index));            // 1-based
+      params.set("camera", String(camera));          // 'Cam1' or '1'
+      params.set("source_path_idx", String(sourcePathIdx));
+      const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to fetch processed");
+      if (!res.ok) {
+        // On cache miss, run processing once (silent) to populate this frame, then retry
+        await runProcessing(true);
+        const res2 = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
+        const json2 = await res2.json();
+        if (!res2.ok) throw new Error(json2.error || "Failed to fetch processed");
+        setProcImgA(json2.A ?? null);
+        setProcImgB(json2.B ?? null);
+        return;
+      }
       setProcImgA(json.A ?? null);
       setProcImgB(json.B ?? null);
-    } catch (e: any) {
+    } catch (e) {
       setProcImgA(null); setProcImgB(null);
     } finally {
-      setProcLoading(false);
+      if (!silent) setProcLoading(false);
     }
   }
 
-  // 4. Auto-load on index change
+  const [playingRawBatch, setPlayingRawBatch] = useState(false);
+  const [playingProcBatch, setPlayingProcBatch] = useState(false);
+
+  // Update raw/proc indices when main index changes (but not during play)
   useEffect(() => {
-    fetchPair(true);
-    // Optionally, trigger processing if filters are set
-    // if (filters.length > 0) runProcessing();
-    // eslint-disable-next-line
-  }, [index, camera, basePathIdx]);
+    if (!playingRawBatch) setRawIndex(index);
+    if (!playingProcBatch) setProcIndex(index);
+  }, [index, playingRawBatch, playingProcBatch]);
+
+  // 4. Auto-load on index/camera/source change: raw pair and processed (silent while playing)
+  useEffect(() => {
+    // Use rawIndex for raw images
+    const fetchRaw = async () => {
+      if (!camera) return;
+      try {
+        if (!playingRawBatch) setLoading(true);
+        const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${rawIndex}&source_path_idx=${sourcePathIdx}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to fetch");
+
+        // Handle raw data same as before...
+        if (json.meta && (json.A_raw || json.B_raw)) {
+          const meta = json.meta as { width: number; height: number; bitDepth: number; dtype: DType };
+          setBitDepth(meta.bitDepth);
+          setDtype(meta.dtype);
+          setDimensions({ width: meta.width, height: meta.height });
+
+          if (json.A_raw) {
+            const data = decodeTypedArray(json.A_raw, meta.dtype);
+            setImgARaw({ data, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
+            setImgA(null);
+          } else { setImgARaw(null); setImgA(json.A ?? null); }
+
+          if (json.B_raw) {
+            const data = decodeTypedArray(json.B_raw, meta.dtype);
+            setImgBRaw({ data, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
+            setImgB(null);
+          } else { setImgBRaw(null); setImgB(json.B ?? null); }
+
+          if (json.A_raw) {
+            const arr = (decodeTypedArray(json.A_raw, meta.dtype)) as Uint8Array | Uint16Array;
+            const p1 = percentileFromRaw(arr, 1);
+            const p99 = percentileFromRaw(arr, 99);
+            setVmin(Math.floor(p1));
+            setVmax(Math.ceil(p99));
+          } else if (json.A) {
+            setTimeout(() => autoLimitsPng(json.A), 0);
+          }
+        } else {
+          setImgA(json.A);
+          setImgB(json.B);
+          setImgARaw(null); setImgBRaw(null);
+          setBitDepth(json.bitDepth ?? null);
+          setDtype((json.dtype as DType) ?? null);
+          setDimensions(null);
+          setTimeout(() => autoLimitsPng(json.A), 0);
+        }
+      } catch (e: any) {
+        console.error(e);
+      } finally {
+        if (!playingRawBatch) setLoading(false);
+      }
+    };
+
+    fetchRaw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawIndex, camera, sourcePathIdx]);
+
+  useEffect(() => {
+    // Use procIndex for processed images
+    if (filters.length > 0) {
+      const fetchProc = async () => {
+        try {
+          if (!playingProcBatch) setProcLoading(true);
+          const params = new URLSearchParams();
+          params.set("type", "processed");
+          params.set("frame", String(procIndex));
+          params.set("camera", String(camera));
+          params.set("source_path_idx", String(sourcePathIdx));
+          const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
+          const json = await res.json();
+          if (!res.ok) {
+            await runProcessing(true);
+            const res2 = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
+            const json2 = await res2.json();
+            if (!res2.ok) throw new Error(json2.error || "Failed to fetch processed");
+            setProcImgA(json2.A ?? null);
+            setProcImgB(json2.B ?? null);
+            return;
+          }
+          setProcImgA(json.A ?? null);
+          setProcImgB(json.B ?? null);
+        } catch (e) {
+          setProcImgA(null); setProcImgB(null);
+        } finally {
+          if (!playingProcBatch) setProcLoading(false);
+        }
+      };
+      fetchProc();
+    } else {
+      setProcImgA(null); setProcImgB(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [procIndex, camera, sourcePathIdx, filters.length]);
+
+  // ZoomableCanvas component for raw and processed images
+  function ZoomableCanvasWrapper({ raw, src, vmin, vmax, colormap, title, isProcessed }: any) {
+    const wrapperRef = useRef<HTMLDivElement | null>(null);
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+
+    const cmap = useMemo(() => buildColormap(colormap), [colormap]);
+
+    const [scale, setScale] = useState(1);
+    const [offset, setOffset] = useState({ x: 0, y: 0 });
+    const [dragging, setDragging] = useState(false);
+    const lastPos = useRef({ x: 0, y: 0 });
+    const [hasFit, setHasFit] = useState(false);
+
+    // Load image element when src changes (PNG path)
+    useEffect(() => {
+      if (!src) { setImgEl(null); return; }
+      const img = new Image();
+      img.onload = () => setImgEl(img);
+      img.src = `data:image/png;base64,${src}`;
+    }, [src]);
+
+    // Draw (raw preferred)
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      if (raw && raw.data && raw.width && raw.height) {
+        // Render from raw data with our own mapping
+        const { width, height, data } = raw;
+        canvas.width = width;
+        canvas.height = height;
+        const out = new Uint8ClampedArray(width * height * 4);
+        const rng = Math.max(1e-12, vmax - vmin);
+        for (let i = 0; i < width * height; i++) {
+          const I = Number(data[i]);
+          let t = (I - vmin) / rng;
+          if (t < 0) t = 0; if (t > 1) t = 1;
+          const idx = Math.min(255, Math.max(0, Math.round(t * 255)));
+          const r = cmap[idx * 3 + 0];
+          const g = cmap[idx * 3 + 1];
+          const b = cmap[idx * 3 + 2];
+          const j = i * 4;
+          out[j] = r; out[j + 1] = g; out[j + 2] = b; out[j + 3] = 255;
+        }
+        const mapped = new ImageData(out, width, height);
+        ctx.putImageData(mapped, 0, 0);
+        return;
+      }
+
+      // Fallback: draw PNG then remap via 8-bit canvas readback
+      if (!imgEl) return;
+      canvas.width = imgEl.naturalWidth;
+      canvas.height = imgEl.naturalHeight;
+      ctx.drawImage(imgEl, 0, 0);
+      try {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imgData.data;
+        const out = new Uint8ClampedArray(data.length);
+        const rng = Math.max(1, vmax - vmin);
+        for (let i = 0; i < data.length; i += 4) {
+          const I = data[i];
+          let t = (I - vmin) / rng;
+          if (t < 0) t = 0; if (t > 1) t = 1;
+          const idx = Math.min(255, Math.max(0, Math.round(t * 255)));
+          const r = cmap[idx * 3 + 0];
+          const g = cmap[idx * 3 + 1];
+          const b = cmap[idx * 3 + 2];
+          out[i] = r; out[i + 1] = g; out[i + 2] = b; out[i + 3] = 255;
+        }
+        const mapped = new ImageData(out, canvas.width, canvas.height);
+        const ctx2 = canvas.getContext("2d");
+        ctx2?.putImageData(mapped, 0, 0);
+      } catch (e) {
+        console.warn("Canvas mapping error", e);
+      }
+    }, [raw, imgEl, vmin, vmax, cmap]);
+
+    // Fit-to-view computation
+    function fitToView() {
+      const wrap = wrapperRef.current;
+      const c = canvasRef.current;
+      if (!wrap || !c) return;
+      const rect = wrap.getBoundingClientRect();
+      // Dimensions from raw or img
+      let w = 0, h = 0;
+      if (raw && raw.width && raw.height) { w = raw.width; h = raw.height; }
+      else if (imgEl) { w = imgEl.naturalWidth; h = imgEl.naturalHeight; }
+      if (!w || !h) return;
+      const s = Math.min(rect.width / w, rect.height / h);
+      const x = (rect.width - w * s) / 2;
+      const y = (rect.height - h * s) / 2;
+      setScale(s);
+      setOffset({ x, y });
+    }
+
+    // 100% view (top-left)
+    function resetTo100() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+    // Perform initial fit once on load/change
+    useEffect(() => { setHasFit(false); }, [raw, imgEl]);
+    useEffect(() => {
+      if (!hasFit && (raw || imgEl)) {
+        // Delay to ensure wrapper has measured size
+        requestAnimationFrame(() => { fitToView(); setHasFit(true); });
+      }
+    }, [hasFit, raw, imgEl]);
+
+    // Zoom with wheel
+    function handleWheel(e: React.WheelEvent) {
+      e.preventDefault();
+      if (!wrapperRef.current || !canvasRef.current) return;
+      const rect = wrapperRef.current.getBoundingClientRect();
+      const cx = e.clientX - rect.left - offset.x;
+      const cy = e.clientY - rect.top - offset.y;
+      const delta = -e.deltaY; // up zooms in
+      const factor = Math.exp(delta * 0.0015);
+      const newScale = Math.min(20, Math.max(0.25, scale * factor));
+      const k = newScale / scale;
+      const newOffset = { x: offset.x - (cx * (k - 1)), y: offset.y - (cy * (k - 1)) };
+      setScale(newScale);
+      setOffset(newOffset);
+    }
+
+    function handleMouseDown(e: React.MouseEvent) {
+      setDragging(true);
+      lastPos.current = { x: e.clientX, y: e.clientY };
+    }
+    function handleMouseUp() { setDragging(false); }
+    function handleMouseLeave() { setDragging(false); }
+    function handleMouseMove(e: React.MouseEvent) {
+      if (!dragging) return;
+      const dx = e.clientX - lastPos.current.x;
+      const dy = e.clientY - lastPos.current.y;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+    }
+
+    function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+    return (
+      <div className="w-full">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-gray-600">{title}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={fitToView}>Fit</Button>
+            <Button variant="outline" size="sm" onClick={resetTo100}>100%</Button>
+          </div>
+        </div>
+        <div className="relative w-full h-[480px] bg-black/80 rounded-md overflow-hidden border border-gray-200">
+          <div
+            ref={wrapperRef}
+            className="absolute inset-0 cursor-grab active:cursor-grabbing"
+            onWheel={(e) => { e.preventDefault(); /* disable autofit after user interaction */ setHasFit(true); handleWheel(e); }}
+            onMouseDown={(e) => { setHasFit(true); handleMouseDown(e); }}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onMouseMove={handleMouseMove}
+            style={{ overflow: "hidden" }}
+          >
+            <div style={{ position: "absolute", left: offset.x, top: offset.y, transform: `scale(${scale})`, transformOrigin: "0 0" }}>
+              <canvas ref={canvasRef} />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // 5. Run processing with stacked filters
-  async function runProcessing() {
-    setProcLoading(true);
+  async function runProcessing(silent = false) {
+    if (!silent) setProcLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/filter`, {
+    const res = await fetch(`${backendUrl}/filter`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           camera,
           start_idx: index,
           count: 1,
-          filters,
-          base_path_idx: basePathIdx,
+      filters,                 // [] is valid (stores original+processed passthrough)
+          source_path_idx: sourcePathIdx,
+      temporal_batch_filter: temporalBatch,
         }),
       });
+      if (res.status === 409) {
+        // Processing already in progress; skip
+        return;
+      }
       await res.json();
       // Poll for status, then fetch processed
       let tries = 0;
       while (tries < 30) {
         const status = await fetch(`${backendUrl}/status`).then(r => r.json());
         if (!status.processing) break;
-        await new Promise(res => setTimeout(res, 500));
+        await new Promise(r => setTimeout(r, 500));
         tries++;
       }
-      await fetchProcessedPair();
+      await fetchProcessedPair(); // idx=0 in store
     } catch (e) {
       setProcImgA(null); setProcImgB(null);
     } finally {
-      setProcLoading(false);
+      if (!silent) setProcLoading(false);
     }
   }
 
   // 5. Filter stack UI helpers
   function addFilter(type: "POD" | "time") {
-    setFilters(f => [...f, {type}]);
+    setFilters(f => [...f, {type, batch_size: type === "POD" ? 100 : 50}]);
   }
   function removeFilter(idx: number) {
     setFilters(f => f.filter((_, i) => i !== idx));
@@ -551,6 +876,69 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
       return arr;
     });
   }
+  function updateBatchSize(idx: number, batch_size: number) {
+    setFilters(f => f.map((flt, i) => i === idx ? {...flt, batch_size} : flt));
+  }
+
+  const playRawBatchRef = useRef<NodeJS.Timeout | null>(null);
+  const playProcBatchRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Compute batch size from filters (largest batch_size from temporal filters)
+  const batchSize = useMemo(() => {
+    if (temporalBatch && temporalBatch > 0) return temporalBatch;
+    const sizes = filters
+      .filter(f => f.type === "POD" || f.type === "time")
+      .map(f => f.batch_size || 1);
+    return sizes.length > 0 ? Math.max(...sizes) : 1;
+  }, [filters, temporalBatch]);
+
+  // Compute batch window for current index
+  const batchStart = useMemo(() => Math.floor((index - 1) / batchSize) * batchSize + 1, [index, batchSize]);
+  const batchEnd = useMemo(() => batchStart + batchSize - 1, [batchStart, batchSize]);
+
+  // Play batch effect for raw
+  useEffect(() => {
+    if (playingRawBatch) {
+      playRawBatchRef.current = setInterval(() => {
+        setRawIndex(i => {
+          if (i < batchEnd) return i + 1;
+          setPlayingRawBatch(false);
+          return i;
+        });
+      }, 300);
+    } else if (playRawBatchRef.current) {
+      clearInterval(playRawBatchRef.current);
+      playRawBatchRef.current = null;
+    }
+    return () => {
+      if (playRawBatchRef.current) {
+        clearInterval(playRawBatchRef.current);
+        playRawBatchRef.current = null;
+      }
+    };
+  }, [playingRawBatch, batchEnd]);
+
+  // Play batch effect for processed
+  useEffect(() => {
+    if (playingProcBatch) {
+      playProcBatchRef.current = setInterval(() => {
+        setProcIndex(i => {
+          if (i < batchEnd) return i + 1;
+          setPlayingProcBatch(false);
+          return i;
+        });
+      }, 300);
+    } else if (playProcBatchRef.current) {
+      clearInterval(playProcBatchRef.current);
+      playProcBatchRef.current = null;
+    }
+    return () => {
+      if (playProcBatchRef.current) {
+        clearInterval(playProcBatchRef.current);
+        playProcBatchRef.current = null;
+      }
+    };
+  }, [playingProcBatch, batchEnd]);
 
   return (
     <div className="space-y-6">
@@ -563,20 +951,71 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-            <div>
-              <Label htmlFor="basepath">Base Path Index</Label>
-              <Input id="basepath" type="number" value={basePathIdx} min={0} onChange={e => setBasePathIdx(Number(e.target.value))} />
+          {/* Filter stack UI - moved above images */}
+          <div className="flex flex-col gap-4 mb-6">
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => addFilter("POD")}>Add POD Filter</Button>
+              <Button size="sm" variant="outline" onClick={() => addFilter("time")}>Add Time Filter</Button>
             </div>
+            {/* Shared temporal batch length (applies to all temporal filters) */}
+            <div className="flex items-center gap-3">
+              <Label htmlFor="temp-batch">Temporal batch length</Label>
+              <Input id="temp-batch" type="number" min={1} className="w-24" value={temporalBatch}
+                     onChange={e => setTemporalBatch(Math.max(1, Number(e.target.value)))} />
+              <span className="text-xs text-gray-500">Used for both Time and POD filters</span>
+            </div>
+            <div>
+              {filters.length === 0 && <span className="text-sm text-gray-500">No filters applied.</span>}
+              {filters.map((filter, idx) => (
+                <div key={idx} className="flex items-center gap-2 py-1">
+                  <span className="flex-1 text-sm bg-gray-100 rounded px-2 py-1">{filter.type} Filter</span>
+                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, -1)} disabled={idx === 0}>↑</Button>
+                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, 1)} disabled={idx === filters.length - 1}>↓</Button>
+                  <Button size="sm" variant="destructive" onClick={() => removeFilter(idx)}>✕</Button>
+                </div>
+              ))}
+            </div>
+            <Button size="sm" onClick={() => runProcessing()} disabled={procLoading || filters.length === 0}>
+              {procLoading ? "Processing..." : "Run Processing"}
+            </Button>
+          </div>
+
+          {/* Controls row: Source Path, Camera, Pair Index, Colormap */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end mb-4">
+            {/* Source path selection (dropdown) */}
+            <div>
+              <Label htmlFor="srcpath">Source Path</Label>
+              <Select value={String(sourcePathIdx)} onValueChange={(v) => setSourcePathIdx(Number(v))}>
+                <SelectTrigger id="srcpath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
+                <SelectContent>
+                  {sourcePaths.map((p, i) => (
+                    <SelectItem key={i} value={String(i)}>{`${i}: ${basename(p)}`}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
+            </div>
+            {/* Camera dropdown */}
             <div>
               <Label htmlFor="camera">Camera</Label>
-              <Input id="camera" placeholder="e.g. Cam1" value={camera} onChange={(e) => setCamera(e.target.value)} />
+              <Select value={camera} onValueChange={setCamera}>
+                <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                <SelectContent>
+                  {cameraDropdownOptions.map((cam, i) => (
+                    <SelectItem key={i} value={cam}>{cam}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="text-xs text-muted-foreground mt-1">Must match backend config (e.g. Cam1, Cam2).</p>
             </div>
+            {/* Pair index */}
             <div>
               <Label htmlFor="index">Pair index</Label>
               <Input id="index" type="number" value={index} onChange={(e) => setIndex(parseInt(e.target.value || "0"))} />
+              <p className="text-xs text-muted-foreground mt-1">Which frame pair to inspect.</p>
             </div>
+            
+            {/* Colormap dropdown */}
             <div>
               <Label htmlFor="cmap">Colormap</Label>
               <Select value={colormap} onValueChange={(v) => setColormap(v as any)}>
@@ -585,16 +1024,65 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
                   <SelectItem value="gray">Grayscale</SelectItem>
                   <SelectItem value="viridis">Viridis</SelectItem>
                 </SelectContent>
+                <p className="text-xs text-muted-foreground mt-1">colormap</p>
+
               </Select>
             </div>
-            <div className="md:col-span-5 flex items-center gap-3">
-              <Button className="bg-soton-blue hover:bg-soton-darkblue" onClick={() => fetchPair()} disabled={loading}>
-                {loading ? "Loading..." : "Load Pair"}
-              </Button>
-              {bitDepth && (
-                <span className="text-sm text-gray-600">Detected: {bitDepth}-bit{dtype ? ` ${dtype}` : ""}{dimensions ? ` (${dimensions.width}×${dimensions.height})` : ""}</span>
-              )}
-            </div>
+          </div>
+          {/* Load Pair button and info */}
+          <div className="flex items-center gap-3 mb-4">
+            <Button className="bg-soton-blue hover:bg-soton-darkblue" onClick={() => fetchPair()} disabled={loading}>
+              {loading ? "Loading..." : "Load Pair"}
+            </Button>
+            {bitDepth && (
+              <span className="text-sm text-gray-600">Detected: {bitDepth}-bit{dtype ? ` ${dtype}` : ""}{dimensions ? ` (${dimensions.width}×${dimensions.height})` : ""}</span>
+            )}
+          </div>
+
+          {/* Batch navigation and play controls */}
+          <div className="flex items-center gap-3 mb-4">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIndex(Math.max(1, batchStart - batchSize))}
+              disabled={index <= batchSize}
+            >
+              Prev Batch
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIndex(batchStart)}
+              disabled={index === batchStart}
+            >
+              Batch Start
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIndex(batchEnd)}
+              disabled={index === batchEnd}
+            >
+              Batch End
+            </Button>
+            {/* Separate Play Raw and Play Processed buttons, now using correct state */}
+            <Button
+              size="sm"
+              variant={playingRawBatch ? "default" : "outline"}
+              onClick={() => setPlayingRawBatch(p => !p)}
+            >
+              {playingRawBatch ? "Pause Raw" : "Play Raw"}
+            </Button>
+            <Button
+              size="sm"
+              variant={playingProcBatch ? "default" : "outline"}
+              onClick={() => setPlayingProcBatch(p => !p)}
+            >
+              {playingProcBatch ? "Pause Processed" : "Play Processed"}
+            </Button>
+            <span className="text-xs text-gray-500">
+              Batch: {batchStart} - {batchEnd} (size {batchSize})
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -608,14 +1096,7 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
               <span className="font-medium">Raw Image</span>
               <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
               <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
-              <span className="ml-4">Image Index</span>
-              <Input
-                type="number"
-                min={0}
-                value={rawIndex}
-                onChange={e => setRawIndex(Number(e.target.value))}
-                className="w-16"
-              />
+              {/* Removed Image Index input */}
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="raw-vmin">Min</Label>
@@ -700,14 +1181,7 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
               <span className="font-medium">Processed Image</span>
               <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
               <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
-              <span className="ml-4">Image Index</span>
-              <Input
-                type="number"
-                min={0}
-                value={procIndex}
-                onChange={e => setProcIndex(Number(e.target.value))}
-                className="w-16"
-              />
+              {/* Removed Image Index input */}
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="proc-vmin">Min</Label>
@@ -788,37 +1262,6 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
             title={`Processed ${procToggle}`}
           />
         </div>
-      </div>
-
-      {/* 5. Filter stack UI */}
-      <Card>
-        <CardContent>
-          <div className="flex flex-col gap-4">
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => addFilter("POD")}>Add POD Filter</Button>
-              <Button size="sm" variant="outline" onClick={() => addFilter("time")}>Add Time Filter</Button>
-            </div>
-            <div>
-              {filters.length === 0 && <span className="text-sm text-gray-500">No filters applied.</span>}
-              {filters.map((filter, idx) => (
-                <div key={idx} className="flex items-center gap-2 py-1">
-                  <span className="flex-1 text-sm bg-gray-100 rounded px-2 py-1">{filter.type} Filter</span>
-                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, -1)} disabled={idx === 0}>↑</Button>
-                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, 1)} disabled={idx === filters.length - 1}>↓</Button>
-                  <Button size="sm" variant="destructive" onClick={() => removeFilter(idx)}>✕</Button>
-                </div>
-              ))}
-            </div>
-            <Button size="sm" onClick={runProcessing} disabled={procLoading || filters.length === 0}>
-              {procLoading ? "Processing..." : "Run Processing"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Optionally, show colorbar below or to the side */}
-      <div className="flex justify-center mt-4">
-        <Colorbar vmin={rawVmin} vmax={rawVmax} colormap={colormap} />
       </div>
     </div>
   );
