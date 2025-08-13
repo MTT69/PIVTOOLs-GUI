@@ -85,7 +85,7 @@ export default function SetupEnvironment({ config, updateConfig }: SetupEnvironm
           <CardHeader>
             <CardTitle>Core Allocation</CardTitle>
             <CardDescription>
-              Optimize performance with parallel processing settings
+              optimise performance with parallel processing settings
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -1,0 +1,825 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+
+// Simple colormap interpolation between stops
+function hexToRgb(hex: string) {
+  const parsed = hex.replace("#", "");
+  const bigint = parseInt(parsed, 16);
+  if (parsed.length === 6) {
+    return [
+      (bigint >> 16) & 255,
+      (bigint >> 8) & 255,
+      bigint & 255,
+    ];
+  }
+  return [0, 0, 0];
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function buildColormap(name: string, size = 256): Uint8ClampedArray {
+  if (name === "gray") {
+    const arr = new Uint8ClampedArray(size * 3);
+    for (let i = 0; i < size; i++) {
+      arr[i * 3 + 0] = i;
+      arr[i * 3 + 1] = i;
+      arr[i * 3 + 2] = i;
+    }
+    return arr;
+  }
+  // Viridis-like stops
+  const stops = ["#440154", "#414487", "#2A788E", "#22A884", "#7AD151", "#FDE725"]; // approx viridis
+  const colors = stops.map(hexToRgb);
+  const arr = new Uint8ClampedArray(size * 3);
+  for (let i = 0; i < size; i++) {
+    const t = i / (size - 1);
+    const seg = (colors.length - 1) * t;
+    const i0 = Math.floor(seg);
+    const i1 = Math.min(i0 + 1, colors.length - 1);
+    const localT = seg - i0;
+    const r = Math.round(lerp(colors[i0][0], colors[i1][0], localT));
+    const g = Math.round(lerp(colors[i0][1], colors[i1][1], localT));
+    const b = Math.round(lerp(colors[i0][2], colors[i1][2], localT));
+    arr[i * 3 + 0] = r;
+    arr[i * 3 + 1] = g;
+    arr[i * 3 + 2] = b;
+  }
+  return arr;
+}
+
+function percentileFromRGBA(data: Uint8ClampedArray, p: number) {
+  const len = data.length / 4; // RGBA
+  const vals = new Uint8Array(len);
+  for (let i = 0; i < len; i++) vals[i] = data[i * 4]; // red channel as intensity
+  vals.sort();
+  const idx = Math.min(len - 1, Math.max(0, Math.floor((p / 100) * len)));
+  return vals[idx];
+}
+
+// Compute percentile from raw typed array (uses sampling for speed on large arrays)
+function percentileFromRaw(arr: Uint8Array | Uint16Array | Float32Array, p: number) {
+  const n = arr.length;
+  const sampleSize = Math.min(n, 200_000);
+  if (sampleSize === n) {
+    const copy = Array.from(arr as any as number[]);
+    copy.sort((a, b) => a - b);
+    const idx = Math.min(copy.length - 1, Math.max(0, Math.floor((p / 100) * copy.length)));
+    return copy[idx];
+  }
+  // Reservoir-like random sample
+  const step = Math.max(1, Math.floor(n / sampleSize));
+  const sample: number[] = [];
+  for (let i = 0; i < n && sample.length < sampleSize; i += step) sample.push(Number(arr[i]));
+  sample.sort((a, b) => a - b);
+  const idx = Math.min(sample.length - 1, Math.max(0, Math.floor((p / 100) * sample.length)));
+  return sample[idx];
+}
+
+type DType = "uint8" | "uint16";
+
+type RawImage = {
+  data: Uint8Array | Uint16Array;
+  width: number;
+  height: number;
+  bitDepth: number; // e.g. 8 or 16
+  dtype: DType;
+};
+
+function base64ToArrayBuffer(base64: string) {
+  const binary_string = typeof window !== 'undefined' ? window.atob(base64) : Buffer.from(base64, 'base64').toString('binary');
+  const len = binary_string.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary_string.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function decodeTypedArray(base64: string, dtype: DType) {
+  const buf = base64ToArrayBuffer(base64);
+  if (dtype === "uint16") return new Uint16Array(buf);
+  return new Uint8Array(buf);
+}
+
+type ZoomableCanvasProps = {
+  // If raw provided, it will be used; otherwise src PNG will be used
+  raw?: RawImage | null;
+  src?: string | null; // base64 PNG without data: prefix
+  vmin: number;
+  vmax: number;
+  colormap: "gray" | "viridis";
+  title: string;
+};
+
+function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title }: ZoomableCanvasProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+
+  const cmap = useMemo(() => buildColormap(colormap), [colormap]);
+
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+  const [hasFit, setHasFit] = useState(false);
+
+  // Load image element when src changes (PNG path)
+  useEffect(() => {
+    if (!src) { setImgEl(null); return; }
+    const img = new Image();
+    img.onload = () => setImgEl(img);
+    img.src = `data:image/png;base64,${src}`;
+  }, [src]);
+
+  // Draw (raw preferred)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    if (raw && raw.data && raw.width && raw.height) {
+      // Render from raw data with our own mapping
+      const { width, height, data } = raw;
+      canvas.width = width;
+      canvas.height = height;
+      const out = new Uint8ClampedArray(width * height * 4);
+      const rng = Math.max(1e-12, vmax - vmin);
+      for (let i = 0; i < width * height; i++) {
+        const I = Number(data[i]);
+        let t = (I - vmin) / rng;
+        if (t < 0) t = 0; if (t > 1) t = 1;
+        const idx = Math.min(255, Math.max(0, Math.round(t * 255)));
+        const r = cmap[idx * 3 + 0];
+        const g = cmap[idx * 3 + 1];
+        const b = cmap[idx * 3 + 2];
+        const j = i * 4;
+        out[j] = r; out[j + 1] = g; out[j + 2] = b; out[j + 3] = 255;
+      }
+      const mapped = new ImageData(out, width, height);
+      ctx.putImageData(mapped, 0, 0);
+      return;
+    }
+
+    // Fallback: draw PNG then remap via 8-bit canvas readback
+    if (!imgEl) return;
+    canvas.width = imgEl.naturalWidth;
+    canvas.height = imgEl.naturalHeight;
+    ctx.drawImage(imgEl, 0, 0);
+    try {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      const out = new Uint8ClampedArray(data.length);
+      const rng = Math.max(1, vmax - vmin);
+      for (let i = 0; i < data.length; i += 4) {
+        const I = data[i];
+        let t = (I - vmin) / rng;
+        if (t < 0) t = 0; if (t > 1) t = 1;
+        const idx = Math.min(255, Math.max(0, Math.round(t * 255)));
+        const r = cmap[idx * 3 + 0];
+        const g = cmap[idx * 3 + 1];
+        const b = cmap[idx * 3 + 2];
+        out[i] = r; out[i + 1] = g; out[i + 2] = b; out[i + 3] = 255;
+      }
+      const mapped = new ImageData(out, canvas.width, canvas.height);
+      const ctx2 = canvas.getContext("2d");
+      ctx2?.putImageData(mapped, 0, 0);
+    } catch (e) {
+      console.warn("Canvas mapping error", e);
+    }
+  }, [raw, imgEl, vmin, vmax, cmap]);
+
+  // Fit-to-view computation
+  function fitToView() {
+    const wrap = wrapperRef.current;
+    const c = canvasRef.current;
+    if (!wrap || !c) return;
+    const rect = wrap.getBoundingClientRect();
+    // Dimensions from raw or img
+    let w = 0, h = 0;
+    if (raw && raw.width && raw.height) { w = raw.width; h = raw.height; }
+    else if (imgEl) { w = imgEl.naturalWidth; h = imgEl.naturalHeight; }
+    if (!w || !h) return;
+    const s = Math.min(rect.width / w, rect.height / h);
+    const x = (rect.width - w * s) / 2;
+    const y = (rect.height - h * s) / 2;
+    setScale(s);
+    setOffset({ x, y });
+  }
+
+  // 100% view (top-left)
+  function resetTo100() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+  // Perform initial fit once on load/change
+  useEffect(() => { setHasFit(false); }, [raw, imgEl]);
+  useEffect(() => {
+    if (!hasFit && (raw || imgEl)) {
+      // Delay to ensure wrapper has measured size
+      requestAnimationFrame(() => { fitToView(); setHasFit(true); });
+    }
+  }, [hasFit, raw, imgEl]);
+
+  // Zoom with wheel
+  function handleWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    if (!wrapperRef.current || !canvasRef.current) return;
+    const rect = wrapperRef.current.getBoundingClientRect();
+    const cx = e.clientX - rect.left - offset.x;
+    const cy = e.clientY - rect.top - offset.y;
+    const delta = -e.deltaY; // up zooms in
+    const factor = Math.exp(delta * 0.0015);
+    const newScale = Math.min(20, Math.max(0.25, scale * factor));
+    const k = newScale / scale;
+    const newOffset = { x: offset.x - (cx * (k - 1)), y: offset.y - (cy * (k - 1)) };
+    setScale(newScale);
+    setOffset(newOffset);
+  }
+
+  function handleMouseDown(e: React.MouseEvent) {
+    setDragging(true);
+    lastPos.current = { x: e.clientX, y: e.clientY };
+  }
+  function handleMouseUp() { setDragging(false); }
+  function handleMouseLeave() { setDragging(false); }
+  function handleMouseMove(e: React.MouseEvent) {
+    if (!dragging) return;
+    const dx = e.clientX - lastPos.current.x;
+    const dy = e.clientY - lastPos.current.y;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+  }
+
+  function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-gray-600">{title}</span>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={fitToView}>Fit</Button>
+          <Button variant="outline" size="sm" onClick={resetTo100}>100%</Button>
+        </div>
+      </div>
+      <div className="relative w-full h-[480px] bg-black/80 rounded-md overflow-hidden border border-gray-200">
+        <div
+          ref={wrapperRef}
+          className="absolute inset-0 cursor-grab active:cursor-grabbing"
+          onWheel={(e) => { e.preventDefault(); /* disable autofit after user interaction */ setHasFit(true); handleWheel(e); }}
+          onMouseDown={(e) => { setHasFit(true); handleMouseDown(e); }}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+          onMouseMove={handleMouseMove}
+          style={{ overflow: "hidden" }}
+        >
+          <div style={{ position: "absolute", left: offset.x, top: offset.y, transform: `scale(${scale})`, transformOrigin: "0 0" }}>
+            <canvas ref={canvasRef} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Colorbar({ vmin, vmax, colormap }: { vmin: number; vmax: number; colormap: "gray" | "viridis" }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cmap = useMemo(() => buildColormap(colormap), [colormap]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const width = 16;
+    const height = 240;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const img = ctx.createImageData(width, height);
+    for (let y = 0; y < height; y++) {
+      const t = 1 - y / (height - 1);
+      const idx = Math.min(255, Math.max(0, Math.round(t * 255)));
+      const r = cmap[idx * 3 + 0];
+      const g = cmap[idx * 3 + 1];
+      const b = cmap[idx * 3 + 2];
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        img.data[i + 0] = r;
+        img.data[i + 1] = g;
+        img.data[i + 2] = b;
+        img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [cmap, vmin, vmax]);
+
+  return (
+    <div className="flex flex-col items-center">
+      <canvas ref={canvasRef} className="rounded border border-gray-200" />
+      <div className="flex justify-between w-12 text-xs text-gray-600 mt-1">
+        <span>{vmin}</span>
+        <span>{vmax}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUrl?: string }) {
+  const [camera, setCamera] = useState("Cam1");
+  const [index, setIndex] = useState<number>(17);
+  const [loading, setLoading] = useState(false);
+  const [imgA, setImgA] = useState<string | null>(null);
+  const [imgB, setImgB] = useState<string | null>(null);
+  const [imgARaw, setImgARaw] = useState<RawImage | null>(null);
+  const [imgBRaw, setImgBRaw] = useState<RawImage | null>(null);
+  const [bitDepth, setBitDepth] = useState<number | null>(null);
+  const [dtype, setDtype] = useState<DType | null>(null);
+  const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [colormap, setColormap] = useState<"gray" | "viridis">("gray");
+  const [vmin, setVmin] = useState(0);
+  const [vmax, setVmax] = useState(255);
+  const [basePathIdx, setBasePathIdx] = useState<number>(0);
+  const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
+  const [procToggle, setProcToggle] = useState<"A" | "B">("A");
+  const [procImgA, setProcImgA] = useState<string | null>(null);
+  const [procImgB, setProcImgB] = useState<string | null>(null);
+  const [procLoading, setProcLoading] = useState(false);
+  const [filters, setFilters] = useState<{type: "POD" | "time"}[]>([]);
+
+  // Per-image controls
+  const [rawIndex, setRawIndex] = useState<number>(0); // index for raw image
+  const [procIndex, setProcIndex] = useState<number>(0); // index for processed image
+
+  // Per-image min/max
+  const [rawVmin, setRawVmin] = useState(0);
+  const [rawVmax, setRawVmax] = useState(255);
+  const [procVmin, setProcVmin] = useState(0);
+  const [procVmax, setProcVmax] = useState(255);
+
+  const maxVal = useMemo(() => {
+    if (bitDepth) return Math.pow(2, bitDepth) - 1;
+    return 255;
+  }, [bitDepth]);
+
+  // Simple auto-detection of camera folders (Cam1, Cam2, ...)
+  const cameraOptions = useMemo(() => {
+    const opts = new Set<string>();
+    for (let i = 1; i <= 10; i++) {
+      opts.add(`Cam${i}`);
+      opts.add(`cam${i}`);
+    }
+    return Array.from(opts);
+  }, []);
+
+  // Update min/max for raw when new image loaded
+  useEffect(() => {
+    setRawVmin(vmin);
+    setRawVmax(vmax);
+  }, [vmin, vmax, imgARaw, imgBRaw, imgA, imgB]);
+
+  // Optionally, update processed min/max when new processed image loaded
+  useEffect(() => {
+    setProcVmin(rawVmin);
+    setProcVmax(rawVmax);
+  }, [procImgA, procImgB]);
+
+  async function fetchPair(auto = false) {
+    if (!camera) {
+      if (!auto) alert("Please enter a camera folder name");
+      return;
+    }
+    try {
+      setLoading(true);
+      const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${index}&base_path_idx=${basePathIdx}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to fetch");
+
+      // Prefer raw path if backend provides it (A_raw/B_raw + meta)
+      if (json.meta && (json.A_raw || json.B_raw)) {
+        const meta = json.meta as { width: number; height: number; bitDepth: number; dtype: DType };
+        setBitDepth(meta.bitDepth);
+        setDtype(meta.dtype);
+        setDimensions({ width: meta.width, height: meta.height });
+
+        if (json.A_raw) {
+          const data = decodeTypedArray(json.A_raw, meta.dtype);
+          setImgARaw({ data, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
+          setImgA(null);
+        } else { setImgARaw(null); setImgA(json.A ?? null); }
+
+        if (json.B_raw) {
+          const data = decodeTypedArray(json.B_raw, meta.dtype);
+          setImgBRaw({ data, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
+          setImgB(null);
+        } else { setImgBRaw(null); setImgB(json.B ?? null); }
+
+        // Auto-limits using raw if available, else fallback
+        if (json.A_raw) {
+          const arr = (decodeTypedArray(json.A_raw, meta.dtype)) as Uint8Array | Uint16Array;
+          const p1 = percentileFromRaw(arr, 1);
+          const p99 = percentileFromRaw(arr, 99);
+          setVmin(Math.floor(p1));
+          setVmax(Math.ceil(p99));
+        } else if (json.A) {
+          setTimeout(() => autoLimitsPng(json.A), 0);
+        }
+      } else {
+        // Fallback to PNGs only
+        setImgA(json.A);
+        setImgB(json.B);
+        setImgARaw(null); setImgBRaw(null);
+        setBitDepth(json.bitDepth ?? null); // if provided
+        setDtype((json.dtype as DType) ?? null);
+        setDimensions(null);
+        setTimeout(() => autoLimitsPng(json.A), 0);
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || "Error fetching images");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Compute percentiles from PNG canvas (8-bit)
+  function autoLimitsPng(base64Png: string) {
+    const tmp = document.createElement("canvas");
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return;
+    const img = new Image();
+    img.onload = () => {
+      tmp.width = img.naturalWidth;
+      tmp.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      try {
+        const data = ctx.getImageData(0, 0, tmp.width, tmp.height).data;
+        const p1 = percentileFromRGBA(data, 1);
+        const p99 = percentileFromRGBA(data, 99);
+        setVmin(p1);
+        setVmax(p99);
+      } catch (e) {
+        // ignore if security error
+      }
+    };
+    img.src = `data:image/png;base64,${base64Png}`;
+  }
+
+  // Auto limits from raw
+  function autoLimitsRaw() {
+    if (!imgARaw?.data) return;
+    const p1 = percentileFromRaw(imgARaw.data, 1);
+    const p99 = percentileFromRaw(imgARaw.data, 99);
+    setVmin(Math.floor(p1));
+    setVmax(Math.ceil(p99));
+  }
+
+  // 3. Fetch processed images
+  async function fetchProcessedPair() {
+    setProcLoading(true);
+    try {
+      const url = `${backendUrl}/get_processed_pair?idx=0&type=processed`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to fetch processed");
+      setProcImgA(json.A ?? null);
+      setProcImgB(json.B ?? null);
+    } catch (e: any) {
+      setProcImgA(null); setProcImgB(null);
+    } finally {
+      setProcLoading(false);
+    }
+  }
+
+  // 4. Auto-load on index change
+  useEffect(() => {
+    fetchPair(true);
+    // Optionally, trigger processing if filters are set
+    // if (filters.length > 0) runProcessing();
+    // eslint-disable-next-line
+  }, [index, camera, basePathIdx]);
+
+  // 5. Run processing with stacked filters
+  async function runProcessing() {
+    setProcLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/filter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          camera,
+          start_idx: index,
+          count: 1,
+          filters,
+          base_path_idx: basePathIdx,
+        }),
+      });
+      await res.json();
+      // Poll for status, then fetch processed
+      let tries = 0;
+      while (tries < 30) {
+        const status = await fetch(`${backendUrl}/status`).then(r => r.json());
+        if (!status.processing) break;
+        await new Promise(res => setTimeout(res, 500));
+        tries++;
+      }
+      await fetchProcessedPair();
+    } catch (e) {
+      setProcImgA(null); setProcImgB(null);
+    } finally {
+      setProcLoading(false);
+    }
+  }
+
+  // 5. Filter stack UI helpers
+  function addFilter(type: "POD" | "time") {
+    setFilters(f => [...f, {type}]);
+  }
+  function removeFilter(idx: number) {
+    setFilters(f => f.filter((_, i) => i !== idx));
+  }
+  function moveFilter(idx: number, dir: -1 | 1) {
+    setFilters(f => {
+      const arr = [...f];
+      if (idx + dir < 0 || idx + dir >= arr.length) return arr;
+      [arr[idx], arr[idx + dir]] = [arr[idx + dir], arr[idx]];
+      return arr;
+    });
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Processed Image Pair Viewer</CardTitle>
+          <CardDescription>
+            Load and process image pairs. Left: raw (A/B toggle). Right: processed (A/B toggle).<br />
+            Set filters and order, then process.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+            <div>
+              <Label htmlFor="basepath">Base Path Index</Label>
+              <Input id="basepath" type="number" value={basePathIdx} min={0} onChange={e => setBasePathIdx(Number(e.target.value))} />
+            </div>
+            <div>
+              <Label htmlFor="camera">Camera</Label>
+              <Input id="camera" placeholder="e.g. Cam1" value={camera} onChange={(e) => setCamera(e.target.value)} />
+              <p className="text-xs text-muted-foreground mt-1">Must match backend config (e.g. Cam1, Cam2).</p>
+            </div>
+            <div>
+              <Label htmlFor="index">Pair index</Label>
+              <Input id="index" type="number" value={index} onChange={(e) => setIndex(parseInt(e.target.value || "0"))} />
+            </div>
+            <div>
+              <Label htmlFor="cmap">Colormap</Label>
+              <Select value={colormap} onValueChange={(v) => setColormap(v as any)}>
+                <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gray">Grayscale</SelectItem>
+                  <SelectItem value="viridis">Viridis</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="md:col-span-5 flex items-center gap-3">
+              <Button className="bg-soton-blue hover:bg-soton-darkblue" onClick={() => fetchPair()} disabled={loading}>
+                {loading ? "Loading..." : "Load Pair"}
+              </Button>
+              {bitDepth && (
+                <span className="text-sm text-gray-600">Detected: {bitDepth}-bit{dtype ? ` ${dtype}` : ""}{dimensions ? ` (${dimensions.width}×${dimensions.height})` : ""}</span>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Raw image set with controls */}
+        <div>
+          {/* Raw controls */}
+          <div className="flex flex-col gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Raw Image</span>
+              <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
+              <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
+              <span className="ml-4">Image Index</span>
+              <Input
+                type="number"
+                min={0}
+                value={rawIndex}
+                onChange={e => setRawIndex(Number(e.target.value))}
+                className="w-16"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="raw-vmin">Min</Label>
+              <Input
+                id="raw-vmin"
+                type="number"
+                value={rawVmin}
+                onChange={e => {
+                  const val = Number.isNaN(parseInt(e.target.value)) ? 0 : parseInt(e.target.value);
+                  const newMin = Math.max(0, Math.min(maxVal, val));
+                  setRawVmin(newMin);
+                  if (newMin > rawVmax) setRawVmax(newMin);
+                }}
+                className="w-20"
+              />
+              <Label htmlFor="raw-vmax">Max</Label>
+              <Input
+                id="raw-vmax"
+                type="number"
+                value={rawVmax}
+                onChange={e => {
+                  const val = Number.isNaN(parseInt(e.target.value)) ? 0 : parseInt(e.target.value);
+                  const newMax = Math.max(0, Math.min(maxVal, val));
+                  setRawVmax(newMax);
+                  if (newMax < rawVmin) setRawVmin(newMax);
+                }}
+                className="w-20"
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => imgARaw ? autoLimitsRaw() : (imgA && autoLimitsPng(imgA))}
+              >
+                Auto
+              </Button>
+              <div className="flex-1 flex items-center gap-2">
+                <span className="text-xs text-gray-500">Min</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxVal}
+                  step={1}
+                  value={rawVmin}
+                  onChange={(e) => {
+                    const newMin = Math.max(0, Math.min(maxVal, parseInt(e.target.value)));
+                    setRawVmin(newMin);
+                    if (newMin > rawVmax) setRawVmax(newMin);
+                  }}
+                  className="w-full"
+                />
+                <span className="text-xs text-gray-500">Max</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxVal}
+                  step={1}
+                  value={rawVmax}
+                  onChange={(e) => {
+                    const newMax = Math.max(0, Math.min(maxVal, parseInt(e.target.value)));
+                    setRawVmax(newMax);
+                    if (newMax < rawVmin) setRawVmin(newMax);
+                  }}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          </div>
+          <ZoomableCanvas
+            raw={rawToggle === "A" ? imgARaw : imgBRaw}
+            src={rawToggle === "A" ? imgA : imgB}
+            vmin={rawVmin}
+            vmax={rawVmax}
+            colormap={colormap}
+            title={`Raw ${rawToggle}`}
+          />
+        </div>
+        {/* Processed image set with controls */}
+        <div>
+          {/* Processed controls */}
+          <div className="flex flex-col gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Processed Image</span>
+              <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
+              <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
+              <span className="ml-4">Image Index</span>
+              <Input
+                type="number"
+                min={0}
+                value={procIndex}
+                onChange={e => setProcIndex(Number(e.target.value))}
+                className="w-16"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="proc-vmin">Min</Label>
+              <Input
+                id="proc-vmin"
+                type="number"
+                value={procVmin}
+                onChange={e => {
+                  const val = Number.isNaN(parseInt(e.target.value)) ? 0 : parseInt(e.target.value);
+                  const newMin = Math.max(0, Math.min(maxVal, val));
+                  setProcVmin(newMin);
+                  if (newMin > procVmax) setProcVmax(newMin);
+                }}
+                className="w-20"
+              />
+              <Label htmlFor="proc-vmax">Max</Label>
+              <Input
+                id="proc-vmax"
+                type="number"
+                value={procVmax}
+                onChange={e => {
+                  const val = Number.isNaN(parseInt(e.target.value)) ? 0 : parseInt(e.target.value);
+                  const newMax = Math.max(0, Math.min(maxVal, val));
+                  setProcVmax(newMax);
+                  if (newMax < procVmin) setProcVmin(newMax);
+                }}
+                className="w-20"
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  // For now, just copy raw min/max as "auto"
+                  setProcVmin(rawVmin);
+                  setProcVmax(rawVmax);
+                }}
+              >
+                Auto
+              </Button>
+              <div className="flex-1 flex items-center gap-2">
+                <span className="text-xs text-gray-500">Min</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxVal}
+                  step={1}
+                  value={procVmin}
+                  onChange={(e) => {
+                    const newMin = Math.max(0, Math.min(maxVal, parseInt(e.target.value)));
+                    setProcVmin(newMin);
+                    if (newMin > procVmax) setProcVmax(newMin);
+                  }}
+                  className="w-full"
+                />
+                <span className="text-xs text-gray-500">Max</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxVal}
+                  step={1}
+                  value={procVmax}
+                  onChange={(e) => {
+                    const newMax = Math.max(0, Math.min(maxVal, parseInt(e.target.value)));
+                    setProcVmax(newMax);
+                    if (newMax < procVmin) setProcVmin(newMax);
+                  }}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          </div>
+          <ZoomableCanvas
+            raw={undefined}
+            src={procToggle === "A" ? procImgA : procImgB}
+            vmin={procVmin}
+            vmax={procVmax}
+            colormap={colormap}
+            title={`Processed ${procToggle}`}
+          />
+        </div>
+      </div>
+
+      {/* 5. Filter stack UI */}
+      <Card>
+        <CardContent>
+          <div className="flex flex-col gap-4">
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => addFilter("POD")}>Add POD Filter</Button>
+              <Button size="sm" variant="outline" onClick={() => addFilter("time")}>Add Time Filter</Button>
+            </div>
+            <div>
+              {filters.length === 0 && <span className="text-sm text-gray-500">No filters applied.</span>}
+              {filters.map((filter, idx) => (
+                <div key={idx} className="flex items-center gap-2 py-1">
+                  <span className="flex-1 text-sm bg-gray-100 rounded px-2 py-1">{filter.type} Filter</span>
+                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, -1)} disabled={idx === 0}>↑</Button>
+                  <Button size="sm" variant="ghost" onClick={() => moveFilter(idx, 1)} disabled={idx === filters.length - 1}>↓</Button>
+                  <Button size="sm" variant="destructive" onClick={() => removeFilter(idx)}>✕</Button>
+                </div>
+              ))}
+            </div>
+            <Button size="sm" onClick={runProcessing} disabled={procLoading || filters.length === 0}>
+              {procLoading ? "Processing..." : "Run Processing"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Optionally, show colorbar below or to the side */}
+      <div className="flex justify-center mt-4">
+        <Colorbar vmin={rawVmin} vmax={rawVmax} colormap={colormap} />
+      </div>
+    </div>
+  );
+}

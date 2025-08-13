@@ -468,7 +468,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="font-semibold min-w-[80px]">Single:</span>
-                  <span>Optimized for smaller windows, uses peak tracking for better performance</span>
+                  <span>optimised for smaller windows, uses peak tracking for better performance</span>
                 </li>
               </ul>
             </div>

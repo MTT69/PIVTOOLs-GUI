@@ -118,7 +118,7 @@ export default function PipelineConfig({ config, updateConfig }: PipelineConfigP
                 <div className="space-y-0.5">
                   <Label htmlFor="calculate-sum-window">Auto Calculate Sum Window</Label>
                   <p className="text-sm text-muted-foreground">
-                    Optimize window size
+                    Optimise encompassing window size
                   </p>
                 </div>
                 <TooltipProvider>
