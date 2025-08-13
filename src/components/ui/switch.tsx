@@ -12,9 +12,13 @@ const Switch = React.forwardRef<
   <SwitchPrimitives.Root
     className={cn(
       // Updated styles for better visibility and aesthetics
-      "peer inline-flex h-[24px] w-[44px] shrink-0 cursor-pointer items-center rounded-full border-2 border-gray-200 bg-gray-100 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-gray-200 hover:data-[state=unchecked]:bg-gray-300",
+      "peer inline-flex h-[24px] w-[44px] shrink-0 cursor-pointer items-center rounded-full border-2 border-gray-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
+      props.checked ? "bg-[#003C71] !important" : "bg-gray-200",
       className
     )}
+    style={{
+      backgroundColor: props.checked ? '#003C71' : '',
+    }}
     {...props}
     ref={ref}
   >
