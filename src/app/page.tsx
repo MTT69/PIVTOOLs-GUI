@@ -16,6 +16,7 @@ import { Download, Play, Save, Image as ImageIcon } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
 import Masking from '@/components/setup/Masking';
+import RunPIV from '@/components/run/runPIV';
 
 // Default configuration
 const defaultConfig = {
@@ -185,7 +186,7 @@ export default function Home() {
           </p>
           
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-10 mb-6">
+            <TabsList className="grid grid-cols-11 mb-6">
               <TabsTrigger value="environment" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Environment
               </TabsTrigger>
@@ -206,6 +207,9 @@ export default function Home() {
               </TabsTrigger>
               <TabsTrigger value="paths" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Paths
+              </TabsTrigger>
+              <TabsTrigger value="runPIV" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                Run PIV
               </TabsTrigger>
               <TabsTrigger value="results" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Results
@@ -245,6 +249,11 @@ export default function Home() {
             <TabsContent value="paths">
               <PathsConfig config={config} updateConfig={updateConfig} />
             </TabsContent>
+
+            <TabsContent value="runPIV">
+              <RunPIV />
+            </TabsContent>
+
             <TabsContent value="results">
               <VectorViewer />
             </TabsContent>
@@ -257,6 +266,7 @@ export default function Home() {
               {/* Masking tab content */}
               <Masking config={config} updateConfig={updateConfig} />
             </TabsContent>
+
           </Tabs>
         </div>
         

@@ -146,7 +146,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Vector Viewer</CardTitle>
+          <CardTitle>Results</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4 mb-4">
