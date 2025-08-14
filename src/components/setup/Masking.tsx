@@ -133,18 +133,43 @@ function PolygonMaskEditor({
 		const W = Math.max(1, Math.round(w * scale));
 		const H = Math.max(1, Math.round(h * scale));
 
-		// Ensure canvas buffers AND CSS sizes match
-		base.width = W; base.height = H;
-		overlay.width = W; overlay.height = H;
-		base.style.width = `${W}px`; base.style.height = `${H}px`;
-		overlay.style.width = `${W}px`; overlay.style.height = `${H}px`;
-
-		// NEW: size the wrapper so we can center it
+		// Use larger padding for more clickable area
+		const PADDING_H = 100;  // horizontal padding
+		const PADDING_V = 25;   // reduced vertical padding to 25 pixels
+		
+		// Size the container to explicitly include padding
+		if (containerRef.current) {
+			// Make container larger to accommodate the image plus padding
+			containerRef.current.style.minHeight = `${H + PADDING_V * 2}px`;
+			containerRef.current.style.minWidth = `${W + PADDING_H * 2}px`;
+			containerRef.current.style.padding = `${PADDING_V}px ${PADDING_H}px`;
+		}
+		
+		// Set up the base image canvas at the original calculated size
+		base.width = W;
+		base.height = H;
+		base.style.width = `${W}px`;
+		base.style.height = `${H}px`;
+		
+		// Size the wrapper to hold just the image (no padding)
 		if (wrapperRef.current) {
 			wrapperRef.current.style.width = `${W}px`;
 			wrapperRef.current.style.height = `${H}px`;
+			wrapperRef.current.style.position = "relative";
+			// Remove margin since container is now handling the padding
+			wrapperRef.current.style.margin = "0";
 		}
+		
+		// Set overlay to the same size as the base image
+		overlay.width = W;
+		overlay.height = H;
+		overlay.style.width = `${W}px`;
+		overlay.style.height = `${H}px`;
+		overlay.style.position = "absolute";
+		overlay.style.left = "0";
+		overlay.style.top = "0";
 
+		// Draw base image
 		const bctx = base.getContext("2d")!;
 		bctx.clearRect(0, 0, W, H);
 		// Draw base image
@@ -158,16 +183,20 @@ function PolygonMaskEditor({
 			bctx.drawImage(imgRef.current, 0, 0, w, h, 0, 0, W, H);
 		}
 
-		// Draw polygons overlay
+		// Draw a border around the image to help with snapping
 		const octx = overlay.getContext("2d")!;
-		octx.clearRect(0, 0, W, H);
+		octx.strokeStyle = "rgba(100, 100, 100, 0.5)";
 		octx.lineWidth = 2;
+		octx.strokeRect(0, 0, W, H);
+		
+		// Draw polygons (without the padding offsets since the container handles it)
 		for (let i = 0; i < polys.length; i++) {
 			const poly = polys[i];
 			if (poly.points.length === 0) continue;
 			octx.beginPath();
 			poly.points.forEach((p, idx) => {
-				const vx = (p.x / w) * W, vy = (p.y / h) * H;
+				const vx = (p.x / w) * W;
+				const vy = (p.y / h) * H;
 				if (idx === 0) octx.moveTo(vx, vy); else octx.lineTo(vx, vy);
 			});
 			if (poly.closed && poly.points.length >= 3) octx.closePath();
@@ -176,24 +205,40 @@ function PolygonMaskEditor({
 
 			// vertices
 			for (const p of poly.points) {
-				const vx = (p.x / w) * W, vy = (p.y / h) * H;
+				const vx = (p.x / w) * W;
+				const vy = (p.y / h) * H;
 				octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
 				octx.beginPath(); octx.arc(vx, vy, 3, 0, Math.PI * 2); octx.fill();
 			}
 		}
 	}
 
-	// Map pointer to native coordinates
-	function toNative(e: React.PointerEvent<HTMLCanvasElement>) {
-		const overlay = overlayRef.current!;
-		const rect = overlay.getBoundingClientRect();
+	// Update the toNative function to handle both canvas and div events
+	function toNative(e: React.PointerEvent<HTMLElement>) {  // Changed type to more generic HTMLElement
+		const wrapper = wrapperRef.current!;
+		const rect = wrapper.getBoundingClientRect();
 		const { w, h } = nativeSize;
-
-		// Use CSS size (rect) to avoid devicePixelRatio/canvas pixel mismatch
+		
+		// Get position relative to the image (wrapper)
 		const vx = e.clientX - rect.left;
 		const vy = e.clientY - rect.top;
-		const nx = (vx / rect.width) * w;
-		const ny = (vy / rect.height) * h;
+		
+		// Map to native image coordinates
+		let nx = (vx / rect.width) * w;
+		let ny = (vy / rect.height) * h;
+
+		// Check if the point is outside the image bounds
+		if (nx < 0 || nx >= w || ny < 0 || ny >= h) {
+			// Snap to the nearest edge or corner
+			if (nx < 0) nx = 0;
+			if (nx >= w) nx = w - 1;
+			if (ny < 0) ny = 0;
+			if (ny >= h) ny = h - 1;
+
+			// Log for debugging
+			console.log(`Snapped to corner or edge: (${nx.toFixed(1)}, ${ny.toFixed(1)})`);
+		}
+
 		return { x: nx, y: ny };
 	}
 
@@ -235,7 +280,7 @@ function PolygonMaskEditor({
 		});
 	}
 
-	function addPoint(e: React.PointerEvent<HTMLCanvasElement>) {
+	function addPoint(e: React.PointerEvent<HTMLElement>) {
 		e.preventDefault();
 		if (nativeSize.w === 0) return;
 
@@ -254,7 +299,9 @@ function PolygonMaskEditor({
 			const poly = list[idx];
 			if (poly.closed) return list;
 
+			// Get point with edge snapping applied
 			const pt = toNative(e);
+			
 			list[idx] = { ...poly, points: [...poly.points, pt] };
 			return list;
 		});
@@ -454,16 +501,26 @@ function PolygonMaskEditor({
 			</div>
 			<div
 				ref={containerRef}
-				// NEW: center the wrapper horizontally
-				className="w-full bg-black/80 rounded-md overflow-hidden border border-gray-200 relative flex justify-center"
+				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center"
+				onPointerDown={(e) => {
+					// If the click is directly on the container (not a child element)
+					// or if we're in the padding area, add the point
+					if (e.currentTarget === e.target) {
+						e.preventDefault();
+						addPoint(e);
+					}
+				}}
 			>
 				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
 				<div ref={wrapperRef} className="relative">
 					<canvas ref={viewRef} className="block" />
 					<canvas
 						ref={overlayRef}
-						className="absolute left-0 top-0 cursor-crosshair"
-						onPointerDown={addPoint}
+						className="absolute cursor-crosshair"
+						onPointerDown={(e) => {
+							e.stopPropagation();
+							addPoint(e);
+						}}
 					/>
 				</div>
 			</div>
