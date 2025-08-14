@@ -72,6 +72,10 @@ function PolygonMaskEditor({
 	const [polys, setPolys] = useState<Poly[]>([]);
 	const [active, setActive] = useState<number>(-1);
 
+	// NEW: state for mask path and loading status
+	const [maskPath, setMaskPath] = useState<string>("");
+	const [loadingMask, setLoadingMask] = useState<boolean>(false);
+
 	// Load PNG if provided and detect native size
 	useEffect(() => {
 		if (!src) { imgRef.current = null; return; }
@@ -129,18 +133,43 @@ function PolygonMaskEditor({
 		const W = Math.max(1, Math.round(w * scale));
 		const H = Math.max(1, Math.round(h * scale));
 
-		// Ensure canvas buffers AND CSS sizes match
-		base.width = W; base.height = H;
-		overlay.width = W; overlay.height = H;
-		base.style.width = `${W}px`; base.style.height = `${H}px`;
-		overlay.style.width = `${W}px`; overlay.style.height = `${H}px`;
-
-		// NEW: size the wrapper so we can center it
+		// Use larger padding for more clickable area
+		const PADDING_H = 100;  // horizontal padding
+		const PADDING_V = 25;   // reduced vertical padding to 25 pixels
+		
+		// Size the container to explicitly include padding
+		if (containerRef.current) {
+			// Make container larger to accommodate the image plus padding
+			containerRef.current.style.minHeight = `${H + PADDING_V * 2}px`;
+			containerRef.current.style.minWidth = `${W + PADDING_H * 2}px`;
+			containerRef.current.style.padding = `${PADDING_V}px ${PADDING_H}px`;
+		}
+		
+		// Set up the base image canvas at the original calculated size
+		base.width = W;
+		base.height = H;
+		base.style.width = `${W}px`;
+		base.style.height = `${H}px`;
+		
+		// Size the wrapper to hold just the image (no padding)
 		if (wrapperRef.current) {
 			wrapperRef.current.style.width = `${W}px`;
 			wrapperRef.current.style.height = `${H}px`;
+			wrapperRef.current.style.position = "relative";
+			// Remove margin since container is now handling the padding
+			wrapperRef.current.style.margin = "0";
 		}
+		
+		// Set overlay to the same size as the base image
+		overlay.width = W;
+		overlay.height = H;
+		overlay.style.width = `${W}px`;
+		overlay.style.height = `${H}px`;
+		overlay.style.position = "absolute";
+		overlay.style.left = "0";
+		overlay.style.top = "0";
 
+		// Draw base image
 		const bctx = base.getContext("2d")!;
 		bctx.clearRect(0, 0, W, H);
 		// Draw base image
@@ -154,16 +183,20 @@ function PolygonMaskEditor({
 			bctx.drawImage(imgRef.current, 0, 0, w, h, 0, 0, W, H);
 		}
 
-		// Draw polygons overlay
+		// Draw a border around the image to help with snapping
 		const octx = overlay.getContext("2d")!;
-		octx.clearRect(0, 0, W, H);
+		octx.strokeStyle = "rgba(100, 100, 100, 0.5)";
 		octx.lineWidth = 2;
+		octx.strokeRect(0, 0, W, H);
+		
+		// Draw polygons (without the padding offsets since the container handles it)
 		for (let i = 0; i < polys.length; i++) {
 			const poly = polys[i];
 			if (poly.points.length === 0) continue;
 			octx.beginPath();
 			poly.points.forEach((p, idx) => {
-				const vx = (p.x / w) * W, vy = (p.y / h) * H;
+				const vx = (p.x / w) * W;
+				const vy = (p.y / h) * H;
 				if (idx === 0) octx.moveTo(vx, vy); else octx.lineTo(vx, vy);
 			});
 			if (poly.closed && poly.points.length >= 3) octx.closePath();
@@ -172,24 +205,40 @@ function PolygonMaskEditor({
 
 			// vertices
 			for (const p of poly.points) {
-				const vx = (p.x / w) * W, vy = (p.y / h) * H;
+				const vx = (p.x / w) * W;
+				const vy = (p.y / h) * H;
 				octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
 				octx.beginPath(); octx.arc(vx, vy, 3, 0, Math.PI * 2); octx.fill();
 			}
 		}
 	}
 
-	// Map pointer to native coordinates
-	function toNative(e: React.PointerEvent<HTMLCanvasElement>) {
-		const overlay = overlayRef.current!;
-		const rect = overlay.getBoundingClientRect();
+	// Update the toNative function to handle both canvas and div events
+	function toNative(e: React.PointerEvent<HTMLElement>) {  // Changed type to more generic HTMLElement
+		const wrapper = wrapperRef.current!;
+		const rect = wrapper.getBoundingClientRect();
 		const { w, h } = nativeSize;
-
-		// Use CSS size (rect) to avoid devicePixelRatio/canvas pixel mismatch
+		
+		// Get position relative to the image (wrapper)
 		const vx = e.clientX - rect.left;
 		const vy = e.clientY - rect.top;
-		const nx = (vx / rect.width) * w;
-		const ny = (vy / rect.height) * h;
+		
+		// Map to native image coordinates
+		let nx = (vx / rect.width) * w;
+		let ny = (vy / rect.height) * h;
+
+		// Check if the point is outside the image bounds
+		if (nx < 0 || nx >= w || ny < 0 || ny >= h) {
+			// Snap to the nearest edge or corner
+			if (nx < 0) nx = 0;
+			if (nx >= w) nx = w - 1;
+			if (ny < 0) ny = 0;
+			if (ny >= h) ny = h - 1;
+
+			// Log for debugging
+			console.log(`Snapped to corner or edge: (${nx.toFixed(1)}, ${ny.toFixed(1)})`);
+		}
+
 		return { x: nx, y: ny };
 	}
 
@@ -231,7 +280,7 @@ function PolygonMaskEditor({
 		});
 	}
 
-	function addPoint(e: React.PointerEvent<HTMLCanvasElement>) {
+	function addPoint(e: React.PointerEvent<HTMLElement>) {
 		e.preventDefault();
 		if (nativeSize.w === 0) return;
 
@@ -250,7 +299,9 @@ function PolygonMaskEditor({
 			const poly = list[idx];
 			if (poly.closed) return list;
 
+			// Get point with edge snapping applied
 			const pt = toNative(e);
+			
 			list[idx] = { ...poly, points: [...poly.points, pt] };
 			return list;
 		});
@@ -346,12 +397,24 @@ function PolygonMaskEditor({
 		const N = w * h;
 		const out = new Uint8Array(N);
 		for (let i = 0; i < N; i++) out[i] = id.data[i * 4] > 0 ? 1 : 0;
+
+		// NEW: serialize polygon corner data (native coordinates)
+		const polygons = closed
+			.filter(p => p.points.length >= 3)
+			.map((p, i) => ({
+				index: i,
+				name: p.name,
+				points: p.points.map(pt => [pt.x, pt.y]) // keep as number[][] for compact JSON
+			}));
+
 		const payload = {
 			meta,
 			width: w,
 			height: h,
-			data: Array.from(out)
+			data: Array.from(out),
+			polygons
 		};
+
 		await fetch(arrayPostUrl, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -359,6 +422,57 @@ function PolygonMaskEditor({
 		});
 	}
 
+	// NEW: function to load mask data from backend
+	async function loadMaskFromPath() {
+		if (!maskPath.trim()) return;
+		
+		setLoadingMask(true);
+		try {
+			// Query params for the backend
+			const params = new URLSearchParams({
+				path: maskPath,
+				// Include current meta data to help backend locate the right mask
+				basepath_idx: String(meta.basePathIdx),
+				camera: meta.camera,
+				index: String(meta.index),
+				frame: meta.frame
+			});
+			
+			const response = await fetch(`http://localhost:3000/backend/load_mask?${params}`);
+			if (!response.ok) {
+				throw new Error(`Failed to load mask: ${response.statusText}`);
+			}
+			
+			const data = await response.json();
+			
+			// Check if we received polygon data
+			if (data.polygons && Array.isArray(data.polygons)) {
+				// Convert the backend format to our Poly format
+				const loadedPolys: Poly[] = data.polygons.map((poly: any, idx: number) => {
+					// Convert array points [x,y] to {x,y} objects
+					const points = Array.isArray(poly.points) 
+						? poly.points.map((p: number[]) => ({ x: p[0], y: p[1] }))
+						: [];
+						
+					return {
+						points,
+						closed: true, // Loaded polygons are always closed
+						name: poly.name || `Poly ${idx + 1}`
+					};
+				});
+				
+				// Set the polygons and select the first one if available
+				setPolys(loadedPolys);
+				setActive(loadedPolys.length > 0 ? 0 : -1);
+			}
+		} catch (error) {
+			console.error("Error loading mask:", error);
+			// Could add an error state here to show in the UI
+		} finally {
+			setLoadingMask(false);
+		}
+	}
+	
 	return (
 		<div className="w-full">
 			<div className="flex items-center justify-between mb-2">
@@ -368,18 +482,45 @@ function PolygonMaskEditor({
 					<span className="text-xs text-gray-500">Native: {nativeSize.w} × {nativeSize.h} px</span>
 				)}
 			</div>
+			{/* NEW: Add mask path input and load button */}
+			<div className="flex items-center gap-2 mb-3">
+				<Input 
+					placeholder="Enter mask path..." 
+					value={maskPath} 
+					onChange={(e) => setMaskPath(e.target.value)}
+					className="flex-grow"
+				/>
+				<Button 
+					size="sm" 
+					onClick={loadMaskFromPath} 
+					disabled={loadingMask || !maskPath.trim()}
+					className="whitespace-nowrap"
+				>
+					{loadingMask ? "Loading..." : "Load Mask"}
+				</Button>
+			</div>
 			<div
 				ref={containerRef}
-				// NEW: center the wrapper horizontally
-				className="w-full bg-black/80 rounded-md overflow-hidden border border-gray-200 relative flex justify-center"
+				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center"
+				onPointerDown={(e) => {
+					// If the click is directly on the container (not a child element)
+					// or if we're in the padding area, add the point
+					if (e.currentTarget === e.target) {
+						e.preventDefault();
+						addPoint(e);
+					}
+				}}
 			>
 				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
 				<div ref={wrapperRef} className="relative">
 					<canvas ref={viewRef} className="block" />
 					<canvas
 						ref={overlayRef}
-						className="absolute left-0 top-0 cursor-crosshair"
-						onPointerDown={addPoint}
+						className="absolute cursor-crosshair"
+						onPointerDown={(e) => {
+							e.stopPropagation();
+							addPoint(e);
+						}}
 					/>
 				</div>
 			</div>
@@ -407,7 +548,7 @@ function PolygonMaskEditor({
 				</div>
 				<div className="flex items-center gap-2 justify-end">
 					<Button size="sm" className="bg-soton-blue text-white" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
-					<Button size="sm" variant="secondary" onClick={sendArray} disabled={nativeSize.w === 0}>Send mask</Button>
+					<Button size="sm" variant="secondary" onClick={sendArray} disabled={nativeSize.w === 0}>Save .mat</Button>
 					<Button size="sm" variant="destructive" onClick={clearAll}>Clear all</Button>
 				</div>
 			</div>
