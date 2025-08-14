@@ -1170,7 +1170,7 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
             vmin={rawVmin}
             vmax={rawVmax}
             colormap={colormap}
-            title={`Raw ${rawToggle}`}
+            title={`Raw ${rawToggle} (Frame ${rawIndex})`}
           />
         </div>
         {/* Processed image set with controls */}
@@ -1259,7 +1259,7 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
             vmin={procVmin}
             vmax={procVmax}
             colormap={colormap}
-            title={`Processed ${procToggle}`}
+            title={`Processed ${procToggle} (Frame ${procIndex})`}
           />
         </div>
       </div>
