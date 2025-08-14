@@ -29,6 +29,12 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const maxFrame = 999; // You may want to make this dynamic
 
+  // New state for status image
+  const [statusImageSrc, setStatusImageSrc] = useState<string | null>(null);
+  const [statusImageLoading, setStatusImageLoading] = useState(false);
+  const [statusImageError, setStatusImageError] = useState<string | null>(null);
+  const [showStatusImage, setShowStatusImage] = useState(false);
+
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "piv_base_paths") {
@@ -112,6 +118,68 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
       setLoading(false);
     }
   }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged]);
+
+  // New function to fetch status image
+  const fetchStatusImage = useCallback(async () => {
+    setStatusImageLoading(true);
+    setStatusImageError(null);
+    
+    try {
+      // Only send the selected base path, not the file path
+      const basePath = effectiveDir;
+      if (!basePath) throw new Error("Please provide a base path");
+      
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("frame", String(index));
+      params.set("var", type);
+      params.set("cmap", cmap);
+      if (run && run > 0) params.set("run", String(run));
+      if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
+      if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
+      params.set("camera", camera);
+      params.set("merged", merged ? "1" : "0");
+      
+      const url = `${backendUrl}/check_status_image?${params.toString()}`;
+      const res = await fetch(url);
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || `Failed to fetch status image: ${res.status}`);
+      }
+      
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const json = await res.json();
+        setStatusImageSrc(json.image ?? null);
+      } else {
+        // Handle direct image response (if the API returns the image directly)
+        const blob = await res.blob();
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          // Extract only the base64 part if needed
+          const base64Content = base64data.split(',')[1] || base64data;
+          setStatusImageSrc(base64Content);
+        };
+        reader.readAsDataURL(blob);
+      }
+    } catch (e: any) {
+      console.error("Error fetching status image:", e);
+      setStatusImageError(e.message || "Unknown error");
+    } finally {
+      setStatusImageLoading(false);
+    }
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged]);
+
+  // Toggle status image visibility
+  const toggleStatusImage = () => {
+    const newValue = !showStatusImage;
+    setShowStatusImage(newValue);
+    if (newValue && !statusImageSrc && !statusImageLoading) {
+      fetchStatusImage();
+    }
+  };
 
   // Automatically render when index or other relevant parameters change
   useEffect(() => {
@@ -302,6 +370,62 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
                 <span>&#9654; Play</span>
               )}
             </Button>
+          </div>
+
+          {/* Add Status Image toggle and viewer */}
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <Button 
+                variant="outline" 
+                onClick={toggleStatusImage}
+                className="flex items-center gap-2"
+              >
+                {showStatusImage ? "Hide Status Image" : "Show Status Image"}
+              </Button>
+              
+              {showStatusImage && (
+                <Button 
+                  size="sm" 
+                  onClick={fetchStatusImage} 
+                  disabled={statusImageLoading}
+                >
+                  {statusImageLoading ? "Loading..." : "Refresh Status"}
+                </Button>
+              )}
+            </div>
+            
+            {showStatusImage && (
+              <div className="mt-4 border rounded p-4 bg-gray-50">
+                <h3 className="text-md font-medium mb-2">Processing Status Image</h3>
+                
+                {statusImageError && (
+                  <div className="w-full p-3 mb-3 rounded border border-red-200 bg-red-50 text-red-700 text-sm">
+                    {statusImageError}
+                  </div>
+                )}
+                
+                {statusImageSrc ? (
+                  <div className="flex flex-col items-center relative">
+                    <img 
+                      src={`data:image/png;base64,${statusImageSrc}`} 
+                      alt="Processing Status" 
+                      className="rounded border w-full max-w-3xl" 
+                    />
+                    {statusImageLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60">
+                        <span className="text-gray-500">Refreshing...</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="w-full h-64 flex items-center justify-center bg-gray-100 border rounded">
+                    <span className="text-gray-500">
+                      {statusImageLoading ? "Loading status image..." : "No status image available"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Image viewer placeholder, similar to ImagePairViewer */}
