@@ -100,7 +100,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
       params.set("camera", camera);
       params.set("merged", merged ? "1" : "0");
-      const url = `${backendUrl}/plot_vector?${params.toString()}`;
+      const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to fetch vector plot");
