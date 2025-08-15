@@ -28,7 +28,6 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
   const [playing, setPlaying] = useState(false);
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [limitsLoading, setLimitsLoading] = useState(false);
-  const maxFrame = 999; // You may want to make this dynamic
 
   // New: mean statistics mode
   const [meanMode, setMeanMode] = useState<boolean>(false);
@@ -122,8 +121,10 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
       if (!res.ok) throw new Error(json.error || "Failed to fetch vector plot");
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
+      return true; // Indicate success
     } catch (e: any) {
       setError(e.message || "Unknown error");
+      return false; // Indicate failure
     } finally {
       setLoading(false);
     }
@@ -311,11 +312,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
   useEffect(() => {
     if (playing) {
       playIntervalRef.current = setInterval(() => {
-        setIndex(i => {
-          if (i < maxFrame) return i + 1;
-          setPlaying(false);
-          return i;
-        });
+        setIndex(i => i + 1);
       }, 300);
     } else if (playIntervalRef.current) {
       clearInterval(playIntervalRef.current);
@@ -327,7 +324,14 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
         playIntervalRef.current = null;
       }
     };
-  }, [playing, maxFrame]);
+  }, [playing]);
+
+  // Effect to pause playback if an image fails to load (e.g., end of sequence)
+  useEffect(() => {
+    if (error && playing) {
+      setPlaying(false);
+    }
+  }, [error, playing]);
 
   return (
     <div className="space-y-6">
@@ -441,7 +445,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
                   id="frame-slider"
                   type="range"
                   min={1}
-                  max={maxFrame}
+                  max={9999} // Use a high, arbitrary max
                   value={index}
                   onChange={e => setIndex(Number(e.target.value))}
                   className="w-64"
@@ -549,7 +553,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
               id="frame-slider"
               type="range"
               min={1}
-              max={maxFrame}
+              max={999}
               value={index}
               onChange={e => setIndex(Number(e.target.value))}
               className="w-64"
@@ -574,7 +578,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
             {error && (
               <div className="w-full p-3 mb-3 rounded border border-red-200 bg-red-50 text-red-700 text-sm">{error}</div>
             )}
-            {imageSrc && (
+            {imageSrc && !error && (
               <div className="flex flex-col items-center relative">
                 <img src={`data:image/png;base64,${imageSrc}`} alt="Vector Result" className="rounded border w-full max-w-3xl" />
                 {/* Only show rendering overlay if not playing */}
@@ -588,7 +592,7 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
                 )}
               </div>
             )}
-            {!imageSrc && (
+            {(!imageSrc || error) && (
               <div className="w-full h-64 flex items-center justify-center bg-gray-100 border rounded">
                 <span className="text-gray-500">No image loaded</span>
               </div>

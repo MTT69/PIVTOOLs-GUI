@@ -42,6 +42,7 @@ const RunPIV: React.FC = () => {
   const [polling, setPolling] = useState<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollOnceRef = useRef<(() => Promise<void>) | null>(null);
+  const uncalPollFnRef = useRef<(() => Promise<void>) | null>(null);
 
   // Uncalibrated preview polling
   const [expectedCount, setExpectedCount] = useState<number | null>(null);
@@ -53,6 +54,47 @@ const RunPIV: React.FC = () => {
   const [statusImageLoading, setStatusImageLoading] = useState(false);
   const [statusImageError, setStatusImageError] = useState<string | null>(null);
   const [showStatusImage, setShowStatusImage] = useState(true);
+
+  // This function will be updated on every render with the latest state
+  useEffect(() => {
+    uncalPollFnRef.current = async () => {
+      const idx = nextUncalIndexRef.current;
+      // If we know expected and already beyond it, stop
+      if (expectedCount && idx > expectedCount) {
+        stopUncalPolling();
+        return;
+      }
+      try {
+        const params = new URLSearchParams();
+        params.set("basepath_idx", String(sourcePathIdx));
+        params.set("camera", camera);
+        params.set("index", String(idx));
+        params.set("var", varType); // Use latest varType
+        if (cmap && cmap !== "default") params.set("cmap", cmap);
+        if (run > 0) params.set("run", String(run)); // Use latest run
+        if (lowerLimit.trim()) params.set("lower_limit", lowerLimit); // Use latest lowerLimit
+        if (upperLimit.trim()) params.set("upper_limit", upperLimit); // Use latest upperLimit
+        const res = await fetch(`backend/plot/get_uncalibrated_image?${params.toString()}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.image) {
+            setStatusImageSrc(json.image);
+            setProgress((prev) => {
+              if (!expectedCount) return Math.min(100, prev + 5);
+              const newP = Math.round((idx / expectedCount) * 100);
+              return newP > prev ? newP : prev;
+            });
+            // advance to next
+            nextUncalIndexRef.current = idx + 1;
+            // If we've reached expected count, stop
+            if (expectedCount && idx >= expectedCount) stopUncalPolling();
+          }
+        }
+      } catch (err) {
+        console.error("uncal polling error", err);
+      }
+    };
+  }, [sourcePathIdx, camera, varType, cmap, run, lowerLimit, upperLimit, expectedCount]);
 
   const startPolling = () => {
     // Stop existing polling first
@@ -178,7 +220,7 @@ const RunPIV: React.FC = () => {
       if (upperLimit.trim()) params.set("upper_limit", upperLimit);
       // default index for a quick preview (use 1 if nothing else)
       params.set("index", String(nextUncalIndexRef.current || 1));
-      const res = await fetch(`/backend/get_uncalibrated_image?${params.toString()}`);
+      const res = await fetch(`/plot/get_uncalibrated_image?${params.toString()}`);
       if (!res.ok) throw new Error(`Status image failed: ${res.status}`);
       const contentType = res.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
@@ -204,43 +246,11 @@ const RunPIV: React.FC = () => {
   const startUncalPolling = () => {
     stopUncalPolling();
     const poll = async () => {
-      const idx = nextUncalIndexRef.current;
-      // If we know expected and already beyond it, stop
-      if (expectedCount && idx > expectedCount) {
-        stopUncalPolling();
-        return;
-      }
-      try {
-        const params = new URLSearchParams();
-        params.set("basepath_idx", String(sourcePathIdx));
-        params.set("camera", camera);
-        params.set("index", String(idx));
-        params.set("var", varType);
-        if (cmap && cmap !== "default") params.set("cmap", cmap);
-        if (run > 0) params.set("run", String(run));
-        if (lowerLimit.trim()) params.set("lower_limit", lowerLimit);
-        if (upperLimit.trim()) params.set("upper_limit", upperLimit);
-        const res = await fetch(`/backend/get_uncalibrated_image?${params.toString()}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (json.image) {
-            setStatusImageSrc(json.image);
-            setProgress((prev) => {
-              if (!expectedCount) return Math.min(100, prev + 5);
-              const newP = Math.round((idx / expectedCount) * 100);
-              return newP > prev ? newP : prev;
-            });
-            // advance to next
-            nextUncalIndexRef.current = idx + 1;
-            // If we've reached expected count, stop
-            if (expectedCount && idx >= expectedCount) stopUncalPolling();
-          }
-        }
-      } catch (err) {
-        console.error("uncal polling error", err);
+      if (uncalPollFnRef.current) {
+        await uncalPollFnRef.current();
       }
     };
-    poll();
+    poll(); // Initial call
     const id = setInterval(poll, POLL_INTERVAL_MS);
     uncalPollingRef.current = id;
   };
