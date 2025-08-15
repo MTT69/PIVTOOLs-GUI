@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
 // import EnsemblePIV from '@/components/setup/EnsemblePIV';
 import PathsConfig from '@/components/setup/PathsConfig';
+import POD from '@/components/setup/POD';
 import VectorViewer from '@/components/viewer/VectorViewer';
 import { Download, Play, Save, Image as ImageIcon } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
@@ -133,6 +134,9 @@ export default function Home() {
               {/* <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Ensemble
               </TabsTrigger> */}
+              <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                POD
+              </TabsTrigger>
               {/* <TabsTrigger value="filters" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Filters
               </TabsTrigger> */}
@@ -226,6 +230,10 @@ export default function Home() {
             {/* <TabsContent value="ensemble">
               <EnsemblePIV config={config} updateConfig={updateConfig} />
             </TabsContent> */}
+
+            <TabsContent value="pod">
+              <POD config={config} updateConfig={updateConfig} />
+            </TabsContent>
 
             <TabsContent value="results">
               <VectorViewer />

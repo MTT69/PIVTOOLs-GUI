@@ -6,14 +6,24 @@ interface ProgressProps {
 }
 
 export const Progress: React.FC<ProgressProps> = ({ value, className = "" }) => {
+  // clamp value and determine text color (dark below 50, light at 50 and above)
+  const pct = Math.min(Math.max(Number(value) || 0, 0), 100);
+  const textColorClass = pct >= 50 ? "text-white" : "text-gray-900";
+
   return (
-    <div className={`relative w-full h-4 bg-gray-200 rounded overflow-hidden ${className}`}>
+    <div
+      className={`relative w-full h-5 bg-gray-200 rounded-md overflow-hidden ${className}`}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(pct)}
+    >
       <div
         className="absolute top-0 left-0 h-full bg-soton-blue transition-all duration-300"
-        style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }}
+        style={{ width: `${pct}%` }}
       />
-      <span className="absolute inset-0 flex items-center justify-center text-xs font-medium text-white">
-        {Math.min(Math.max(value, 0), 100)}%
+      <span className={`absolute inset-0 flex items-center justify-center text-sm font-medium transition-colors duration-300 ${textColorClass}`}>
+        {Math.round(pct)}%
       </span>
     </div>
   );

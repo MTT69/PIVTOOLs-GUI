@@ -26,6 +26,11 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
   const [camera, setCamera] = useState<string>("1");
   const [merged, setMerged] = useState<boolean>(false);
   const [playing, setPlaying] = useState(false);
+  // pending value while dragging slider to avoid firing requests for every tick
+  const [pendingIndex, setPendingIndex] = useState<number>(index);
+  const [pointerDown, setPointerDown] = useState<boolean>(false);
+  const commitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [limitsLoading, setLimitsLoading] = useState(false);
   const maxFrame = 999; // You may want to make this dynamic
@@ -329,6 +334,25 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
     };
   }, [playing, maxFrame]);
 
+  // keep pendingIndex in sync when index changes programmatically
+  useEffect(() => {
+    setPendingIndex(index);
+  }, [index]);
+  
+  // cleanup on unmount: clear commit timeout and play interval
+  useEffect(() => {
+    return () => {
+      if (commitTimeoutRef.current) {
+        clearTimeout(commitTimeoutRef.current);
+        commitTimeoutRef.current = null;
+      }
+      if (playIntervalRef.current) {
+        clearInterval(playIntervalRef.current);
+        playIntervalRef.current = null;
+      }
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -442,8 +466,54 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
                   type="range"
                   min={1}
                   max={maxFrame}
-                  value={index}
-                  onChange={e => setIndex(Number(e.target.value))}
+                  value={pendingIndex}
+                  // update pending value for every movement
+                  onChange={e => {
+                    const v = Math.max(1, Number(e.target.value));
+                    setPendingIndex(v);
+                    // if not dragging (pointer not down), commit (handles clicks) with a small debounce
+                    if (!pointerDown) {
+                      if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                      commitTimeoutRef.current = setTimeout(() => {
+                        setIndex(v);
+                        commitTimeoutRef.current = null;
+                      }, 80);
+                    }
+                  }}
+                  // detect drag start/end (works for mouse & touch via pointer events)
+                  onPointerDown={() => {
+                    setPointerDown(true);
+                    if (commitTimeoutRef.current) { clearTimeout(commitTimeoutRef.current); commitTimeoutRef.current = null; }
+                  }}
+                  onPointerUp={() => {
+                    setPointerDown(false);
+                    if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                    // commit the value left at when pointer is released
+                    commitTimeoutRef.current = setTimeout(() => {
+                      setIndex(pendingIndex);
+                      commitTimeoutRef.current = null;
+                    }, 20);
+                  }}
+                  // handle quick drags that may cancel pointerup or leave the element
+                  onPointerCancel={() => {
+                    setPointerDown(false);
+                    if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                    commitTimeoutRef.current = setTimeout(() => {
+                      setIndex(pendingIndex);
+                      commitTimeoutRef.current = null;
+                    }, 20);
+                  }}
+                  onPointerLeave={() => {
+                    // if leaving while dragging, commit as if pointer released
+                    if (pointerDown) {
+                      setPointerDown(false);
+                      if (commitTimeoutRef.current) clearTimeout(commitTimeoutRef.current);
+                      commitTimeoutRef.current = setTimeout(() => {
+                        setIndex(pendingIndex);
+                        commitTimeoutRef.current = null;
+                      }, 20);
+                    }
+                  }}
                   className="w-64"
                 />
                 <span className="text-xs text-gray-500">{index}</span>
