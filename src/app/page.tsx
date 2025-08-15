@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Navigation from '@/components/Navigation';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
 // import EnsemblePIV from '@/components/setup/EnsemblePIV';
 import PathsConfig from '@/components/setup/PathsConfig';
 import POD from '@/components/setup/POD';
+import ImageConfig from '@/components/setup/ImageConfig';
 import VectorViewer from '@/components/viewer/VectorViewer';
 import { Download, Play, Save, Image as ImageIcon } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
@@ -50,8 +51,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState("environment");
   const { toast } = useToast();
 
-  // Function to update config state
-  const updateConfig = (path: string[], value: any) => {
+  // Function to update config state (memoized to avoid infinite effect loops in children)
+  const updateConfig = useCallback((path: string[], value: any) => {
     if (!Array.isArray(path) || path.length === 0) return;
     setConfig((prevConfig: any) => {
       const newConfig = JSON.parse(JSON.stringify(prevConfig || {}));
@@ -63,11 +64,10 @@ export default function Home() {
         }
         current = current[key];
       }
-      const lastKey = path[path.length - 1];
-      current[lastKey] = value;
+      current[path[path.length - 1]] = value;
       return newConfig;
     });
-  };
+  }, []);
 
   // Function to export configuration as JSON
   const exportConfig = () => {
@@ -165,7 +165,7 @@ export default function Home() {
             <TabsContent value="setup">
               {/* Combined Setup tab: ImageProperties and PathsConfig merged, batch size removed, image config and dimensions horizontal above paths */}
               <div className="space-y-6">
-                <ImageYAMLConfig config={config} onLocalUpdate={setConfig} />
+                <ImageConfig config={config} updateConfig={updateConfig} />
                 {/* PathsConfig below image config/dimensions, backend logic retained */}
                 <div>
                   {/* Inline PathsConfig logic here, backend logic retained */}
@@ -240,8 +240,7 @@ export default function Home() {
             </TabsContent>
 
             <TabsContent value="viewer">
-              {/* Only show raw images in the viewer */}
-              <ImagePairViewer rawOnly />
+              <ImagePairViewer />
             </TabsContent>
 
             <TabsContent value="masking">
@@ -283,126 +282,5 @@ export default function Home() {
         </div>
       </div>
     </main>
-  );
-}
-
-// Component: ImageYAMLConfig (reads/writes YAML images block via backend)
-function ImageYAMLConfig({ config, onLocalUpdate }: { config: any, onLocalUpdate: (c: any) => void }) {
-  const images = config.images || {};
-  const numImages = images.num_images ?? 0;
-  const shape = images.shape || [1024, 1024];
-  const imageType = images.image_type || 'standard';
-  const [localNum, setLocalNum] = useState<number>(numImages);
-  const [localWidth, setLocalWidth] = useState<number>(shape[1] || 1024);
-  const [localHeight, setLocalHeight] = useState<number>(shape[0] || 1024);
-  const [localType, setLocalType] = useState<string>(imageType);
-  const [saving, setSaving] = useState<boolean>(false);
-  const [dirty, setDirty] = useState<boolean>(false);
-
-  // Sync when backend config changes
-  useEffect(() => {
-    setLocalNum(numImages);
-    setLocalType(imageType);
-    setLocalWidth(shape[1] || 1024);
-    setLocalHeight(shape[0] || 1024);
-    setDirty(false);
-  }, [numImages, imageType, shape]);
-
-  async function persist() {
-    setSaving(true);
-    try {
-      const payload = {
-        num_images: localNum,
-        shape: [localHeight, localWidth],
-        image_type: localType,
-      };
-      const res = await fetch('/backend/update_images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        // Merge back into local config
-        onLocalUpdate((prev: any) => ({
-          ...prev,
-          images: { ...prev.images, ...json.images },
-        }));
-        setDirty(false);
-      } else {
-        // eslint-disable-next-line no-console
-        console.error('Failed to update images', json.error);
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('Error updating images', e);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="mb-6">
-      <div className="bg-white rounded-xl shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-2xl font-bold text-gray-800">Image Configuration (YAML)</div>
-          <button
-            onClick={persist}
-            disabled={saving || !dirty}
-            className={`px-4 py-2 rounded text-sm font-semibold ${dirty ? 'bg-soton-blue text-white' : 'bg-gray-200 text-gray-600'} disabled:opacity-50`}
-          >{saving ? 'Saving...' : dirty ? 'Save' : 'Saved'}</button>
-        </div>
-        <div className="flex flex-col md:flex-row md:items-end gap-6 w-full">
-          <div className="flex flex-col w-full max-w-xs">
-            <label htmlFor="num-images" className="text-sm font-semibold text-gray-700 mb-2">Number of Images</label>
-            <input
-              id="num-images"
-              type="number"
-              className="rounded border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-soton-blue"
-              value={localNum}
-              onChange={e => { setLocalNum(parseInt(e.target.value)); setDirty(true); }}
-              min={1}
-            />
-          </div>
-          <div className="flex flex-col w-full max-w-xs">
-            <label htmlFor="img-type" className="text-sm font-semibold text-gray-700 mb-2">Image Type</label>
-            <select
-              id="img-type"
-              className="rounded border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-soton-blue"
-              value={localType}
-              onChange={e => { setLocalType(e.target.value); setDirty(true); }}
-            >
-              <option value="standard">Standard</option>
-              <option value="cine">CINE</option>
-              <option value="im7">IM7</option>
-              <option value="ims">IMS</option>
-            </select>
-          </div>
-          <div className="flex flex-col w-full max-w-xs">
-            <label htmlFor="img-width" className="text-sm font-semibold text-gray-700 mb-2">Width (px)</label>
-            <input
-              id="img-width"
-              type="number"
-              className="rounded border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-soton-blue"
-              value={localWidth}
-              onChange={e => { setLocalWidth(parseInt(e.target.value)); setDirty(true); }}
-              min={1}
-            />
-          </div>
-            <div className="flex flex-col w-full max-w-xs">
-            <label htmlFor="img-height" className="text-sm font-semibold text-gray-700 mb-2">Height (px)</label>
-            <input
-              id="img-height"
-              type="number"
-              className="rounded border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-soton-blue"
-              value={localHeight}
-              onChange={e => { setLocalHeight(parseInt(e.target.value)); setDirty(true); }}
-              min={1}
-            />
-          </div>
-        </div>
-        <p className="text-xs text-gray-500 mt-4">Values reflect backend YAML (images block). Click Save to persist changes.</p>
-      </div>
-    </div>
   );
 }
