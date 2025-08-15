@@ -26,6 +26,11 @@ export default function VectorViewer({ backendUrl = "/backend" }: { backendUrl?:
   const [camera, setCamera] = useState<string>("1");
   const [merged, setMerged] = useState<boolean>(false);
   const [playing, setPlaying] = useState(false);
+  // pending value while dragging slider to avoid firing requests for every tick
+  const [pendingIndex, setPendingIndex] = useState<number>(index);
+  const [pointerDown, setPointerDown] = useState<boolean>(false);
+  const commitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [limitsLoading, setLimitsLoading] = useState(false);
 
