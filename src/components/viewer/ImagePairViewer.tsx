@@ -329,7 +329,7 @@ function Colorbar({ vmin, vmax, colormap }: { vmin: number; vmax: number; colorm
   );
 }
 
-export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUrl?: string }) {
+export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChange, filterSaveNote }: { backendUrl?: string, onFiltersChange?: (filters: any[]) => void, filterSaveNote?: string }) {
   const [camera, setCamera] = useState("Cam1");
   const [index, setIndex] = useState<number>(1);
   // Add separate indices for raw and processed
@@ -1263,6 +1263,9 @@ export default function ImagePairViewer({ backendUrl = "/backend" }: { backendUr
           />
         </div>
       </div>
+      {filterSaveNote && (
+        <div className="text-xs text-blue-700 mb-2">{filterSaveNote}</div>
+      )}
     </div>
   );
 }

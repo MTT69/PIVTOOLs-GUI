@@ -6,8 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 
-// Polling interval (ms) – user requested 20 seconds
-const POLL_INTERVAL_MS = 20000;
+// Polling interval (ms) for backend status checks (3 seconds to look cool)
+const POLL_INTERVAL_MS = 3000;
 
 /**
  * RunPIV component
@@ -31,12 +31,22 @@ const RunPIV: React.FC = () => {
   });
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [camera, setCamera] = useState<string>("1");
+  const [varType, setVarType] = useState<string>("ux");
+  const [cmap, setCmap] = useState<string>("default");
+  const [run, setRun] = useState<number>(1);
+  const [lowerLimit, setLowerLimit] = useState<string>("");
+  const [upperLimit, setUpperLimit] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [isPolling, setIsPolling] = useState<boolean>(false);
   const [polling, setPolling] = useState<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollOnceRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Uncalibrated preview polling
+  const [expectedCount, setExpectedCount] = useState<number | null>(null);
+  const nextUncalIndexRef = useRef<number>(1);
+  const uncalPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Status image state
   const [statusImageSrc, setStatusImageSrc] = useState<string | null>(null);
@@ -56,9 +66,9 @@ const RunPIV: React.FC = () => {
         });
         if (!statusResponse.ok) return;
         const statusData = await statusResponse.json();
-        const rawSource = statusData.progress ?? statusData.status;
-        const raw = Number(rawSource);
-        const newProgress = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 100) : 0;
+        // If backend supplies percent, prefer it
+        const percent = typeof statusData.percent === "number" ? statusData.percent : Number(statusData.progress ?? statusData.status ?? 0);
+        const newProgress = Number.isFinite(percent) ? Math.min(Math.max(Math.round(percent), 0), 100) : 0;
         setProgress((prev) => (newProgress > prev ? newProgress : prev));
         if (showStatusImage) await fetchStatusImage();
         if (newProgress >= 100) stopPolling();
@@ -87,6 +97,8 @@ const RunPIV: React.FC = () => {
 
   useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 
+  useEffect(() => () => { if (uncalPollingRef.current) clearInterval(uncalPollingRef.current); }, []);
+
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "piv_source_paths") {
@@ -99,20 +111,40 @@ const RunPIV: React.FC = () => {
 
   const handleRunPIV = async () => {
     stopPolling({ resetProgress: true });
+    stopUncalPolling();
     setLoading(true);
     try {
       const response = await fetch("/backend/run_piv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sourcePath: sourcePaths[sourcePathIdx],
+          sourcePathIdx: sourcePathIdx,
           camera,
         }),
       });
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`);
       const data = await response.json();
       console.log("Run PIV response", data);
-      startPolling();
+      // Query backend for existing uncalibrated .mat count (may be 0)
+      const params = new URLSearchParams();
+      params.set("basepath_idx", String(sourcePathIdx));
+      params.set("camera", camera);
+      params.set("var", varType);
+      if (cmap && cmap !== "default") params.set("cmap", cmap);
+      const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
+      let exp: number | null = null;
+      if (cntRes.ok) {
+        try {
+          const cntJson = await cntRes.json();
+          exp = Number(cntJson.count) || null;
+          // If backend provides a percent, seed the progress bar with it
+          if (typeof cntJson.percent === "number") setProgress(Math.round(cntJson.percent));
+        } catch {}
+      }
+      // Start lightweight uncalibrated preview polling (3s interval)
+      setExpectedCount(exp);
+      nextUncalIndexRef.current = 1;
+      startUncalPolling();
     } catch (e: any) {
       alert(e.message || "Error starting PIV");
     } finally { setLoading(false); }
@@ -124,7 +156,8 @@ const RunPIV: React.FC = () => {
       const response = await fetch("/backend/cancel_run", { method: "POST" });
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`);
       await response.json().catch(() => ({}));
-      stopPolling({ resetProgress: true });
+  stopPolling({ resetProgress: true });
+  stopUncalPolling();
     } catch (e: any) {
       alert(e.message || "Error cancelling");
     } finally { setLoading(false); }
@@ -136,9 +169,16 @@ const RunPIV: React.FC = () => {
     setStatusImageError(null);
     try {
       const params = new URLSearchParams();
-      params.set("base_path", sourcePaths[sourcePathIdx]);
+      params.set("basepath_idx", String(sourcePathIdx));
       params.set("camera", camera);
-      const res = await fetch(`/backend/check_status_image?${params.toString()}`);
+      params.set("var", varType);
+      if (cmap && cmap !== "default") params.set("cmap", cmap);
+      if (run > 0) params.set("run", String(run));
+      if (lowerLimit.trim()) params.set("lower_limit", lowerLimit);
+      if (upperLimit.trim()) params.set("upper_limit", upperLimit);
+      // default index for a quick preview (use 1 if nothing else)
+      params.set("index", String(nextUncalIndexRef.current || 1));
+      const res = await fetch(`/backend/get_uncalibrated_image?${params.toString()}`);
       if (!res.ok) throw new Error(`Status image failed: ${res.status}`);
       const contentType = res.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
@@ -158,6 +198,58 @@ const RunPIV: React.FC = () => {
     } catch (e: any) {
       setStatusImageError(e.message || "Unknown error");
     } finally { setStatusImageLoading(false); }
+  };
+
+  // Uncalibrated preview polling helpers
+  const startUncalPolling = () => {
+    stopUncalPolling();
+    const poll = async () => {
+      const idx = nextUncalIndexRef.current;
+      // If we know expected and already beyond it, stop
+      if (expectedCount && idx > expectedCount) {
+        stopUncalPolling();
+        return;
+      }
+      try {
+        const params = new URLSearchParams();
+        params.set("basepath_idx", String(sourcePathIdx));
+        params.set("camera", camera);
+        params.set("index", String(idx));
+        params.set("var", varType);
+        if (cmap && cmap !== "default") params.set("cmap", cmap);
+        if (run > 0) params.set("run", String(run));
+        if (lowerLimit.trim()) params.set("lower_limit", lowerLimit);
+        if (upperLimit.trim()) params.set("upper_limit", upperLimit);
+        const res = await fetch(`/backend/get_uncalibrated_image?${params.toString()}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.image) {
+            setStatusImageSrc(json.image);
+            setProgress((prev) => {
+              if (!expectedCount) return Math.min(100, prev + 5);
+              const newP = Math.round((idx / expectedCount) * 100);
+              return newP > prev ? newP : prev;
+            });
+            // advance to next
+            nextUncalIndexRef.current = idx + 1;
+            // If we've reached expected count, stop
+            if (expectedCount && idx >= expectedCount) stopUncalPolling();
+          }
+        }
+      } catch (err) {
+        console.error("uncal polling error", err);
+      }
+    };
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    uncalPollingRef.current = id;
+  };
+
+  const stopUncalPolling = () => {
+    if (uncalPollingRef.current) {
+      clearInterval(uncalPollingRef.current);
+      uncalPollingRef.current = null;
+    }
   };
 
   const toggleStatusImage = () => {
@@ -226,6 +318,36 @@ const RunPIV: React.FC = () => {
                 <option value="1">Camera 1</option>
                 <option value="2">Camera 2</option>
               </select>
+
+              {/* Variable type */}
+              <label htmlFor="varType" className="text-sm font-medium">Type:</label>
+              <select id="varType" value={varType} onChange={(e) => setVarType(e.target.value)} className="border rounded px-2 py-1">
+                <option value="ux">ux</option>
+                <option value="uy">uy</option>
+              </select>
+
+              {/* Colormap */}
+              <label htmlFor="cmap" className="text-sm font-medium">Colormap:</label>
+              <select id="cmap" value={cmap} onChange={(e) => setCmap(e.target.value)} className="border rounded px-2 py-1">
+                <option value="default">default</option>
+                <option value="viridis">viridis</option>
+                <option value="plasma">plasma</option>
+                <option value="inferno">inferno</option>
+                <option value="magma">magma</option>
+                <option value="cividis">cividis</option>
+                <option value="jet">jet</option>
+                <option value="gray">gray</option>
+              </select>
+            </div>
+
+            {/* Run and Limits */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <label htmlFor="run" className="text-sm font-medium">Run:</label>
+              <Input id="run" type="number" min={1} value={run} onChange={e => setRun(Math.max(1, Number(e.target.value)))} className="w-24" />
+              <label className="text-sm font-medium">Lower:</label>
+              <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" className="w-28" />
+              <label className="text-sm font-medium">Upper:</label>
+              <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" className="w-28" />
             </div>
 
             {/* Progress */}

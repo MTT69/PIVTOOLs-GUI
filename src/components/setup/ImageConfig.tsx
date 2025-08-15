@@ -1,0 +1,332 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Plus, Minus, Image as ImageIcon, RefreshCcw } from "lucide-react";
+
+interface ImageConfigProps {
+  config: any;
+  updateConfig: (path: string[], value: any) => void;
+}
+
+/*
+  ImageConfig centralises editing of image-related YAML values without exposing YAML directly.
+  Editable:
+    - num_images (images.num_images)
+    - shape (images.shape [H,W])
+    - time_resolved flag (images.time_resolved)
+    - raw image filename patterns (images.image_format)
+        * If time_resolved = false => two patterns A/B
+        * If time_resolved = true => single pattern
+    - vector filename pattern (images.vector_format[0])
+    - calibration filename pattern (calibration.image_format)
+
+  Saving strategy:
+    - num_images / shape / time_resolved => POST /update_images (extend endpoint to accept time_resolved?)
+      For now we call /update_images for num_images & shape, and include time_resolved inside images block via /update_paths when patterns change.
+    - filename patterns => POST /update_paths (existing endpoint already updates patterns & time_resolved automatically based on list length)
+
+  Debounce: 400ms after last change to any field triggers appropriate POSTs.
+*/
+
+export default function ImageConfig({ config, updateConfig }: ImageConfigProps) {
+  const initialImages = config.images || {};
+  const initialCalibration = config.calibration || {};
+
+  // Use string state for editable fields to allow empty input
+  const [numImages, setNumImages] = useState<string>(
+    initialImages.num_images !== undefined ? String(initialImages.num_images) : ""
+  );
+  const [height, setHeight] = useState<string>(
+    initialImages.shape && initialImages.shape[0] !== undefined ? String(initialImages.shape[0]) : ""
+  );
+  const [width, setWidth] = useState<string>(
+    initialImages.shape && initialImages.shape[1] !== undefined ? String(initialImages.shape[1]) : ""
+  );
+  const [timeResolved, setTimeResolved] = useState<boolean>(!!initialImages.time_resolved);
+
+  // Always sync state from config when config changes (for hot reloads or backend edits)
+  useEffect(() => {
+    setNumImages(initialImages.num_images !== undefined ? String(initialImages.num_images) : "");
+    setHeight(initialImages.shape && initialImages.shape[0] !== undefined ? String(initialImages.shape[0]) : "");
+    setWidth(initialImages.shape && initialImages.shape[1] !== undefined ? String(initialImages.shape[1]) : "");
+    setTimeResolved(!!initialImages.time_resolved);
+
+    const rawFmt = initialImages.image_format;
+    if (!initialImages.time_resolved) {
+      if (Array.isArray(rawFmt)) setRawPatterns(rawFmt as string[]);
+      else setRawPatterns(["B%05d_A.tif", "B%05d_B.tif"]);
+    } else {
+      if (typeof rawFmt === "string") setRawPatterns([rawFmt]);
+      else setRawPatterns(["B%05d.tif"]);
+    }
+    const vf = initialImages.vector_format;
+    if (Array.isArray(vf) && vf.length) setVectorPattern(vf[0]);
+    else if (typeof vf === "string") setVectorPattern(vf);
+    else setVectorPattern("%05d.mat");
+    setCalibrationPattern(
+      initialCalibration.image_format || initialImages.calibration_image_format || "calib%05d.tif"
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config]);
+
+  // Raw filename patterns
+  const rawFmt = initialImages.image_format;
+  const [rawPatterns, setRawPatterns] = useState<string[]>(() => {
+    if (!timeResolved) {
+      if (Array.isArray(rawFmt)) return rawFmt as string[];
+      // fallback default pair
+      return ["B%05d_A.tif", "B%05d_B.tif"]; 
+    }
+    if (typeof rawFmt === "string") return [rawFmt];
+    return ["B%05d.tif"]; // single pattern
+  });
+  const [vectorPattern, setVectorPattern] = useState<string>(() => {
+    const vf = initialImages.vector_format;
+    if (Array.isArray(vf) && vf.length) return vf[0];
+    if (typeof vf === "string") return vf;
+    return "%05d.mat";
+  });
+  const [calibrationPattern, setCalibrationPattern] = useState<string>(
+    () => initialCalibration.image_format || initialImages.calibration_image_format || "calib%05d.tif"
+  );
+
+  const saveTimer = useRef<number | null>(null);
+  const patternsTimer = useRef<number | null>(null);
+  const [savingMeta, setSavingMeta] = useState<string>("");
+
+  // Helper to sync changes to parent config (avoid redundant writes by shallow compare where cheap)
+  function sync(path: string[], value: any) {
+    updateConfig(path, value);
+  }
+
+  // Debounced save for numeric + size changes (/update_images)
+  useEffect(() => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveCore();
+    }, 500) as unknown as number;
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [numImages, height, width]);
+
+  // Debounced save for pattern / timeResolved changes (/update_paths)
+  useEffect(() => {
+    if (patternsTimer.current) window.clearTimeout(patternsTimer.current);
+    patternsTimer.current = window.setTimeout(() => {
+      savePatterns();
+    }, 600) as unknown as number;
+    return () => {
+      if (patternsTimer.current) window.clearTimeout(patternsTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawPatterns, vectorPattern, calibrationPattern, timeResolved]);
+
+  async function saveCore() {
+    try {
+      setSavingMeta("Saving image core...");
+      // Only send if all fields are non-empty and valid numbers
+      if (
+        numImages !== "" &&
+        height !== "" &&
+        width !== "" &&
+        !isNaN(Number(numImages)) &&
+        !isNaN(Number(height)) &&
+        !isNaN(Number(width))
+      ) {
+        const res = await fetch("/backend/update_images", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            num_images: Number(numImages),
+            shape: [Number(height), Number(width)],
+            time_resolved: timeResolved,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to update images");
+        setSavingMeta("Image core saved");
+        setTimeout(() => setSavingMeta(""), 1000);
+      }
+    } catch (e: any) {
+      setSavingMeta("Error: " + e.message);
+    }
+  }
+
+  async function savePatterns() {
+    try {
+      setSavingMeta("Saving filename patterns...");
+      const payload: any = {
+        base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
+        source_paths: config.paths?.source_paths || config.paths?.source || [],
+        image_format: timeResolved ? rawPatterns[0] : rawPatterns,
+        vector_format: vectorPattern,
+        calibration_image_format: calibrationPattern,
+      };
+      const res = await fetch("/backend/update_paths", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update patterns");
+      setSavingMeta("Filename patterns saved");
+      setTimeout(() => setSavingMeta(""), 1000);
+    } catch (e: any) {
+      setSavingMeta("Error: " + e.message);
+    }
+  }
+
+  function addRawPattern() {
+    setRawPatterns([...rawPatterns, "B%05d_C.tif"]);
+  }
+  function removeRawPattern(i: number) {
+    setRawPatterns(rawPatterns.filter((_, idx) => idx !== i));
+  }
+  function updateRawPattern(i: number, value: string) {
+    const next = [...rawPatterns];
+    next[i] = value;
+    setRawPatterns(next);
+  }
+
+  // Toggle time resolved resets rawPatterns to single or pair
+  function toggleTimeResolved(val: boolean) {
+    setTimeResolved(val);
+    sync(["images", "time_resolved"], val);
+    if (val) {
+      // collapse to single pattern
+      setRawPatterns([(rawPatterns[0] || "B%05d.tif").replace(/_A\.tif$/i, ".tif")]);
+      sync(["images", "image_format"], [(rawPatterns[0] || "B%05d.tif").replace(/_A\.tif$/i, ".tif")]);
+    } else {
+      // ensure two patterns exist
+      if (rawPatterns.length === 1) {
+        const base = rawPatterns[0].replace(/\.tif$/i, "");
+        const pair = [`${base}_A.tif`, `${base}_B.tif`];
+        setRawPatterns(pair);
+        sync(["images", "image_format"], pair);
+      }
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center space-x-2 mb-6">
+        <ImageIcon className="h-6 w-6 text-soton-blue" />
+        <h2 className="text-2xl font-bold text-gray-800">Image Configuration</h2>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Core Properties</CardTitle>
+          <CardDescription>Number of images and dimensions</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid md:grid-cols-3 gap-4">
+            <div>
+              <Label htmlFor="num_images">Num Images</Label>
+              <Input
+                id="num_images"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={numImages}
+                onChange={e => {
+                  const v = e.target.value.replace(/[^0-9]/g, "");
+                  setNumImages(v);
+                  // Only updateConfig if not empty
+                  if (v !== "") updateConfig(["images", "num_images"], Number(v));
+                }}
+                // Remove spinner arrows
+                style={{ MozAppearance: "textfield" } as any}
+                className="no-spinner"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <Label htmlFor="height">Height (px)</Label>
+              <Input
+                id="height"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={height}
+                onChange={e => {
+                  const v = e.target.value.replace(/[^0-9]/g, "");
+                  setHeight(v);
+                  if (v !== "" && width !== "") updateConfig(["images", "shape"], [Number(v), Number(width)]);
+                }}
+                style={{ MozAppearance: "textfield" } as any}
+                className="no-spinner"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <Label htmlFor="width">Width (px)</Label>
+              <Input
+                id="width"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={width}
+                onChange={e => {
+                  const v = e.target.value.replace(/[^0-9]/g, "");
+                  setWidth(v);
+                  if (height !== "" && v !== "") updateConfig(["images", "shape"], [Number(height), Number(v)]);
+                }}
+                style={{ MozAppearance: "textfield" } as any}
+                className="no-spinner"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <Switch id="time_resolved" checked={timeResolved} onCheckedChange={toggleTimeResolved} />
+            <Label htmlFor="time_resolved">Time Resolved (single image pattern)</Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Filename Patterns</CardTitle>
+          <CardDescription>Configure raw, vector & calibration patterns</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div>
+            <Label className="font-semibold">Raw Image Pattern{timeResolved ? "" : "s"}</Label>
+            <div className="space-y-2 mt-2">
+              {rawPatterns.map((p, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input className="font-mono" value={p} onChange={e => { updateRawPattern(i, e.target.value); sync(["images", "image_format"], timeResolved ? [e.target.value] : rawPatterns.map((rp, idx) => idx === i ? e.target.value : rp)); }} />
+                  {!timeResolved && rawPatterns.length > 1 && (
+                    <Button type="button" variant="ghost" size="icon" onClick={() => removeRawPattern(i)}>
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">Use printf style %05d for frame index.</p>
+            </div>
+          </div>
+          <div>
+            <Label className="font-semibold">Vector Pattern</Label>
+            <Input className="font-mono mt-2" value={vectorPattern} onChange={e => { setVectorPattern(e.target.value); sync(["images", "vector_format"], [e.target.value]); }} />
+          </div>
+          <div>
+            <Label className="font-semibold">Calibration Pattern</Label>
+            <Input className="font-mono mt-2" value={calibrationPattern} onChange={e => { setCalibrationPattern(e.target.value); sync(["calibration", "image_format"], e.target.value); }} />
+          </div>
+          <div className="text-xs text-muted-foreground flex items-center gap-2">
+            <RefreshCcw className="h-3 w-3" /> {savingMeta || "Autosaves ~0.5s after changes"}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
