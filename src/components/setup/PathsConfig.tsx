@@ -14,8 +14,24 @@ interface PathsConfigProps {
 }
 
 export default function PathsConfig({ config, updateConfig }: PathsConfigProps) {
-  const [baseDirs, setBaseDirs] = useState<string[]>(config.paths.base_dir || []);
-  const [sourceDirs, setSourceDirs] = useState<string[]>(config.paths.source || []);
+  const [baseDirs, setBaseDirs] = useState<string[]>(config.paths?.base_dir || []);
+  const [sourceDirs, setSourceDirs] = useState<string[]>(config.paths?.source || []);
+  // Filename patterns
+  const imageFormatRaw = (config.images?.image_format);
+  const [rawFormats, setRawFormats] = useState<string[]>(() => {
+    if (Array.isArray(imageFormatRaw)) return imageFormatRaw as string[];
+    if (typeof imageFormatRaw === 'string') return [imageFormatRaw];
+    return ['B%05d_A.tif', 'B%05d_B.tif'];
+  });
+  const [vectorFormat, setVectorFormat] = useState<string>(() => {
+    const vf = config.images?.vector_format;
+    if (Array.isArray(vf) && vf.length) return vf[0];
+    if (typeof vf === 'string') return vf;
+    return '%05d.mat';
+  });
+  const [calibrationFormat, setCalibrationFormat] = useState<string>(() => (
+    config.calibration?.image_format || config.images?.calibration_image_format || 'calib%05d.tif'
+  ));
   // Hidden directory picker for web fallback
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const pendingCallbackRef = useRef<((p: string) => void) | null>(null);
@@ -29,6 +45,18 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
   useEffect(() => {
     updateConfig(['paths', 'source'], sourceDirs);
   }, [sourceDirs, updateConfig]);
+
+  // Reflect format changes into parent config state
+  useEffect(() => {
+    // raw image formats
+    updateConfig(['images', 'image_format'], rawFormats);
+  }, [rawFormats, updateConfig]);
+  useEffect(() => {
+    updateConfig(['images', 'vector_format'], [vectorFormat]);
+  }, [vectorFormat, updateConfig]);
+  useEffect(() => {
+    updateConfig(['calibration', 'image_format'], calibrationFormat);
+  }, [calibrationFormat, updateConfig]);
 
   // Add a new base directory
   const addBaseDir = () => {
@@ -144,6 +172,9 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
     const payload = {
       base_paths: baseDirs.filter(Boolean).map(sanitizePath),
       source_paths: sourceDirs.filter(Boolean).map(sanitizePath),
+      image_format: rawFormats.length === 1 ? rawFormats[0] : rawFormats,
+      vector_format: vectorFormat,
+      calibration_image_format: calibrationFormat,
     };
     try {
       const res = await fetch("/backend/update_paths", {
@@ -156,6 +187,9 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
       // Mirror to localStorage for viewers
       localStorage.setItem("piv_base_paths", JSON.stringify(json.base_paths));
       localStorage.setItem("piv_source_paths", JSON.stringify(json.source_paths));
+      localStorage.setItem("piv_image_format", JSON.stringify(json.image_format));
+      localStorage.setItem("piv_vector_format", JSON.stringify(json.vector_format));
+      localStorage.setItem("piv_calibration_image_format", JSON.stringify(json.calibration_image_format));
       // eslint-disable-next-line no-console
       console.log("Path configuration updated");
     } catch (err) {
@@ -180,7 +214,7 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
         saveTimerRef.current = null;
       }
     };
-  }, [baseDirs, sourceDirs]);
+  }, [baseDirs, sourceDirs, rawFormats, vectorFormat, calibrationFormat]);
 
   return (
     <div className="space-y-6">
@@ -203,7 +237,7 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
         <h2 className="text-2xl font-bold text-gray-800">Directories Configuration</h2>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -396,7 +430,90 @@ source_dir/
         </Card>
       </div>
 
+      {/* Filename Patterns */}
       <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Info className="h-5 w-5 text-soton-blue" />
+            <CardTitle>Filename Patterns</CardTitle>
+          </div>
+          <CardDescription>Configure raw image, processed vector and calibration image filename formats (YAML synced)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid md:grid-cols-3 gap-6">
+            {/* Raw formats */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Raw Image Format{rawFormats.length > 1 ? 's' : ''}</Label>
+              {rawFormats.map((fmt, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    value={fmt}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setRawFormats(r => {
+                        const copy = [...r];
+                        copy[i] = v;
+                        return copy;
+                      });
+                    }}
+                    placeholder={i === 0 ? 'B%05d_A.tif' : 'B%05d_B.tif'}
+                    className="font-mono"
+                  />
+                  {rawFormats.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setRawFormats(r => r.filter((_, idx) => idx !== i))}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRawFormats(r => (r.length === 1 ? [r[0], 'B%05d_B.tif'] : r))}
+                  disabled={rawFormats.length > 1}
+                >Two-Image (A/B)</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRawFormats(r => (r.length === 2 ? [r[0]] : r))}
+                  disabled={rawFormats.length === 1}
+                >Single (Time-Resolved)</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Use printf-style %05d for frame index placeholder.</p>
+            </div>
+            {/* Vector format */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Processed Vector Format</Label>
+              <Input
+                value={vectorFormat}
+                onChange={e => setVectorFormat(e.target.value)}
+                placeholder="%05d.mat"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">Pattern for saved vector files (MATLAB .mat).</p>
+            </div>
+            {/* Calibration format */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Calibration Image Format</Label>
+              <Input
+                value={calibrationFormat}
+                onChange={e => setCalibrationFormat(e.target.value)}
+                placeholder="calib%05d.tif"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">Pattern for calibration images (under calibration/CamX/).</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+  <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Info className="h-5 w-5 text-soton-blue" />
