@@ -26,9 +26,8 @@ interface ImageConfigProps {
     - calibration filename pattern (calibration.image_format)
 
   Saving strategy:
-    - num_images / shape / time_resolved => POST /update_images (extend endpoint to accept time_resolved?)
-      For now we call /update_images for num_images & shape, and include time_resolved inside images block via /update_paths when patterns change.
-    - filename patterns => POST /update_paths (existing endpoint already updates patterns & time_resolved automatically based on list length)
+    - num_images / shape / time_resolved => POST /update_config (merge into config.yaml)
+    - filename patterns => POST /update_config (new endpoint that merges provided object into config.yaml)
 
   Debounce: 400ms after last change to any field triggers appropriate POSTs.
 */
@@ -104,7 +103,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     updateConfig(path, value);
   }
 
-  // Debounced save for numeric + size changes (/update_images)
+  // Debounced save for numeric + size changes (/update_config)
   useEffect(() => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
@@ -116,7 +115,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numImages, height, width]);
 
-  // Debounced save for pattern / timeResolved changes (/update_paths)
+  // Debounced save for pattern / timeResolved changes (/update_config)
   useEffect(() => {
     if (patternsTimer.current) window.clearTimeout(patternsTimer.current);
     patternsTimer.current = window.setTimeout(() => {
@@ -140,14 +139,17 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
         !isNaN(Number(height)) &&
         !isNaN(Number(width))
       ) {
-        const res = await fetch("/backend/update_images", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const payload = {
+          images: {
             num_images: Number(numImages),
             shape: [Number(height), Number(width)],
             time_resolved: timeResolved,
-          }),
+          },
+        };
+        const res = await fetch("/backend/update_config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to update images");
@@ -163,19 +165,26 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     try {
       setSavingMeta("Saving filename patterns...");
       const payload: any = {
-        base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
-        source_paths: config.paths?.source_paths || config.paths?.source || [],
-        image_format: timeResolved ? rawPatterns[0] : rawPatterns,
-        vector_format: vectorPattern,
-        calibration_image_format: calibrationPattern,
+        paths: {
+          base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
+          source_paths: config.paths?.source_paths || config.paths?.source || [],
+        },
+        images: {
+          image_format: timeResolved ? rawPatterns[0] : rawPatterns,
+          vector_format: Array.isArray(vectorPattern) ? vectorPattern : [vectorPattern],
+          time_resolved: timeResolved,
+        },
+        calibration: {
+          image_format: calibrationPattern,
+        },
       };
-      const res = await fetch("/backend/update_paths", {
+      const res = await fetch("/backend/update_config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to update patterns");
+      if (!res.ok) throw new Error(json.error || "Failed to update config");
       setSavingMeta("Filename patterns saved");
       setTimeout(() => setSavingMeta(""), 1000);
     } catch (e: any) {

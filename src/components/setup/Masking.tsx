@@ -64,6 +64,13 @@ function PolygonMaskEditor({
 	// NEW: wrapper to control CSS size and allow centering
 	const wrapperRef = useRef<HTMLDivElement | null>(null);
 
+	// Magnifier refs & state
+	const magRef = useRef<HTMLCanvasElement | null>(null);
+	const [magnifierEnabled, setMagnifierEnabled] = useState<boolean>(false);
+	const [magVisible, setMagVisible] = useState<boolean>(false);
+	const MAG_SIZE = 200; // px diameter
+	const MAG_FACTOR = 2.5; // zoom factor
+
 	const [nativeSize, setNativeSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
 	// polygons state: array of {points, closed}
@@ -120,6 +127,118 @@ function PolygonMaskEditor({
 	// Redraw on inputs
 	useEffect(() => { redraw(); }, [mappedRaw, nativeSize, polys, active]);
 
+	// Ensure magnifier canvas is configured (DPR-aware)
+	useEffect(() => {
+		const dpr = window.devicePixelRatio || 1;
+		if (magRef.current) {
+			magRef.current.width = Math.round(MAG_SIZE * dpr);
+			magRef.current.height = Math.round(MAG_SIZE * dpr);
+			magRef.current.style.width = `${MAG_SIZE}px`;
+			magRef.current.style.height = `${MAG_SIZE}px`;
+			const ctx = magRef.current.getContext("2d");
+			if (ctx) ctx.imageSmoothingEnabled = true;
+		}
+	}, [MAG_SIZE]);
+
+	// Pointer move handler for magnifier
+	function handlePointerMove(e: React.PointerEvent) {
+		if (!magnifierEnabled || !magRef.current || !viewRef.current || !wrapperRef.current) return;
+		setMagVisible(true);
+		const rect = wrapperRef.current.getBoundingClientRect();
+		// position mag to top-left of cursor
+		let left = e.clientX - rect.left - MAG_SIZE - 12;
+		let top = e.clientY - rect.top - MAG_SIZE - 12;
+		// constrain to wrapper
+		left = Math.max(0, Math.min(left, rect.width - MAG_SIZE));
+		top = Math.max(0, Math.min(top, rect.height - MAG_SIZE));
+		magRef.current.style.left = `${left}px`;
+		magRef.current.style.top = `${top}px`;
+
+		// compute local coords relative to image canvas (viewRef)
+		const canvas = viewRef.current;
+		const canvasRect = canvas.getBoundingClientRect();
+		const localX = e.clientX - canvasRect.left;
+		const localY = e.clientY - canvasRect.top;
+		const srcW = Math.max(1, MAG_SIZE / MAG_FACTOR);
+		const dpr = window.devicePixelRatio || 1;
+		const sx = Math.max(0, Math.min(canvas.width - srcW, localX * (canvas.width / canvasRect.width) - srcW / 2));
+		const sy = Math.max(0, Math.min(canvas.height - srcW, localY * (canvas.height / canvasRect.height) - srcW / 2));
+
+		const mctx = magRef.current.getContext("2d");
+		if (!mctx) return;
+		// clear & draw scaled region to full mag canvas
+		mctx.clearRect(0, 0, magRef.current.width, magRef.current.height);
+
+		// circular clipping for crisp circle
+		mctx.save();
+		mctx.beginPath();
+		mctx.arc(magRef.current.width / 2, magRef.current.height / 2, magRef.current.width / 2, 0, Math.PI * 2);
+		mctx.clip();
+
+		// Draw base image region
+		mctx.drawImage(
+			canvas,
+			sx,
+			sy,
+			srcW,
+			srcW,
+			0,
+			0,
+			magRef.current.width,
+			magRef.current.height
+		);
+
+		// Composite overlay (polygons) so they appear in the magnifier as well
+		if (overlayRef.current) {
+			mctx.drawImage(
+				overlayRef.current,
+				sx,
+				sy,
+				srcW,
+				srcW,
+				0,
+				0,
+				magRef.current.width,
+				magRef.current.height
+			);
+		}
+		mctx.restore();
+
+		// Draw crosshair at center
+		const cx = magRef.current.width / 2;
+		const cy = magRef.current.height / 2;
+		const lineLen = magRef.current.width * 0.4;
+		mctx.beginPath();
+		mctx.lineWidth = Math.max(1, dpr);
+		// subtle outer stroke (for contrast)
+		mctx.strokeStyle = "rgba(0,0,0,0.6)";
+		mctx.moveTo(cx - lineLen, cy);
+		mctx.lineTo(cx + lineLen, cy);
+		mctx.moveTo(cx, cy - lineLen);
+		mctx.lineTo(cx, cy + lineLen);
+		mctx.stroke();
+		// inner lighter stroke
+		mctx.beginPath();
+		mctx.lineWidth = Math.max(1, Math.ceil(dpr / 1.5));
+		mctx.strokeStyle = "rgba(255,255,255,0.9)";
+		mctx.moveTo(cx - lineLen, cy);
+		mctx.lineTo(cx + lineLen, cy);
+		mctx.moveTo(cx, cy - lineLen);
+		mctx.lineTo(cx, cy + lineLen);
+		mctx.stroke();
+
+		// outer circle border
+		mctx.beginPath();
+		mctx.arc(cx, cy, magRef.current.width / 2 - Math.max(2, dpr), 0, Math.PI * 2);
+		mctx.lineWidth = Math.max(2, dpr);
+		mctx.strokeStyle = "rgba(0,0,0,0.6)";
+		mctx.stroke();
+	}
+
+	function handlePointerLeave() {
+		setMagVisible(false);
+	}
+
 	function redraw() {
 		const base = viewRef.current, overlay = overlayRef.current, container = containerRef.current;
 		if (!base || !overlay || !container) return;
@@ -143,6 +262,8 @@ function PolygonMaskEditor({
 			containerRef.current.style.minHeight = `${H + PADDING_V * 2}px`;
 			containerRef.current.style.minWidth = `${W + PADDING_H * 2}px`;
 			containerRef.current.style.padding = `${PADDING_V}px ${PADDING_H}px`;
+			// ensure container can host absolutely positioned controls (magnifier toggle)
+			containerRef.current.style.position = "relative";
 		}
 		
 		// Set up the base image canvas at the original calculated size
@@ -477,7 +598,7 @@ function PolygonMaskEditor({
 		<div className="w-full">
 			<div className="flex items-center justify-between mb-2">
 				<span className="text-sm font-medium text-gray-600">{title}</span>
-				{/* NEW: native size display */}
+				{/* native size display (toggle moved into image container) */}
 				{nativeSize.w > 0 && nativeSize.h > 0 && (
 					<span className="text-xs text-gray-500">Native: {nativeSize.w} × {nativeSize.h} px</span>
 				)}
@@ -511,22 +632,50 @@ function PolygonMaskEditor({
 					}
 				}}
 			>
+				{/* Magnifier toggle placed inside grey image container (in padding area) */}
+				<Button
+					size="sm"
+					variant={magnifierEnabled ? "default" : "outline"}
+					onClick={() => setMagnifierEnabled(v => !v)}
+					style={{
+						position: "absolute",
+						right: 12,
+						top: 12,
+						zIndex: 1100,
+					}}
+				>
+					{magnifierEnabled ? "🔎 On" : "🔍"}
+				</Button>
 				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
-				<div ref={wrapperRef} className="relative">
-					<canvas ref={viewRef} className="block" />
-					<canvas
-						ref={overlayRef}
-						className="absolute cursor-crosshair"
-						onPointerDown={(e) => {
-							e.stopPropagation();
-							addPoint(e);
-						}}
-					/>
-				</div>
-			</div>
-
-			{/* controls */}
-			<div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+				<div ref={wrapperRef} className="relative" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
+ 					<canvas ref={viewRef} className="block" />
+ 					<canvas
+ 						ref={overlayRef}
+ 						className="absolute cursor-crosshair"
+ 						onPointerDown={(e) => {
+ 						 e.stopPropagation();
+ 						 addPoint(e);
+ 						}}
+ 					/>
+ 					{/* Magnifier canvas (absolute, pointer-events none so it doesn't block drawing) */}
+ 					<canvas
+ 						ref={magRef}
+ 						style={{
+ 							position: "absolute",
+ 							left: 0,
+ 							top: 0,
+ 							pointerEvents: "none",
+ 							borderRadius: "50%",
+ 							boxShadow: "0 6px 18px rgba(0,0,0,0.3)",
+ 							display: magVisible && magnifierEnabled ? "block" : "none",
+ 							zIndex: 999,
+ 						}}
+ 					/>
+ 				</div>
+ 			</div>
+ 
+ 			{/* controls */}
+ 			<div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
 				<div className="flex items-center gap-2 justify-start">
 					<Button size="sm" variant="outline" onClick={startNewPolygon}>New polygon</Button>
 					<Button size="sm" variant="outline" onClick={undoPoint} disabled={active < 0}>Undo point</Button>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, WheelEvent } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -118,18 +118,27 @@ type ZoomableCanvasProps = {
   title: string;
 };
 
-function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title }: ZoomableCanvasProps) {
+function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale, offset, setOffset }: ZoomableCanvasProps & {
+  scale: number;
+  setScale: (scale: number) => void;
+  offset: { x: number; y: number };
+  setOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
+}) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
 
   const cmap = useMemo(() => buildColormap(colormap), [colormap]);
 
-  const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const lastPos = useRef({ x: 0, y: 0 });
   const [hasFit, setHasFit] = useState(false);
+
+  // New: box zoom mode toggle state
+  const [boxZoomMode, setBoxZoomMode] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const selStart = useRef<{ x: number; y: number } | null>(null);
+  const [selRect, setSelRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   // Load image element when src changes (PNG path)
   useEffect(() => {
@@ -227,37 +236,107 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title }: ZoomableCanva
     }
   }, [hasFit, raw, imgEl]);
 
-  // Zoom with wheel
+  // Disable wheel zoom - only prevent default to avoid page scrolling
   function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    if (!wrapperRef.current || !canvasRef.current) return;
-    const rect = wrapperRef.current.getBoundingClientRect();
-    const cx = e.clientX - rect.left - offset.x;
-    const cy = e.clientY - rect.top - offset.y;
-    const delta = -e.deltaY; // up zooms in
-    const factor = Math.exp(delta * 0.0015);
-    const newScale = Math.min(20, Math.max(0.25, scale * factor));
-    const k = newScale / scale;
-    const newOffset = { x: offset.x - (cx * (k - 1)), y: offset.y - (cy * (k - 1)) };
-    setScale(newScale);
-    setOffset(newOffset);
+    e.preventDefault(); // Prevent page scroll but don't zoom
   }
 
   function handleMouseDown(e: React.MouseEvent) {
+    // If in box zoom mode -> begin box selection
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (boxZoomMode && rect) {
+      e.preventDefault();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      selStart.current = { x: sx, y: sy };
+      setSelecting(true);
+      setSelRect({ left: sx, top: sy, width: 0, height: 0 });
+      setDragging(false);
+      return;
+    }
+    // Otherwise begin panning
     setDragging(true);
     lastPos.current = { x: e.clientX, y: e.clientY };
   }
-  function handleMouseUp() { setDragging(false); }
-  function handleMouseLeave() { setDragging(false); }
+
+  function handleMouseUp(e?: React.MouseEvent) {
+    // finalize selection if active
+    if (selecting && selStart.current && wrapperRef.current) {
+      const rect = wrapperRef.current.getBoundingClientRect();
+      const ex = (e ? e.clientX : lastPos.current.x) - rect.left;
+      const ey = (e ? e.clientY : lastPos.current.y) - rect.top;
+      const sx = selStart.current.x;
+      const sy = selStart.current.y;
+      const left = Math.min(sx, ex);
+      const top = Math.min(sy, ey);
+      const width = Math.max(1, Math.abs(ex - sx));
+      const height = Math.max(1, Math.abs(ey - sy));
+      // Only zoom if reasonable rectangle
+      if (width > 6 && height > 6) {
+        // Convert to image-space coordinates
+        const ix = (left - offset.x) / scale;
+        const iy = (top - offset.y) / scale;
+        const iw = width / scale;
+        const ih = height / scale;
+        const W = rect.width;
+        const H = rect.height;
+        // New scale to fit selection into viewer
+        const Sx = W / Math.max(iw, 1e-6);
+        const Sy = H / Math.max(ih, 1e-6);
+        const newScale = Math.min(20, Math.max(0.25, Math.min(Sx, Sy)));
+        const newOffsetX = (W - iw * newScale) / 2 - ix * newScale;
+        const newOffsetY = (H - ih * newScale) / 2 - iy * newScale;
+        setScale(newScale);
+        setOffset({ x: newOffsetX, y: newOffsetY });
+        
+        // Exit box zoom mode after successful zoom
+        setBoxZoomMode(false);
+      }
+      // clear selection
+      selStart.current = null;
+      setSelecting(false);
+      setSelRect(null);
+      return;
+    }
+    setDragging(false);
+  }
+  
+  function handleMouseLeave() { 
+    // If selecting, finalize as mouse up
+    if (selecting) {
+      handleMouseUp();
+      return;
+    }
+    setDragging(false); 
+  }
+  
   function handleMouseMove(e: React.MouseEvent) {
+    if (selecting && selStart.current && wrapperRef.current) {
+      const rect = wrapperRef.current.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const sx = selStart.current.x;
+      const sy = selStart.current.y;
+      const left = Math.min(sx, cx);
+      const top = Math.min(sy, cy);
+      const width = Math.abs(cx - sx);
+      const height = Math.abs(cy - sy);
+      setSelRect({ left, top, width, height });
+      return;
+    }
     if (!dragging) return;
     const dx = e.clientX - lastPos.current.x;
     const dy = e.clientY - lastPos.current.y;
     lastPos.current = { x: e.clientX, y: e.clientY };
-    setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+    setOffset((o: { x: number; y: number }) => ({ x: o.x + dx, y: o.y + dy }));
   }
 
   function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
+
+  // Determine cursor based on current mode
+  const cursorClass = boxZoomMode 
+    ? "cursor-crosshair" 
+    : (dragging ? "cursor-grabbing" : "cursor-grab");
 
   return (
     <div className="w-full">
@@ -265,23 +344,47 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title }: ZoomableCanva
         <span className="text-sm font-medium text-gray-600">{title}</span>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fitToView}>Fit</Button>
-          <Button variant="outline" size="sm" onClick={resetTo100}>100%</Button>
+          <Button 
+            variant={boxZoomMode ? "default" : "outline"} 
+            size="sm" 
+            onClick={() => setBoxZoomMode(!boxZoomMode)}
+            className={boxZoomMode ? "bg-blue-600 text-white" : ""}
+          >
+            Box Zoom
+          </Button>
         </div>
       </div>
       <div className="relative w-full h-[480px] bg-black/80 rounded-md overflow-hidden border border-gray-200">
         <div
           ref={wrapperRef}
-          className="absolute inset-0 cursor-grab active:cursor-grabbing"
-          onWheel={(e) => { e.preventDefault(); /* disable autofit after user interaction */ setHasFit(true); handleWheel(e); }}
+          className={`absolute inset-0 ${cursorClass}`}
+          onWheel={handleWheel}
           onMouseDown={(e) => { setHasFit(true); handleMouseDown(e); }}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
           onMouseMove={handleMouseMove}
-          style={{ overflow: "hidden" }}
+          style={{ overflow: "hidden", touchAction: "none" }}
         >
           <div style={{ position: "absolute", left: offset.x, top: offset.y, transform: `scale(${scale})`, transformOrigin: "0 0" }}>
             <canvas ref={canvasRef} />
           </div>
+          
+          {/* Selection rectangle overlay with improved visibility */}
+          {selRect && (
+            <div
+              style={{
+                position: "absolute",
+                left: selRect.left,
+                top: selRect.top,
+                width: selRect.width,
+                height: selRect.height,
+                border: "2px dashed rgba(255, 255, 255, 0.9)",
+                background: "rgba(65, 105, 225, 0.2)",
+                pointerEvents: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -425,6 +528,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     return parts.filter(Boolean).pop() || p;
   };
 
+  // Helper to extract camera number
+  const getCameraNumber = (camString: string) => {
+    return camString.replace(/\D/g, '');
+  };
+
   async function fetchPair(auto = false, silent = false) {
     if (!camera) {
       if (!auto && !silent) alert("Please enter a camera folder name");
@@ -432,7 +540,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     }
     try {
       if (!silent) setLoading(true);
-      const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${index}&source_path_idx=${sourcePathIdx}`;
+      const cameraNumber = Number(getCameraNumber(camera));
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
       const res = await fetch(url);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to fetch");
@@ -524,7 +633,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       const params = new URLSearchParams();
       params.set("type", "processed");
       params.set("frame", String(index));            // 1-based
-      params.set("camera", String(camera));          // 'Cam1' or '1'
+      params.set("camera", String(Number(getCameraNumber(camera)))); // always just the number
       params.set("source_path_idx", String(sourcePathIdx));
       const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
       const json = await res.json();
@@ -563,7 +672,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       if (!camera) return;
       try {
         if (!playingRawBatch) setLoading(true);
-        const url = `${backendUrl}/get_frame_pair?camera=${encodeURIComponent(camera)}&idx=${rawIndex}&source_path_idx=${sourcePathIdx}`;
+        const cameraNumber = Number(getCameraNumber(camera));
+        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${rawIndex}&source_path_idx=${sourcePathIdx}`;
         const res = await fetch(url);
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to fetch");
@@ -618,41 +728,40 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
 
   useEffect(() => {
     // Use procIndex for processed images
-    if (filters.length > 0) {
+    if (filters.length > 0 && procImgA === null && procImgB === null) {
+      // Only fetch initially if we have a result already - don't auto-process
       const fetchProc = async () => {
         try {
           if (!playingProcBatch) setProcLoading(true);
           const params = new URLSearchParams();
           params.set("type", "processed");
           params.set("frame", String(procIndex));
-          params.set("camera", String(camera));
+          params.set("camera", String(Number(getCameraNumber(camera))));
           params.set("source_path_idx", String(sourcePathIdx));
           const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
-          const json = await res.json();
-          if (!res.ok) {
-            await runProcessing(true);
-            const res2 = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
-            const json2 = await res2.json();
-            if (!res2.ok) throw new Error(json2.error || "Failed to fetch processed");
-            setProcImgA(json2.A ?? null);
-            setProcImgB(json2.B ?? null);
-            return;
+          
+          // If we get a successful response, update the images
+          if (res.ok) {
+            const json = await res.json();
+            setProcImgA(json.A ?? null);
+            setProcImgB(json.B ?? null);
           }
-          setProcImgA(json.A ?? null);
-          setProcImgB(json.B ?? null);
         } catch (e) {
-          setProcImgA(null); setProcImgB(null);
+          // If error, just leave as null - don't auto-process
         } finally {
           if (!playingProcBatch) setProcLoading(false);
         }
       };
+      
+      // Try to fetch existing processed results, but don't auto-process if missing
       fetchProc();
-    } else {
-      setProcImgA(null); setProcImgB(null);
+    } else if (filters.length === 0) {
+      setProcImgA(null); 
+      setProcImgB(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [procIndex, camera, sourcePathIdx, filters.length]);
-
+  }, [procIndex, camera, sourcePathIdx]);
+  
   // ZoomableCanvas component for raw and processed images
   function ZoomableCanvasWrapper({ raw, src, vmin, vmax, colormap, title, isProcessed }: any) {
     const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -666,6 +775,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     const [dragging, setDragging] = useState(false);
     const lastPos = useRef({ x: 0, y: 0 });
     const [hasFit, setHasFit] = useState(false);
+
+    // Selection (box-zoom) state
+    const [selecting, setSelecting] = useState(false);
+    const selStart = useRef<{ x: number; y: number } | null>(null);
+    const [selRect, setSelRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
     // Load image element when src changes (PNG path)
     useEffect(() => {
@@ -763,61 +877,131 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       }
     }, [hasFit, raw, imgEl]);
 
-    // Zoom with wheel
-    function handleWheel(e: React.WheelEvent) {
-      e.preventDefault();
-      if (!wrapperRef.current || !canvasRef.current) return;
-      const rect = wrapperRef.current.getBoundingClientRect();
-      const cx = e.clientX - rect.left - offset.x;
-      const cy = e.clientY - rect.top - offset.y;
-      const delta = -e.deltaY; // up zooms in
-      const factor = Math.exp(delta * 0.0015);
-      const newScale = Math.min(20, Math.max(0.25, scale * factor));
-      const k = newScale / scale;
-      const newOffset = { x: offset.x - (cx * (k - 1)), y: offset.y - (cy * (k - 1)) };
-      setScale(newScale);
-      setOffset(newOffset);
-    }
-
     function handleMouseDown(e: React.MouseEvent) {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (e.shiftKey && rect) {
+        e.preventDefault();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        selStart.current = { x: sx, y: sy };
+        setSelecting(true);
+        setSelRect({ left: sx, top: sy, width: 0, height: 0 });
+        setDragging(false);
+        return;
+      }
       setDragging(true);
       lastPos.current = { x: e.clientX, y: e.clientY };
     }
-    function handleMouseUp() { setDragging(false); }
-    function handleMouseLeave() { setDragging(false); }
+
+    function handleMouseUp(e?: React.MouseEvent) {
+      if (selecting && selStart.current && wrapperRef.current) {
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const ex = (e ? e.clientX : lastPos.current.x) - rect.left;
+        const ey = (e ? e.clientY : lastPos.current.y) - rect.top;
+        const sx = selStart.current.x;
+        const sy = selStart.current.y;
+        const left = Math.min(sx, ex);
+        const top = Math.min(sy, ey);
+        const width = Math.max(1, Math.abs(ex - sx));
+        const height = Math.max(1, Math.abs(ey - sy));
+        // Only zoom if reasonable rectangle
+        if (width > 6 && height > 6) {
+          // Convert to image-space coordinates (optional: implement zoom-to-box)
+          // For now, just fit to selection in viewer coordinates
+          const W = rect.width;
+          const H = rect.height;
+          const Sx = W / Math.max(width, 1e-6);
+          const Sy = H / Math.max(height, 1e-6);
+          const newScale = Math.min(20, Math.max(0.25, Math.min(Sx, Sy)));
+          const newOffsetX = (W - width * newScale) / 2 - left * newScale;
+          const newOffsetY = (H - height * newScale) / 2 - top * newScale;
+          setScale(newScale);
+          setOffset({ x: newOffsetX, y: newOffsetY });
+        }
+        selStart.current = null;
+        setSelecting(false);
+        setSelRect(null);
+        return;
+      }
+      setDragging(false);
+    }
+
+    function handleMouseLeave() { 
+      if (selecting) {
+        handleMouseUp();
+        return;
+      }
+      setDragging(false); 
+    }
+
     function handleMouseMove(e: React.MouseEvent) {
+      if (selecting && selStart.current && wrapperRef.current) {
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const sx = selStart.current.x;
+        const sy = selStart.current.y;
+        const left = Math.min(sx, cx);
+        const top = Math.min(sy, cy);
+        const width = Math.abs(cx - sx);
+        const height = Math.abs(cy - sy);
+        setSelRect({ left, top, width, height });
+        return;
+      }
       if (!dragging) return;
       const dx = e.clientX - lastPos.current.x;
       const dy = e.clientY - lastPos.current.y;
       lastPos.current = { x: e.clientX, y: e.clientY };
-      setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+      setOffset((o: { x: number; y: number }) => ({ x: o.x + dx, y: o.y + dy }));
     }
 
     function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
 
+    function handleWheel(e: WheelEvent<HTMLDivElement>) {
+      throw new Error("Function not implemented.");
+    }
+
     return (
       <div className="w-full">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-600">{title}</span>
+          <span className="font-medium">{title}</span>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={fitToView}>Fit</Button>
-            <Button variant="outline" size="sm" onClick={resetTo100}>100%</Button>
           </div>
         </div>
         <div className="relative w-full h-[480px] bg-black/80 rounded-md overflow-hidden border border-gray-200">
           <div
             ref={wrapperRef}
-            className="absolute inset-0 cursor-grab active:cursor-grabbing"
-            onWheel={(e) => { e.preventDefault(); /* disable autofit after user interaction */ setHasFit(true); handleWheel(e); }}
+            className={`absolute inset-0 cursor-grab active:cursor-grabbing`}
+            onWheel={(e) => { e.preventDefault(); setHasFit(true); handleWheel(e); }}
             onMouseDown={(e) => { setHasFit(true); handleMouseDown(e); }}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseLeave}
             onMouseMove={handleMouseMove}
-            style={{ overflow: "hidden" }}
+            style={{ overflow: "hidden", touchAction: "none" }}
           >
             <div style={{ position: "absolute", left: offset.x, top: offset.y, transform: `scale(${scale})`, transformOrigin: "0 0" }}>
               <canvas ref={canvasRef} />
             </div>
+            
+            {/* Remove grid overlay */}
+            
+            {/* Selection rectangle overlay */}
+            {selRect && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: selRect.left,
+                  top: selRect.top,
+                  width: selRect.width,
+                  height: selRect.height,
+                  border: "2px dashed rgba(255,255,255,0.9)",
+                  background: "rgba(255,255,255,0.08)",
+                  pointerEvents: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -828,16 +1012,17 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
   async function runProcessing(silent = false) {
     if (!silent) setProcLoading(true);
     try {
-    const res = await fetch(`${backendUrl}/filter`, {
+      const cameraNumber = Number(getCameraNumber(camera));
+      const res = await fetch(`${backendUrl}/filter`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          camera,
+          camera: cameraNumber,
           start_idx: index,
           count: 1,
-      filters,                 // [] is valid (stores original+processed passthrough)
+          filters,
           source_path_idx: sourcePathIdx,
-      temporal_batch_filter: temporalBatch,
+          temporal_batch_filter: temporalBatch,
         }),
       });
       if (res.status === 409) {
@@ -940,6 +1125,16 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     };
   }, [playingProcBatch, batchEnd]);
 
+  // Shared zoom state
+  const [sharedScale, setSharedScale] = useState(1);
+  // Single shared offset so raw and processed views stay in sync
+  const [sharedOffset, setSharedOffset] = useState({ x: 0, y: 0 });
+  
+  // Update zoom handler
+  const handleZoomChange = (value: number) => {
+    setSharedScale(value);
+  };
+  
   return (
     <div className="space-y-6">
       <Card>
@@ -1047,7 +1242,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               onClick={() => setIndex(Math.max(1, batchStart - batchSize))}
               disabled={index <= batchSize}
             >
-              Prev Batch
+              Previous Batch
             </Button>
             <Button
               size="sm"
@@ -1096,8 +1291,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               <span className="font-medium">Raw Image</span>
               <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
               <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
-              {/* Removed Image Index input */}
             </div>
+            
             <div className="flex items-center gap-2">
               <Label htmlFor="raw-vmin">Min</Label>
               <Input
@@ -1171,6 +1366,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
             vmax={rawVmax}
             colormap={colormap}
             title={`Raw ${rawToggle} (Frame ${rawIndex})`}
+            scale={sharedScale}
+            setScale={setSharedScale}
+            offset={sharedOffset}
+            setOffset={setSharedOffset}
           />
         </div>
         {/* Processed image set with controls */}
@@ -1181,7 +1380,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               <span className="font-medium">Processed Image</span>
               <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
               <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
-              {/* Removed Image Index input */}
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="proc-vmin">Min</Label>
@@ -1260,6 +1458,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
             vmax={procVmax}
             colormap={colormap}
             title={`Processed ${procToggle} (Frame ${procIndex})`}
+            scale={sharedScale}
+            setScale={setSharedScale}
+            offset={sharedOffset}
+            setOffset={setSharedOffset}
           />
         </div>
       </div>

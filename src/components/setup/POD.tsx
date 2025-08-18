@@ -85,15 +85,27 @@ export default function POD({ config, updateConfig }: PODProps) {
   const saveChange = async (payload: any) => {
     setLoading(true);
     try {
-      const res = await fetch("/backend/update_pod", {
+      const wrapped = {
+        post_processing: [
+          {
+            type: "POD",
+            settings: payload,
+          },
+        ],
+      };
+      const res = await fetch("/backend/update_config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(wrapped),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to update POD settings");
-      // reflect changes in parent config if provided
-      if (updateConfig && json.post_processing) updateConfig(["post_processing"], json.post_processing);
+      // reflect changes in parent config if provided (update_config returns { updated: ... })
+      const updated = json.updated || {};
+      if (updateConfig) {
+        // prefer backend-echoed post_processing, otherwise mirror our wrapped payload
+        updateConfig(["post_processing"], updated.post_processing || wrapped.post_processing);
+      }
     } catch (e: any) {
       toast({ title: "Failed to save POD", description: e?.message ?? "Unknown error" });
     } finally {
@@ -371,13 +383,13 @@ export default function POD({ config, updateConfig }: PODProps) {
                   <label className="text-sm font-medium">Number of modes (k_modes)</label>
                   <div className="text-xs text-gray-500">0 for automatic / all modes</div>
                 </div>
-                <div className="w-1/4 flex justify-end">
+                <div className="w-1/3 text-right">
                   <Input
                     type="number"
                     min={0}
                     max={99999}
                     // visually limit to ~5 digits
-                    className="w-20"
+                    className="w-20 inline-block"
                     value={kModes}
                     onChange={e => {
                       const raw = e.target.value;

@@ -11,8 +11,6 @@ import PathsConfig from '@/components/setup/PathsConfig';
 import POD from '@/components/setup/POD';
 import ImageConfig from '@/components/setup/ImageConfig';
 import VectorViewer from '@/components/viewer/VectorViewer';
-import { Download, Play, Save, Image as ImageIcon } from 'lucide-react';
-import { useToast } from '@/components/ui/use-toast';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
 import Masking from '@/components/setup/Masking';
 import Calibration from '@/components/setup/Calibration';
@@ -49,7 +47,6 @@ export default function Home() {
     return () => { cancelled = true; };
   }, []);
   const [activeTab, setActiveTab] = useState("environment");
-  const { toast } = useToast();
 
   // Function to update config state (memoized to avoid infinite effect loops in children)
   const updateConfig = useCallback((path: string[], value: any) => {
@@ -68,45 +65,6 @@ export default function Home() {
       return newConfig;
     });
   }, []);
-
-  // Function to export configuration as JSON
-  const exportConfig = () => {
-    const dataStr = JSON.stringify(config, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const exportFileDefaultName = 'pivtools-config.json';
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
-    
-    toast({
-      title: "Configuration Exported",
-      description: "Your PIVTOOLS configuration has been exported successfully.",
-      duration: 3000,
-    });
-  };
-
-  // Function to save configuration
-  const saveConfig = () => {
-    // In a real app, this would save the config to local storage or the filesystem
-    localStorage.setItem('pivtools-config', JSON.stringify(config));
-    toast({
-      title: "Configuration Saved",
-      description: "Your configuration has been saved successfully.",
-      duration: 3000,
-    });
-  };
-
-  // Function to run MATLAB with the current configuration
-  const runMatlab = () => {
-    // In a real app, this would trigger the MATLAB execution
-    toast({
-      title: "Running MATLAB",
-      description: "PIVTOOLS is now processing with your configuration...",
-      duration: 5000,
-    });
-  };
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -255,31 +213,7 @@ export default function Home() {
           </Tabs>
         </div>
         
-        <div className="flex justify-between">
-          <div className="space-x-4">
-            <Button 
-              className="bg-soton-blue hover:bg-soton-darkblue"
-              onClick={saveConfig}
-            >
-              <Save className="mr-2 h-4 w-4" />
-              Save Configuration
-            </Button>
-            <Button 
-              className="bg-soton-gold text-soton-darkblue hover:bg-yellow-400"
-              onClick={exportConfig}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Export JSON
-            </Button>
-          </div>
-          <Button 
-            className="bg-green-600 hover:bg-green-700"
-            onClick={runMatlab}
-          >
-            <Play className="mr-2 h-4 w-4" />
-            Run PIVTOOLS
-          </Button>
-        </div>
+        {/* Save / Export / Run buttons removed */}
       </div>
     </main>
   );

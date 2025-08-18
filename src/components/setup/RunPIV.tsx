@@ -79,8 +79,9 @@ const RunPIV: React.FC = () => {
           const json = await res.json();
           if (json.image) {
             setStatusImageSrc(json.image);
+            // Only update progress if we have an expectedCount (from backend)
             setProgress((prev) => {
-              if (!expectedCount) return Math.min(100, prev + 5);
+              if (!expectedCount) return prev; // Do not increment progress until backend provides count
               const newP = Math.round((idx / expectedCount) * 100);
               return newP > prev ? newP : prev;
             });
@@ -101,15 +102,22 @@ const RunPIV: React.FC = () => {
     stopPolling({ resetProgress: false });
     const pollOnce = async () => {
       try {
-        const statusResponse = await fetch("/backend/check_status", {
+        // Use the existing get_uncalibrated_count endpoint instead of a separate check_status endpoint.
+        const params = new URLSearchParams();
+        params.set("basepath_idx", String(sourcePathIdx));
+        params.set("camera", camera);
+        params.set("var", varType);
+        if (cmap && cmap !== "default") params.set("cmap", cmap);
+
+        const statusResponse = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`, {
           method: "GET",
           headers: { "Content-Type": "application/json" },
           cache: "no-store",
         });
         if (!statusResponse.ok) return;
         const statusData = await statusResponse.json();
-        // If backend supplies percent, prefer it
-        const percent = typeof statusData.percent === "number" ? statusData.percent : Number(statusData.progress ?? statusData.status ?? 0);
+        // Prefer percent if provided by backend, otherwise leave progress as-is.
+        const percent = typeof statusData.percent === "number" ? statusData.percent : Number(statusData.percent ?? statusData.progress ?? 0);
         const newProgress = Number.isFinite(percent) ? Math.min(Math.max(Math.round(percent), 0), 100) : 0;
         setProgress((prev) => (newProgress > prev ? newProgress : prev));
         if (showStatusImage) await fetchStatusImage();
@@ -141,6 +149,43 @@ const RunPIV: React.FC = () => {
 
   useEffect(() => () => { if (uncalPollingRef.current) clearInterval(uncalPollingRef.current); }, []);
 
+  const uncalCountPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startUncalCountPolling = () => {
+    stopUncalCountPolling();
+    const pollUncalCount = async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set("basepath_idx", String(sourcePathIdx));
+        params.set("camera", camera);
+        params.set("var", varType);
+        if (cmap && cmap !== "default") params.set("cmap", cmap);
+        const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
+        if (cntRes.ok) {
+          const cntJson = await cntRes.json();
+          const newCount = Number(cntJson.count) || null;
+          setExpectedCount(newCount);
+          if (typeof cntJson.percent === "number") {
+            setProgress(Math.round(cntJson.percent));
+          }
+        }
+      } catch (e) {
+        // Silent fail
+      }
+    };
+    pollUncalCount(); // Initial call
+    uncalCountPollingRef.current = setInterval(pollUncalCount, POLL_INTERVAL_MS);
+  };
+
+  const stopUncalCountPolling = () => {
+    if (uncalCountPollingRef.current) {
+      clearInterval(uncalCountPollingRef.current);
+      uncalCountPollingRef.current = null;
+    }
+  };
+
+  useEffect(() => () => { if (uncalCountPollingRef.current) clearInterval(uncalCountPollingRef.current); }, []);
+
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "piv_source_paths") {
@@ -154,6 +199,7 @@ const RunPIV: React.FC = () => {
   const handleRunPIV = async () => {
     stopPolling({ resetProgress: true });
     stopUncalPolling();
+    stopUncalCountPolling();
     setLoading(true);
     try {
       const response = await fetch("/backend/run_piv", {
@@ -181,12 +227,21 @@ const RunPIV: React.FC = () => {
           exp = Number(cntJson.count) || null;
           // If backend provides a percent, seed the progress bar with it
           if (typeof cntJson.percent === "number") setProgress(Math.round(cntJson.percent));
-        } catch {}
+          else setProgress(0); // Explicitly set to 0 if no percent from backend
+        } catch {
+          setProgress(0); // Explicitly set to 0 if error parsing backend response
+        }
+      } else {
+        setProgress(0); // Explicitly set to 0 if backend does not respond
       }
       // Start lightweight uncalibrated preview polling (3s interval)
       setExpectedCount(exp);
       nextUncalIndexRef.current = 1;
       startUncalPolling();
+      // --- Ensure main polling is started for progress updates every 3s ---
+      startPolling();
+      // --- Start polling uncalibrated count every 3s ---
+      startUncalCountPolling();
     } catch (e: any) {
       alert(e.message || "Error starting PIV");
     } finally { setLoading(false); }
@@ -198,8 +253,9 @@ const RunPIV: React.FC = () => {
       const response = await fetch("/backend/cancel_run", { method: "POST" });
       if (!response.ok) throw new Error(`Failed: ${response.statusText}`);
       await response.json().catch(() => ({}));
-  stopPolling({ resetProgress: true });
-  stopUncalPolling();
+      stopPolling({ resetProgress: true });
+      stopUncalPolling();
+      stopUncalCountPolling();
     } catch (e: any) {
       alert(e.message || "Error cancelling");
     } finally { setLoading(false); }
@@ -220,7 +276,8 @@ const RunPIV: React.FC = () => {
       if (upperLimit.trim()) params.set("upper_limit", upperLimit);
       // default index for a quick preview (use 1 if nothing else)
       params.set("index", String(nextUncalIndexRef.current || 1));
-      const res = await fetch(`/plot/get_uncalibrated_image?${params.toString()}`);
+      // FIX: use /backend/plot/get_uncalibrated_image instead of /plot/get_uncalibrated_image
+      const res = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}`);
       if (!res.ok) throw new Error(`Status image failed: ${res.status}`);
       const contentType = res.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {

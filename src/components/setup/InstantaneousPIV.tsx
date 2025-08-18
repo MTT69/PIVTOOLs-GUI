@@ -68,7 +68,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(async () => {
       try {
-        const payload = {
+        const instantaneous_piv = {
           window_size: passesVal.map(p => [p.windowX, p.windowY]),
           overlap: passesVal.map(p => p.overlap),
           runs: runsVal
@@ -76,14 +76,21 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
             .map((r: string) => parseInt(r.trim(), 10))
             .filter((n: number) => !isNaN(n)),
         };
-        const res = await fetch('/backend/update_instantaneous', {
+
+        const payload = { instantaneous_piv };
+
+        const res = await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
         const json = await res.json();
         if (res.ok) {
-          updateConfig(['instantaneous_piv'], json.instantaneous_piv);
+          // Reflect the same instantaneous_piv we sent into local config
+          updateConfig(['instantaneous_piv'], instantaneous_piv);
+        } else {
+          // eslint-disable-next-line no-console
+          console.error('update_config failed', json);
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -145,18 +152,22 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
   const handleFiltersChange = async (filters: any[]) => {
     // Save filters to backend/YAML as the new config
     try {
-      const payload = { filters };
-      await fetch('/backend/update_paths', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...payload,
-          // Also send current paths to avoid accidental overwrite
+      const payload = {
+        filters,
+        paths: {
           base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
           source_paths: config.paths?.source_paths || config.paths?.source || [],
-        }),
+        },
+      };
+      const res = await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-      // Optionally updateConfig(['filters'], filters);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to save filters');
+      // Optionally reflect into local state:
+      // updateConfig(['filters'], filters);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('Failed to save filters to backend', e);

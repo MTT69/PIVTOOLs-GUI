@@ -170,26 +170,39 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
   // POST updated paths to backend (debounced)
   async function postUpdatePaths() {
     const payload = {
-      base_paths: baseDirs.filter(Boolean).map(sanitizePath),
-      source_paths: sourceDirs.filter(Boolean).map(sanitizePath),
-      image_format: rawFormats.length === 1 ? rawFormats[0] : rawFormats,
-      vector_format: vectorFormat,
-      calibration_image_format: calibrationFormat,
+      paths: {
+        base_paths: baseDirs.filter(Boolean).map(sanitizePath),
+        source_paths: sourceDirs.filter(Boolean).map(sanitizePath),
+      },
+      images: {
+        image_format: rawFormats.length === 1 ? rawFormats[0] : rawFormats,
+        vector_format: [vectorFormat],
+      },
+      calibration: {
+        image_format: calibrationFormat,
+      },
     };
     try {
-      const res = await fetch("/backend/update_paths", {
+      const res = await fetch("/backend/update_config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to save");
-      // Mirror to localStorage for viewers
-      localStorage.setItem("piv_base_paths", JSON.stringify(json.base_paths));
-      localStorage.setItem("piv_source_paths", JSON.stringify(json.source_paths));
-      localStorage.setItem("piv_image_format", JSON.stringify(json.image_format));
-      localStorage.setItem("piv_vector_format", JSON.stringify(json.vector_format));
-      localStorage.setItem("piv_calibration_image_format", JSON.stringify(json.calibration_image_format));
+
+      // update_config returns { status: "success", updated: data }
+      const updated = json.updated || {};
+      const updPaths = updated.paths || {};
+      const updImages = updated.images || {};
+      const updCalib = updated.calibration || {};
+
+      // Mirror to localStorage for viewers (fallback to payload when backend doesn't echo)
+      localStorage.setItem("piv_base_paths", JSON.stringify(updPaths.base_paths || payload.paths.base_paths));
+      localStorage.setItem("piv_source_paths", JSON.stringify(updPaths.source_paths || payload.paths.source_paths));
+      localStorage.setItem("piv_image_format", JSON.stringify(updImages.image_format || payload.images.image_format));
+      localStorage.setItem("piv_vector_format", JSON.stringify(updImages.vector_format || payload.images.vector_format));
+      localStorage.setItem("piv_calibration_image_format", JSON.stringify(updCalib.image_format || payload.calibration.image_format));
       // eslint-disable-next-line no-console
       console.log("Path configuration updated");
     } catch (err) {
