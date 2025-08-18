@@ -233,7 +233,6 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
       <ImagePairViewer
         backendUrl="/backend"
         onFiltersChange={handleFiltersChange}
-        filterSaveNote="Any filter changes here will be saved as your main configuration for future runs."
       />
 
       {/* PIV execution controls */}

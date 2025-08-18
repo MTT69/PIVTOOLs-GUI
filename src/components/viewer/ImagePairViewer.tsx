@@ -118,11 +118,13 @@ type ZoomableCanvasProps = {
   title: string;
 };
 
-function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale, offset, setOffset }: ZoomableCanvasProps & {
+function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale, offset, setOffset, useGrid = false, gridSize = 1 }: ZoomableCanvasProps & {
   scale: number;
   setScale: (scale: number) => void;
   offset: { x: number; y: number };
   setOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
+  useGrid?: boolean;
+  gridSize?: number;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -139,6 +141,9 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
   const [selecting, setSelecting] = useState(false);
   const selStart = useRef<{ x: number; y: number } | null>(null);
   const [selRect, setSelRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  // New: grid overlay state
+  const [imageSize, setImageSize] = useState<{width: number, height: number} | null>(null);
 
   // Load image element when src changes (PNG path)
   useEffect(() => {
@@ -160,6 +165,7 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
       const { width, height, data } = raw;
       canvas.width = width;
       canvas.height = height;
+      setImageSize({width, height});
       const out = new Uint8ClampedArray(width * height * 4);
       const rng = Math.max(1e-12, vmax - vmin);
       for (let i = 0; i < width * height; i++) {
@@ -182,6 +188,7 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
     if (!imgEl) return;
     canvas.width = imgEl.naturalWidth;
     canvas.height = imgEl.naturalHeight;
+    setImageSize({width: imgEl.naturalWidth, height: imgEl.naturalHeight});
     ctx.drawImage(imgEl, 0, 0);
     try {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -366,24 +373,45 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
           style={{ overflow: "hidden", touchAction: "none" }}
         >
           <div style={{ position: "absolute", left: offset.x, top: offset.y, transform: `scale(${scale})`, transformOrigin: "0 0" }}>
-            <canvas ref={canvasRef} />
+              <canvas ref={canvasRef} />
           </div>
+          
+          {/* Grid overlay - visible only when useGrid is true */}
+          {useGrid && imageSize && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: offset.x,
+                  top: offset.y,
+                  width: imageSize.width * scale,
+                  height: imageSize.height * scale,
+                  pointerEvents: "none",
+                  backgroundImage: `
+                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 1px, transparent 1px)
+                  `,
+                  backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
+                  boxSizing: "border-box",
+                  border: "1px solid rgba(50, 150, 255, 0.5)"
+                }}
+              ></div>
+          )}
           
           {/* Selection rectangle overlay with improved visibility */}
           {selRect && (
-            <div
-              style={{
-                position: "absolute",
-                left: selRect.left,
-                top: selRect.top,
-                width: selRect.width,
-                height: selRect.height,
-                border: "2px dashed rgba(255, 255, 255, 0.9)",
-                background: "rgba(65, 105, 225, 0.2)",
-                pointerEvents: "none",
-                boxSizing: "border-box",
-              }}
-            />
+              <div
+                style={{
+                  position: "absolute",
+                  left: selRect.left,
+                  top: selRect.top,
+                  width: selRect.width,
+                  height: selRect.height,
+                  border: "2px dashed rgba(255, 255, 255, 0.9)",
+                  background: "rgba(65, 105, 225, 0.2)",
+                  pointerEvents: "none",
+                  boxSizing: "border-box",
+                }}
+              ></div>
           )}
         </div>
       </div>
@@ -474,6 +502,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
   const [procVmin, setProcVmin] = useState(0);
   const [procVmax, setProcVmax] = useState(255);
 
+  // Add grid size state - change default to 16
+  const [gridSize, setGridSize] = useState<number>(16);
+  const [useGrid, setUseGrid] = useState<boolean>(false);
+
   const maxVal = useMemo(() => {
     if (bitDepth) return Math.pow(2, bitDepth) - 1;
     return 255;
@@ -541,6 +573,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     try {
       if (!silent) setLoading(true);
       const cameraNumber = Number(getCameraNumber(camera));
+      // Remove grid parameter from the API call
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -673,6 +706,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       try {
         if (!playingRawBatch) setLoading(true);
         const cameraNumber = Number(getCameraNumber(camera));
+        // Remove grid parameter from the API call
         const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${rawIndex}&source_path_idx=${sourcePathIdx}`;
         const res = await fetch(url);
         const json = await res.json();
@@ -781,11 +815,17 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     const selStart = useRef<{ x: number; y: number } | null>(null);
     const [selRect, setSelRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
+    // Add image size state for grid
+    const [imageSize, setImageSize] = useState<{width: number, height: number} | null>(null);
+
     // Load image element when src changes (PNG path)
     useEffect(() => {
       if (!src) { setImgEl(null); return; }
       const img = new Image();
-      img.onload = () => setImgEl(img);
+      img.onload = () => {
+        setImgEl(img);
+        setImageSize({width: img.naturalWidth, height: img.naturalHeight});
+      };
       img.src = `data:image/png;base64,${src}`;
     }, [src]);
 
@@ -801,6 +841,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
         const { width, height, data } = raw;
         canvas.width = width;
         canvas.height = height;
+        setImageSize({width, height});
         const out = new Uint8ClampedArray(width * height * 4);
         const rng = Math.max(1e-12, vmax - vmin);
         for (let i = 0; i < width * height; i++) {
@@ -823,6 +864,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       if (!imgEl) return;
       canvas.width = imgEl.naturalWidth;
       canvas.height = imgEl.naturalHeight;
+      setImageSize({width: imgEl.naturalWidth, height: imgEl.naturalHeight});
       ctx.drawImage(imgEl, 0, 0);
       try {
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -955,8 +997,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
       setOffset((o: { x: number; y: number }) => ({ x: o.x + dx, y: o.y + dy }));
     }
 
-    function resetView() { setScale(1); setOffset({ x: 0, y: 0 }); }
-
     function handleWheel(e: WheelEvent<HTMLDivElement>) {
       throw new Error("Function not implemented.");
     }
@@ -984,7 +1024,26 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               <canvas ref={canvasRef} />
             </div>
             
-            {/* Remove grid overlay */}
+            {/* Grid overlay - visible only when useGrid is true */}
+            {useGrid && imageSize && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: offset.x,
+                  top: offset.y,
+                  width: imageSize.width * scale,
+                  height: imageSize.height * scale,
+                  pointerEvents: "none",
+                  backgroundImage: `
+                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 1px, transparent 1px)
+                  `,
+                  backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
+                  boxSizing: "border-box",
+                  border: "1px solid rgba(50, 150, 255, 0.5)"
+                }}
+              />
+            )}
             
             {/* Selection rectangle overlay */}
             {selRect && (
@@ -1008,7 +1067,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     );
   }
 
-  // 5. Run processing with stacked filters
+  // 5. Run processing with stacked filters - include grid size
   async function runProcessing(silent = false) {
     if (!silent) setProcLoading(true);
     try {
@@ -1023,6 +1082,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
           filters,
           source_path_idx: sourcePathIdx,
           temporal_batch_filter: temporalBatch,
+          window_size: useGrid ? gridSize : 1, // Change from grid_size to window_size
         }),
       });
       if (res.status === 409) {
@@ -1282,17 +1342,34 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
         {/* Raw image set with controls */}
-        <div>
+        <div className="flex flex-col h-full">
           {/* Raw controls */}
           <div className="flex flex-col gap-2 mb-2">
+            {/* Controls row: A/B selector, Show Grid, Grid Size */}
             <div className="flex items-center gap-2">
               <span className="font-medium">Raw Image</span>
               <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
               <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
+              {/* Grid controls inline */}
+              <Switch 
+                id="use-grid" 
+                checked={useGrid} 
+                onCheckedChange={setUseGrid} 
+              />
+              <Label htmlFor="use-grid" className="ml-1">Show Grid</Label>
+              <Label htmlFor="grid-size" className="ml-3">Grid Size (px)</Label>
+              <Input
+                id="grid-size"
+                type="number"
+                value={gridSize}
+                onChange={e => setGridSize(Math.max(1, parseInt(e.target.value) || 1))}
+                disabled={!useGrid}
+                className="w-20"
+              />
             </div>
-            
+            {/* Min/Max controls */}
             <div className="flex items-center gap-2">
               <Label htmlFor="raw-vmin">Min</Label>
               <Input
@@ -1358,22 +1435,25 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
                 />
               </div>
             </div>
+          <div className="flex-1 flex flex-col justify-center">
+            <ZoomableCanvas
+              raw={rawToggle === "A" ? imgARaw : imgBRaw}
+              src={rawToggle === "A" ? imgA : imgB}
+              vmin={rawVmin}
+              vmax={rawVmax}
+              colormap={colormap}
+              title={`Raw ${rawToggle} (Frame ${rawIndex})`}
+              scale={sharedScale}
+              setScale={setSharedScale}
+              offset={sharedOffset}
+              setOffset={setSharedOffset}
+              useGrid={useGrid}
+              gridSize={gridSize}
+            />
           </div>
-          <ZoomableCanvas
-            raw={rawToggle === "A" ? imgARaw : imgBRaw}
-            src={rawToggle === "A" ? imgA : imgB}
-            vmin={rawVmin}
-            vmax={rawVmax}
-            colormap={colormap}
-            title={`Raw ${rawToggle} (Frame ${rawIndex})`}
-            scale={sharedScale}
-            setScale={setSharedScale}
-            offset={sharedOffset}
-            setOffset={setSharedOffset}
-          />
         </div>
         {/* Processed image set with controls */}
-        <div>
+        <div className="flex flex-col h-full">
           {/* Processed controls */}
           <div className="flex flex-col gap-2 mb-2">
             <div className="flex items-center gap-2">
@@ -1381,6 +1461,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
               <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
             </div>
+            {/* Add blank line for vertical alignment */}
+            <div className="h-[38px]"></div>
             <div className="flex items-center gap-2">
               <Label htmlFor="proc-vmin">Min</Label>
               <Input
@@ -1451,23 +1533,28 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               </div>
             </div>
           </div>
-          <ZoomableCanvas
-            raw={undefined}
-            src={procToggle === "A" ? procImgA : procImgB}
-            vmin={procVmin}
-            vmax={procVmax}
-            colormap={colormap}
-            title={`Processed ${procToggle} (Frame ${procIndex})`}
-            scale={sharedScale}
-            setScale={setSharedScale}
-            offset={sharedOffset}
-            setOffset={setSharedOffset}
-          />
+          <div className="flex-1 flex flex-col justify-center">
+            <ZoomableCanvas
+              raw={undefined}
+              src={procToggle === "A" ? procImgA : procImgB}
+              vmin={procVmin}
+              vmax={procVmax}
+              colormap={colormap}
+              title={`Processed ${procToggle} (Frame ${procIndex})`}
+              scale={sharedScale}
+              setScale={setSharedScale}
+              offset={sharedOffset}
+              setOffset={setSharedOffset}
+              useGrid={useGrid}
+              gridSize={gridSize}
+            />
+          </div>
         </div>
       </div>
       {filterSaveNote && (
         <div className="text-xs text-blue-700 mb-2">{filterSaveNote}</div>
       )}
     </div>
+  </div>
   );
 }
