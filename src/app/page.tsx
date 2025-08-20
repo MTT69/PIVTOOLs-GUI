@@ -116,6 +116,9 @@ export default function Home() {
               <TabsTrigger value="calibration" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                 Calibration
               </TabsTrigger>
+              <TabsTrigger value="coordinates" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                Coordinates
+              </TabsTrigger>
             </TabsList>
             
             {/* Environment tab content removed */}
@@ -203,7 +206,7 @@ export default function Home() {
 
             <TabsContent value="masking">
               {/* Masking tab content */}
-              <Masking />
+              <Masking config={config} />
             </TabsContent>
 
             <TabsContent value="calibration">

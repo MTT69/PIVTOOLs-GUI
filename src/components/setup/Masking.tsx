@@ -620,6 +620,38 @@ function PolygonMaskEditor({
 					{loadingMask ? "Loading..." : "Load Mask"}
 				</Button>
 			</div>
+
+			{/* Controls placed just below the mask path input (outside gray area) */}
+			<div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+				<div className="flex items-center gap-2 justify-start">
+					<Button size="sm" variant="outline" onClick={startNewPolygon}>New polygon</Button>
+					<Button size="sm" variant="outline" onClick={undoPoint} disabled={active < 0}>Undo point</Button>
+					<Button size="sm" variant="outline" onClick={deletePolygon} disabled={active < 0}>Delete</Button>
+				</div>
+				<div className="flex items-center gap-2 justify-center">
+					<Button size="sm" onClick={selectPrev} disabled={polys.length === 0}>Prev</Button>
+					<select
+						className="border rounded px-2 py-1 text-sm"
+						value={active}
+						onChange={e => setActive(parseInt(e.target.value))}
+					>
+						<option value={-1}>None</option>
+						{polys.map((p, i) => (
+							<option key={i} value={i}>{p.name || `Polygon ${i + 1}`}</option>
+						))}
+					</select>
+					<Button size="sm" onClick={selectNext} disabled={polys.length === 0}>Next</Button>
+				</div>
+				<div className="flex items-center gap-2 justify-end">
+					<Button size="sm" variant={magnifierEnabled ? "default" : "outline"} onClick={() => setMagnifierEnabled(v => !v)}>
+						{magnifierEnabled ? "🔎 On" : "🔍"}
+					</Button>
+					<Button size="sm" className="bg-soton-blue text-white" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
+					<Button size="sm" variant="secondary" onClick={sendArray} disabled={nativeSize.w === 0}>Save Mask</Button>
+					<Button size="sm" variant="destructive" onClick={clearAll}>Clear all</Button>
+				</div>
+			</div>
+
 			<div
 				ref={containerRef}
 				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center"
@@ -632,20 +664,6 @@ function PolygonMaskEditor({
 					}
 				}}
 			>
-				{/* Magnifier toggle placed inside grey image container (in padding area) */}
-				<Button
-					size="sm"
-					variant={magnifierEnabled ? "default" : "outline"}
-					onClick={() => setMagnifierEnabled(v => !v)}
-					style={{
-						position: "absolute",
-						right: 12,
-						top: 12,
-						zIndex: 1100,
-					}}
-				>
-					{magnifierEnabled ? "🔎 On" : "🔍"}
-				</Button>
 				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
 				<div ref={wrapperRef} className="relative" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
  					<canvas ref={viewRef} className="block" />
@@ -674,47 +692,37 @@ function PolygonMaskEditor({
  				</div>
  			</div>
  
- 			{/* controls */}
- 			<div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-				<div className="flex items-center gap-2 justify-start">
-					<Button size="sm" variant="outline" onClick={startNewPolygon}>New polygon</Button>
-					<Button size="sm" variant="outline" onClick={undoPoint} disabled={active < 0}>Undo point</Button>
-					<Button size="sm" variant="outline" onClick={deletePolygon} disabled={active < 0}>Delete</Button>
-				</div>
-				<div className="flex items-center gap-2 justify-center">
-					<Button size="sm" onClick={selectPrev} disabled={polys.length === 0}>Prev</Button>
-					<select
-						className="border rounded px-2 py-1 text-sm"
-						value={active}
-						onChange={e => setActive(parseInt(e.target.value))}
-					>
-						<option value={-1}>None</option>
-						{polys.map((p, i) => (
-							<option key={i} value={i}>{p.name || `Polygon ${i + 1}`}</option>
-						))}
-					</select>
-					<Button size="sm" onClick={selectNext} disabled={polys.length === 0}>Next</Button>
-				</div>
-				<div className="flex items-center gap-2 justify-end">
-					<Button size="sm" className="bg-soton-blue text-white" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
-					<Button size="sm" variant="secondary" onClick={sendArray} disabled={nativeSize.w === 0}>Save .mat</Button>
-					<Button size="sm" variant="destructive" onClick={clearAll}>Clear all</Button>
-				</div>
-			</div>
+
 		</div>
 	);
 }
 
-const Masking: React.FC = () => {
+const Masking: React.FC<{ config?: any }> = ({ config }) => {
 	const [basePathIdx, setBasePathIdx] = useState(0);
 	const [camera, setCamera] = useState("Cam1");
+	// derive camera options from config if provided
+	const cameraOptions: string[] = (() => {
+		// Prefer paths.camera_numbers (array with first element number of cameras)
+		const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+		const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+		const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+			? (nFromPaths as number)
+			: (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
+		const count = Number.isFinite(n) ? n : 1;
+		return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+	})();
+
+	// ensure camera state reflects available options
+	useEffect(() => {
+		if (cameraOptions.length === 0) return;
+		if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [cameraOptions.length, cameraOptions[0]]);
 	const [index, setIndex] = useState(1);
 	const [frame, setFrame] = useState<"A" | "B">("A");
 	const [loading, setLoading] = useState(false);
 	const [rawImage, setRawImage] = useState<RawImage | null>(null);
 	const [pngImage, setPngImage] = useState<string | null>(null);
-	const [pendingRawImage, setPendingRawImage] = useState<RawImage | null>(null);
-	const [pendingPngImage, setPendingPngImage] = useState<string | null>(null);
 	const [bitDepth, setBitDepth] = useState<number | null>(null);
 	const [dtype, setDtype] = useState<DType | null>(null);
 	const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -730,8 +738,6 @@ const Masking: React.FC = () => {
 	async function fetchMaskingImage() {
 		setLoading(true);
 		setError(null);
-		setPendingRawImage(null);
-		setPendingPngImage(null);
 		try {
 			const url = `http://localhost:3000/backend/get_raw_image?basepath_idx=${basePathIdx}&camera=${encodeURIComponent(camera)}&index=${index}&frame=${frame}`;
 			const res = await fetch(url);
@@ -744,39 +750,33 @@ const Masking: React.FC = () => {
 				setDtype(meta.dtype);
 				setDimensions({ width: meta.width, height: meta.height });
 				const arr = decodeTypedArray(data.raw, meta.dtype);
-				setPendingRawImage({ data: arr, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
-				setPendingPngImage(null);
+				setRawImage({ data: arr, width: meta.width, height: meta.height, bitDepth: meta.bitDepth, dtype: meta.dtype });
+				setPngImage(null);
 				// Auto-limits
 				const p1 = percentileFromRaw(arr, 1);
 				const p99 = percentileFromRaw(arr, 99);
 				setVmin(Math.floor(p1));
 				setVmax(Math.ceil(p99));
 			} else if (data.image) {
-				setPendingRawImage(null);
-				setPendingPngImage(data.image);
+				setRawImage(null);
+				setPngImage(data.image);
 				setBitDepth(data.bitDepth ?? null);
 				setDtype((data.dtype as DType) ?? null);
 				setDimensions(null);
 				setVmin(0);
 				setVmax(255);
 			} else {
-				setPendingRawImage(null);
-				setPendingPngImage(null);
+				setRawImage(null);
+				setPngImage(null);
 				setError("No image data returned from backend.");
 				return;
 			}
 		} catch (e: any) {
-			setPendingRawImage(null);
-			setPendingPngImage(null);
+			setRawImage(null);
+			setPngImage(null);
 			setError(e.message || "Error fetching image");
 		} finally {
 			setLoading(false);
-			// Only update displayed image after loading completes
-			if (error) return;
-			if (pendingRawImage || pendingPngImage) {
-				setRawImage(pendingRawImage);
-				setPngImage(pendingPngImage);
-			}
 		}
 	}
 
@@ -789,9 +789,15 @@ const Masking: React.FC = () => {
 	}
 
 	useEffect(() => {
+		// only fetch when camera is one of the computed options (prevents early fetches)
+		if (!camera) return;
+		if (!cameraOptions || cameraOptions.length === 0) return;
+		if (!cameraOptions.includes(camera)) return;
 		fetchMaskingImage();
 		// eslint-disable-next-line
-	}, [basePathIdx, camera, index, frame]);
+	}, [basePathIdx, camera, index, frame, cameraOptions.length]);
+
+	// Removed auto-click behavior; images now load automatically when camera/index/frame/basePath change
 
 	return (
 		<div className="space-y-6">
@@ -810,7 +816,13 @@ const Masking: React.FC = () => {
 						</div>
 						<div>
 							<Label htmlFor="camera">Camera</Label>
-							<Input id="camera" placeholder="e.g. Cam1" value={camera} onChange={e => setCamera(e.target.value)} />
+							<div>
+								<select id="camera" value={camera} onChange={e => setCamera(e.target.value)} className="border rounded px-2 py-1">
+									{cameraOptions.map((c) => (
+										<option key={c} value={c}>{c}</option>
+									))}
+								</select>
+							</div>
 						</div>
 						<div>
 							<Label htmlFor="index">Image Index</Label>
@@ -824,7 +836,12 @@ const Masking: React.FC = () => {
 							</div>
 						</div>
 						<div className="md:col-span-2 flex items-center gap-3">
-							<Button className="bg-soton-blue hover:bg-soton-darkblue" onClick={fetchMaskingImage} disabled={loading}>
+							<Button
+								id="load-image-btn"
+								className="bg-soton-blue hover:bg-soton-darkblue"
+								onClick={fetchMaskingImage}
+								disabled={loading}
+							>
 								{loading ? "Loading..." : "Load Image"}
 							</Button>
 						</div>

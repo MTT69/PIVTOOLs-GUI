@@ -40,19 +40,16 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
   const [numImages, setNumImages] = useState<string>(
     initialImages.num_images !== undefined ? String(initialImages.num_images) : ""
   );
-  const [height, setHeight] = useState<string>(
-    initialImages.shape && initialImages.shape[0] !== undefined ? String(initialImages.shape[0]) : ""
-  );
-  const [width, setWidth] = useState<string>(
-    initialImages.shape && initialImages.shape[1] !== undefined ? String(initialImages.shape[1]) : ""
+  // camera_numbers lives under config.paths and is an array in the YAML; default to 1
+  const [numCameras, setNumCameras] = useState<string>(
+    config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1"
   );
   const [timeResolved, setTimeResolved] = useState<boolean>(!!initialImages.time_resolved);
 
   // Always sync state from config when config changes (for hot reloads or backend edits)
   useEffect(() => {
     setNumImages(initialImages.num_images !== undefined ? String(initialImages.num_images) : "");
-    setHeight(initialImages.shape && initialImages.shape[0] !== undefined ? String(initialImages.shape[0]) : "");
-    setWidth(initialImages.shape && initialImages.shape[1] !== undefined ? String(initialImages.shape[1]) : "");
+    setNumCameras(config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1");
     setTimeResolved(!!initialImages.time_resolved);
 
     const rawFmt = initialImages.image_format;
@@ -113,7 +110,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numImages, height, width]);
+  }, [numImages, numCameras]);
 
   // Debounced save for pattern / timeResolved changes (/update_config)
   useEffect(() => {
@@ -130,36 +127,36 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
   async function saveCore() {
     try {
       setSavingMeta("Saving image core...");
-      // Only send if all fields are non-empty and valid numbers
-      if (
-        numImages !== "" &&
-        height !== "" &&
-        width !== "" &&
-        !isNaN(Number(numImages)) &&
-        !isNaN(Number(height)) &&
-        !isNaN(Number(width))
-      ) {
-        const payload = {
+      // Only send if at least one numeric field is present and valid
+      const validNumImages = numImages !== "" && !isNaN(Number(numImages));
+      const validNumCameras = numCameras !== "" && !isNaN(Number(numCameras));
+      if (validNumImages || validNumCameras) {
+        // Merge camera_numbers under paths so it matches YAML structure:
+        const payload: any = {
           images: {
-            num_images: Number(numImages),
-            shape: [Number(height), Number(width)],
             time_resolved: timeResolved,
           },
+          paths: {
+            base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
+            source_paths: config.paths?.source_paths || config.paths?.source || [],
+          },
         };
-        const res = await fetch("/backend/update_config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Failed to update images");
-        setSavingMeta("Image core saved");
-        setTimeout(() => setSavingMeta(""), 1000);
-      }
-    } catch (e: any) {
-      setSavingMeta("Error: " + e.message);
-    }
-  }
+        if (validNumImages) payload.images.num_images = Number(numImages);
+        if (validNumCameras) payload.paths.camera_numbers = [Number(numCameras)];
+         const res = await fetch("/backend/update_config", {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           body: JSON.stringify(payload),
+         });
+         const json = await res.json();
+         if (!res.ok) throw new Error(json.error || "Failed to update images");
+         setSavingMeta("Image core saved");
+         setTimeout(() => setSavingMeta(""), 1000);
+       }
+     } catch (e: any) {
+       setSavingMeta("Error: " + e.message);
+     }
+   }
 
   async function savePatterns() {
     try {
@@ -204,6 +201,23 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     setRawPatterns(next);
   }
 
+  // Increment/decrement camera count (clamp >=1). Persist as paths.camera_numbers = [N]
+  function changeNumCameras(delta: number) {
+    const current = numCameras === "" ? 0 : Number(numCameras);
+    const next = Math.max(1, current + delta);
+    setNumCameras(String(next));
+    updateConfig(["paths", "camera_numbers"], [next]);
+  }
+
+  function setNumCamerasFromInput(v: string) {
+    // sanitize numeric input, clamp to >=1 when valid
+    const n = v === "" ? NaN : Number(v);
+    const clamped = !isNaN(n) ? Math.max(1, n) : NaN;
+    const normalized = isNaN(clamped) ? "" : String(clamped);
+    setNumCameras(normalized);
+    if (!isNaN(clamped)) updateConfig(["paths", "camera_numbers"], [clamped]);
+  }
+
   // Toggle time resolved resets rawPatterns to single or pair
   function toggleTimeResolved(val: boolean) {
     setTimeResolved(val);
@@ -236,9 +250,9 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
           <CardDescription>Number of images and dimensions</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <Label htmlFor="num_images">Num Images</Label>
+              <Label htmlFor="num_images">Number of Images</Label>
               <Input
                 id="num_images"
                 type="text"
@@ -258,40 +272,37 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
               />
             </div>
             <div>
-              <Label htmlFor="height">Height (px)</Label>
-              <Input
-                id="height"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={height}
-                onChange={e => {
-                  const v = e.target.value.replace(/[^0-9]/g, "");
-                  setHeight(v);
-                  if (v !== "" && width !== "") updateConfig(["images", "shape"], [Number(v), Number(width)]);
-                }}
-                style={{ MozAppearance: "textfield" } as any}
-                className="no-spinner"
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <Label htmlFor="width">Width (px)</Label>
-              <Input
-                id="width"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={width}
-                onChange={e => {
-                  const v = e.target.value.replace(/[^0-9]/g, "");
-                  setWidth(v);
-                  if (height !== "" && v !== "") updateConfig(["images", "shape"], [Number(height), Number(v)]);
-                }}
-                style={{ MozAppearance: "textfield" } as any}
-                className="no-spinner"
-                autoComplete="off"
-              />
+              <Label htmlFor="num_cameras">Number of Cameras</Label>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="ghost" size="icon" onClick={() => changeNumCameras(-1)}>
+                  <Minus className="h-4 w-4" />
+                </Button>
+                <Input
+                  id="num_cameras"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={numCameras}
+                  onChange={e => {
+                    const v = e.target.value.replace(/[^0-9]/g, "");
+                    setNumCamerasFromInput(v);
+                  }}
+                  onBlur={() => {
+                    // enforce minimum of 1 if empty or invalid on blur
+                    const n = numCameras === "" ? NaN : Number(numCameras);
+                    if (isNaN(n) || n < 1) {
+                      setNumCameras("1");
+                      updateConfig(["paths", "camera_numbers"], [1]);
+                    }
+                  }}
+                  style={{ MozAppearance: "textfield" } as any}
+                  className="no-spinner"
+                  autoComplete="off"
+                />
+                <Button type="button" variant="ghost" size="icon" onClick={() => changeNumCameras(1)}>
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
           <div className="mt-4 flex items-center gap-2">

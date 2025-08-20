@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,20 +44,38 @@ const Calibration: React.FC = () => {
       });
       setDots([]); setDatum(null); setRight(null); setAbove(null);
       setDewarpedB64(null); setGridPoints([]); setGridIndices([]); setInlierMask([]);
+      return true;
     } catch (e:any) { alert(e.message); }
     finally { setLoading(false); }
+    return false;
   };
 
   const detectDots = async () => {
-    if (!imageB64) return;
     try {
+      setLoading(true);
       const params = new URLSearchParams({ source_path_idx: String(sourcePathIdx), camera });
       const res = await fetch(`/backend/calibration/detect_dots?${params.toString()}`);
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "Failed to detect dots");
-      setDots(j.dots);
+      setDots(j.dots || []);
     } catch (e:any) { alert(e.message); }
+    finally { setLoading(false); }
   };
+
+  // Auto-load image and detect dots when this component mounts (e.g., when tab opens).
+  // Assumption: the component is mounted when the calibration tab is opened. If the
+  // tab keeps the component mounted while hidden, a different visibility signal is
+  // required from the parent and this effect should be adjusted.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const ok = await loadImage();
+      if (!mounted) return;
+      if (ok) await detectDots();
+    })();
+    return () => { mounted = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function findNearest(pt:[number,number]): [number,number] {
     if (!dots.length) return pt;

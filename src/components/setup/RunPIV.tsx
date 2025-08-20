@@ -36,6 +36,15 @@ const RunPIV: React.FC = () => {
   const [run, setRun] = useState<number>(1);
   const [lowerLimit, setLowerLimit] = useState<string>("");
   const [upperLimit, setUpperLimit] = useState<string>("");
+  // Refs to always read the latest limits inside async/interval callbacks
+  const lowerLimitRef = useRef<string>(lowerLimit);
+  const upperLimitRef = useRef<string>(upperLimit);
+  // Refs for other settings so interval callbacks/readers always see latest values
+  const sourcePathIdxRef = useRef<number>(sourcePathIdx);
+  const cameraRef = useRef<string>(camera);
+  const varTypeRef = useRef<string>(varType);
+  const cmapRef = useRef<string>(cmap);
+  const runRef = useRef<number>(run);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [isPolling, setIsPolling] = useState<boolean>(false);
@@ -55,6 +64,20 @@ const RunPIV: React.FC = () => {
   const [statusImageError, setStatusImageError] = useState<string | null>(null);
   const [showStatusImage, setShowStatusImage] = useState(true);
 
+  useEffect(() => {
+    lowerLimitRef.current = lowerLimit;
+  }, [lowerLimit]);
+
+  useEffect(() => {
+    upperLimitRef.current = upperLimit;
+  }, [upperLimit]);
+
+  useEffect(() => { sourcePathIdxRef.current = sourcePathIdx; }, [sourcePathIdx]);
+  useEffect(() => { cameraRef.current = camera; }, [camera]);
+  useEffect(() => { varTypeRef.current = varType; }, [varType]);
+  useEffect(() => { cmapRef.current = cmap; }, [cmap]);
+  useEffect(() => { runRef.current = run; }, [run]);
+
   // This function will be updated on every render with the latest state
   useEffect(() => {
     uncalPollFnRef.current = async () => {
@@ -71,10 +94,11 @@ const RunPIV: React.FC = () => {
         params.set("index", String(idx));
         params.set("var", varType); // Use latest varType
         if (cmap && cmap !== "default") params.set("cmap", cmap);
-        if (run > 0) params.set("run", String(run)); // Use latest run
-        if (lowerLimit.trim()) params.set("lower_limit", lowerLimit); // Use latest lowerLimit
-        if (upperLimit.trim()) params.set("upper_limit", upperLimit); // Use latest upperLimit
-        const res = await fetch(`backend/plot/get_uncalibrated_image?${params.toString()}`);
+  if (run > 0) params.set("run", String(run)); // Use latest run
+  // Read from refs so interval callbacks always use the freshest values
+  if (lowerLimitRef.current.trim()) params.set("lower_limit", lowerLimitRef.current);
+  if (upperLimitRef.current.trim()) params.set("upper_limit", upperLimitRef.current);
+  const res = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}`);
         if (res.ok) {
           const json = await res.json();
           if (json.image) {
@@ -103,13 +127,13 @@ const RunPIV: React.FC = () => {
     const pollOnce = async () => {
       try {
         // Use the existing get_uncalibrated_count endpoint instead of a separate check_status endpoint.
-        const params = new URLSearchParams();
-        params.set("basepath_idx", String(sourcePathIdx));
-        params.set("camera", camera);
-        params.set("var", varType);
-        if (cmap && cmap !== "default") params.set("cmap", cmap);
+  const params = new URLSearchParams();
+  params.set("basepath_idx", String(sourcePathIdxRef.current));
+  params.set("camera", cameraRef.current);
+  params.set("var", varTypeRef.current);
+  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
 
-        const statusResponse = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`, {
+  const statusResponse = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`, {
           method: "GET",
           headers: { "Content-Type": "application/json" },
           cache: "no-store",
@@ -214,12 +238,12 @@ const RunPIV: React.FC = () => {
       const data = await response.json();
       console.log("Run PIV response", data);
       // Query backend for existing uncalibrated .mat count (may be 0)
-      const params = new URLSearchParams();
-      params.set("basepath_idx", String(sourcePathIdx));
-      params.set("camera", camera);
-      params.set("var", varType);
-      if (cmap && cmap !== "default") params.set("cmap", cmap);
-      const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
+  const params = new URLSearchParams();
+  params.set("basepath_idx", String(sourcePathIdxRef.current));
+  params.set("camera", cameraRef.current);
+  params.set("var", varTypeRef.current);
+  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
+  const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
       let exp: number | null = null;
       if (cntRes.ok) {
         try {
@@ -266,16 +290,17 @@ const RunPIV: React.FC = () => {
     setStatusImageLoading(true);
     setStatusImageError(null);
     try {
-      const params = new URLSearchParams();
-      params.set("basepath_idx", String(sourcePathIdx));
-      params.set("camera", camera);
-      params.set("var", varType);
-      if (cmap && cmap !== "default") params.set("cmap", cmap);
-      if (run > 0) params.set("run", String(run));
-      if (lowerLimit.trim()) params.set("lower_limit", lowerLimit);
-      if (upperLimit.trim()) params.set("upper_limit", upperLimit);
+  const params = new URLSearchParams();
+  params.set("basepath_idx", String(sourcePathIdxRef.current));
+  params.set("camera", cameraRef.current);
+  params.set("var", varTypeRef.current);
+  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
+  if (runRef.current > 0) params.set("run", String(runRef.current));
+  // Use refs so this helper uses the latest values like the uncal polling path
+  if (lowerLimitRef.current.trim()) params.set("lower_limit", lowerLimitRef.current);
+  if (upperLimitRef.current.trim()) params.set("upper_limit", upperLimitRef.current);
       // default index for a quick preview (use 1 if nothing else)
-      params.set("index", String(nextUncalIndexRef.current || 1));
+  params.set("index", String(nextUncalIndexRef.current || 1));
       // FIX: use /backend/plot/get_uncalibrated_image instead of /plot/get_uncalibrated_image
       const res = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}`);
       if (!res.ok) throw new Error(`Status image failed: ${res.status}`);

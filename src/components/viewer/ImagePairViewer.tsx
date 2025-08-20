@@ -235,7 +235,11 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
   function resetTo100() { setScale(1); setOffset({ x: 0, y: 0 }); }
 
   // Perform initial fit once on load/change
-  useEffect(() => { setHasFit(false); }, [raw, imgEl]);
+  useEffect(() => { 
+    // Only reset fit if we've never fit before (preserves zoom when changing images)
+    if (!hasFit) setHasFit(false);
+  }, [raw, imgEl]);
+  
   useEffect(() => {
     if (!hasFit && (raw || imgEl)) {
       // Delay to ensure wrapper has measured size
@@ -911,7 +915,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     function resetTo100() { setScale(1); setOffset({ x: 0, y: 0 }); }
 
     // Perform initial fit once on load/change
-    useEffect(() => { setHasFit(false); }, [raw, imgEl]);
+    useEffect(() => { 
+      // Only reset fit if we've never fit before (preserves zoom when changing images)
+      if (!hasFit) setHasFit(false);
+    }, [raw, imgEl]);
+    
     useEffect(() => {
       if (!hasFit && (raw || imgEl)) {
         // Delay to ensure wrapper has measured size
@@ -1244,7 +1252,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
                 <SelectTrigger id="srcpath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
                 <SelectContent>
                   {sourcePaths.map((p, i) => (
-                    <SelectItem key={i} value={String(i)}>{`${i}: ${basename(p)}`}</SelectItem>
+                    <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1342,17 +1350,20 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+      {/* Replace fixed height with flex layout for dynamic sizing */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch mb-10">
         {/* Raw image set with controls */}
-        <div className="flex flex-col h-full">
-          {/* Raw controls */}
-          <div className="flex flex-col gap-2 mb-2">
-            {/* Controls row: A/B selector, Show Grid, Grid Size */}
+        <div className="flex flex-col mb-6">
+          {/* Raw controls - explicit height */}
+          <div className="flex flex-col gap-2 mb-4 h-[140px]">
+            {/* First row: A/B selector only */}
             <div className="flex items-center gap-2">
               <span className="font-medium">Raw Image</span>
               <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
               <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
-              {/* Grid controls inline */}
+            </div>
+            {/* Grid controls moved to their own line to match processed spacer height */}
+            <div className="h-[38px] flex items-center gap-2">
               <Switch 
                 id="use-grid" 
                 checked={useGrid} 
@@ -1435,7 +1446,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
                 />
               </div>
             </div>
-          <div className="flex-1 flex flex-col justify-center">
+          </div>
+          <div className="h-[480px] mb-4"> {/* Fixed height with bottom margin */}
             <ZoomableCanvas
               raw={rawToggle === "A" ? imgARaw : imgBRaw}
               src={rawToggle === "A" ? imgA : imgB}
@@ -1453,9 +1465,9 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
           </div>
         </div>
         {/* Processed image set with controls */}
-        <div className="flex flex-col h-full">
-          {/* Processed controls */}
-          <div className="flex flex-col gap-2 mb-2">
+        <div className="flex flex-col mb-6">
+          {/* Processed controls - explicit height */}
+          <div className="flex flex-col gap-2 mb-4 h-[140px]">
             <div className="flex items-center gap-2">
               <span className="font-medium">Processed Image</span>
               <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
@@ -1533,7 +1545,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
               </div>
             </div>
           </div>
-          <div className="flex-1 flex flex-col justify-center">
+          <div className="h-[480px] mb-4"> {/* Fixed height with bottom margin */}
             <ZoomableCanvas
               raw={undefined}
               src={procToggle === "A" ? procImgA : procImgB}
@@ -1552,9 +1564,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
         </div>
       </div>
       {filterSaveNote && (
-        <div className="text-xs text-blue-700 mb-2">{filterSaveNote}</div>
+        <div className="text-xs text-blue-700 mb-6 mt-4">{filterSaveNote}</div>
       )}
     </div>
-  </div>
-  );
-}
+    );}
