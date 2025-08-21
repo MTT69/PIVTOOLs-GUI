@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card";
 // ...no direct button usage; kept minimal imports
 import { Switch } from "@/components/ui/switch";
@@ -20,7 +20,28 @@ export default function POD({ config, updateConfig }: PODProps) {
     try { return JSON.parse(typeof window !== "undefined" ? localStorage.getItem("piv_base_paths") || "[]" : "[]"); } catch { return []; }
   });
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
-  const [camera, setCamera] = useState<string>("1");
+  
+  // Derive camera options from config like RunPIV and ImagePairViewer
+  const cameraOptions = useMemo(() => {
+    // Use the same logic to derive camera options from config
+    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+      ? (nFromPaths as number)
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
+    const count = Number.isFinite(n) ? n : 1;
+    return Array.from({ length: count }, (_, i) => String(i + 1));
+  }, [config]);
+
+  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "1");
+  
+  // Ensure camera state reflects available options when config changes
+  useEffect(() => {
+    if (cameraOptions.length === 0) return;
+    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraOptions.length, cameraOptions[0]]);
+
   // merged data toggle (next to camera)
   const [merged, setMerged] = useState<boolean>(false);
   const [randomised, setRandomised] = useState<boolean>(false);
@@ -355,7 +376,7 @@ export default function POD({ config, updateConfig }: PODProps) {
                 )}
               </div>
 
-              {/* Camera selection */}
+              {/* Camera selection - updated to use dynamic options */}
               <div className="flex items-center gap-4">
                 <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
                 <select
@@ -364,8 +385,9 @@ export default function POD({ config, updateConfig }: PODProps) {
                   onChange={e => setCamera(e.target.value)}
                   className="border rounded px-2 py-1"
                 >
-                  <option value="1">Camera 1</option>
-                  <option value="2">Camera 2</option>
+                  {cameraOptions.map((cam) => (
+                    <option key={cam} value={cam}>Camera {cam}</option>
+                  ))}
                 </select>
                 <label className="flex items-center gap-2 text-sm font-medium ml-2">
                   <input

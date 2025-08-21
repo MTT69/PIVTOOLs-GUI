@@ -133,87 +133,150 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   };
 
   // New: handle setting datum when image is clicked in datum mode
-  const handleImageClick = (e: React.MouseEvent) => {
+  const handleImageClick = async (e: React.MouseEvent) => {
     if (!datumMode || !meta?.axes_bbox || !imgRef.current) return;
-    
+
     const rect = imgRef.current.getBoundingClientRect();
     const dispX = e.clientX - rect.left;
     const dispY = e.clientY - rect.top;
-    
+
     // Convert click position to image coordinates
     const bbox = meta.axes_bbox;
     const scaleX = bbox.png_width / rect.width;
     const scaleY = bbox.png_height / rect.height;
     const px = dispX * scaleX;
     const py = dispY * scaleY;
-    
+
     // Check if click is inside the axes region
-    if (px < bbox.left || px > bbox.left + bbox.width || 
+    if (px < bbox.left || px > bbox.left + bbox.width ||
         py < bbox.top || py > bbox.top + bbox.height) {
       return;
     }
-    
+
     // Calculate normalized position (0-1) within the vector field
     const xPercent = (px - bbox.left) / bbox.width;
     const yPercent = (py - bbox.top) / bbox.height;
-    
-    // Send to backend
-    void sendDatumToBackend(xPercent, yPercent);
-    
+
+    // Query backend for physical coordinates at this point (like tooltip)
+    try {
+      const params = new URLSearchParams();
+      params.set("base_path", effectiveDir);
+      params.set("camera", camera.replace(/[^\d]/g, "") || "1");
+      params.set("frame", String(index));
+      params.set("var", type);
+      params.set("run", String(run));
+      params.set("merged", merged ? "1" : "0");
+      params.set("x_percent", xPercent.toString());
+      params.set("y_percent", yPercent.toString());
+      const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || "Failed to get vector value");
+      // Show the physical coordinates to the user
+      alert(`New datum set at physical position: x=${json.x?.toFixed(4)}, y=${json.y?.toFixed(4)}`);
+      // Send to backend and reload plot after
+      await sendDatumToBackend(json.x, json.y);
+      // Reload plot after datum is set
+      void fetchImage();
+    } catch (e: any) {
+      setError(`Failed to set datum: ${e.message}`);
+    }
+
     // Exit datum mode after setting
     setDatumMode(false);
   };
 
-  // Function to send datum information to backend
-  const sendDatumToBackend = async (xPercent: number, yPercent: number) => {
+  // Function to update offsets only (no datum set)
+  const updateOffsets = async () => {
     try {
-      // For now, just show a message - backend endpoint will be implemented later
-      alert(`New datum set at position: ${xPercent.toFixed(4)}, ${yPercent.toFixed(4)}`);
-      
-      // This is where you would send data to backend
-      // const params = new URLSearchParams();
-      // params.set("base_path", effectiveDir);
-      // params.set("x_percent", String(xPercent));
-      // params.set("y_percent", String(yPercent));
-      // params.set("x_offset", xOffset);
-      // params.set("y_offset", yOffset);
-      // params.set("camera", camera);
-      // params.set("merged", merged ? "1" : "0");
-      
-      // const url = `${backendUrl}/plot/set_datum?${params.toString()}`;
-      // const res = await fetch(url);
-      // const json = await res.json();
-      // if (!res.ok) throw new Error(json.error || "Failed to set datum");
+      const body = {
+        base_path_idx: basePathIdx,
+        camera: camera.replace(/[^\d]/g, "") || "1",
+        run: run,
+        x_offset: Number(xOffset) || 0,
+        y_offset: Number(yOffset) || 0,
+        merged: merged ? 1 : 0,
+      };
+      const url = `${backendUrl}/calibration/set_datum`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to update offsets");
+      // Optionally show confirmation
+      // alert("Offsets updated!");
+      // Reload plot after updating offsets
+      void fetchImage();
+    } catch (e: any) {
+      setError(`Failed to update offsets: ${e.message}`);
+    }
+  };
+
+  // Function to send datum information to backend (now uses /set_datum)
+  const sendDatumToBackend = async (x: number, y: number) => {
+    try {
+      const body = {
+        base_path_idx: basePathIdx,
+        camera: camera.replace(/[^\d]/g, "") || "1",
+        run: run,
+        x: x,
+        y: y,
+        x_offset: Number(xOffset) || 0,
+        y_offset: Number(yOffset) || 0,
+        merged: merged ? 1 : 0,
+      };
+      const url = `${backendUrl}calibration/set_datum`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to set datum");
+      // Optionally show confirmation
+      // alert("Datum successfully set!");
     } catch (e: any) {
       setError(`Failed to set datum: ${e.message}`);
     }
   };
 
-  // Function to fetch corner coordinates
+  // Function to fetch corner coordinates from backend
   const fetchCornerCoordinates = async () => {
+    setShowCorners(false);
+    setCornerCoordinates(null);
+    setError(null);
     try {
-      // For demonstration, generate dummy coordinates
-      // In reality, this would fetch from the backend
-      setCornerCoordinates({
-        topLeft: { x: -10.5, y: 15.2 },
-        topRight: { x: 10.5, y: 15.2 },
-        bottomLeft: { x: -10.5, y: -5.8 },
-        bottomRight: { x: 10.5, y: -5.8 }
-      });
+      const basePath = effectiveDir;
+      if (!basePath) throw new Error("Please provide a base path");
+      // Helper to fetch a single corner
+      const fetchCorner = async (xPercent: number, yPercent: number) => {
+        const params = new URLSearchParams();
+        params.set("base_path", basePath);
+        params.set("camera", camera.replace(/[^\d]/g, "") || "1");
+        params.set("frame", String(index));
+        params.set("var", type);
+        params.set("run", String(run));
+        params.set("merged", merged ? "1" : "0");
+        params.set("x_percent", xPercent.toString());
+        params.set("y_percent", yPercent.toString());
+        const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (!res.ok || json.error) throw new Error(json.error || "Failed to get corner coordinate");
+        // Expect json.x and json.y
+        return { x: json.x, y: json.y };
+      };
+      // Four corners: (0,0), (1,0), (0,1), (1,1)
+      const [topLeft, topRight, bottomLeft, bottomRight] = await Promise.all([
+        fetchCorner(0, 0),
+        fetchCorner(1, 0),
+        fetchCorner(0, 1),
+        fetchCorner(1, 1),
+      ]);
+      setCornerCoordinates({ topLeft, topRight, bottomLeft, bottomRight });
       setShowCorners(true);
-      
-      // This is where you would fetch from backend
-      // const params = new URLSearchParams();
-      // params.set("base_path", effectiveDir);
-      // params.set("camera", camera);
-      // params.set("merged", merged ? "1" : "0");
-      
-      // const url = `${backendUrl}/plot/get_corner_coordinates?${params.toString()}`;
-      // const res = await fetch(url);
-      // const json = await res.json();
-      // if (!res.ok) throw new Error(json.error || "Failed to get corner coordinates");
-      // setCornerCoordinates(json.coordinates);
-      // setShowCorners(true);
     } catch (e: any) {
       setError(`Failed to get corner coordinates: ${e.message}`);
     }
@@ -653,6 +716,34 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const onMouseLeave = useCallback(() => { clearHover(); }, [clearHover]);
   // --- End tooltip additions ---
 
+  // Determine max frame count from backend config only
+  const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
+
+  // Fetch config from backend to get accurate image count
+  useEffect(() => {
+    async function fetchConfig() {
+      try {
+        const res = await fetch(`${backendUrl}/config`);
+        if (!res.ok) return;
+        
+        const json = await res.json();
+        
+        // Extract image count directly from backend config
+        const backendNumImages = json.images?.num_images;
+        
+        // Only update if a valid number is returned
+        if (Number.isFinite(backendNumImages) && backendNumImages > 0) {
+          setMaxFrameCount(backendNumImages);
+        }
+      } catch (err) {
+        console.error("Error fetching config for frame count:", err);
+        // Keep existing value on error
+      }
+    }
+    
+    fetchConfig();
+  }, [backendUrl]);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -771,6 +862,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   className="w-24"
                   placeholder="0"
                 />
+
+                {/* Update Offsets Button */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={updateOffsets}
+                >
+                  Update Offsets
+                </Button>
                 
                 {/* New: Set datum button */}
                 <Button
@@ -828,9 +928,25 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className={`flex items-center gap-2 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
                 {/* File Index controls - faded/disabled when meanMode is active */}
                 <label htmlFor="index" className="text-sm font-medium">File Index:</label>
-                <Button size="sm" variant="outline" onClick={() => setIndex(i => Math.max(1, i - 1))}>-</Button>
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={() => setIndex(i => Math.max(1, i - 1))}
+                  disabled={index <= 1}
+                  className={`transition-opacity ${index <= 1 ? 'opacity-40' : 'opacity-100'}`}
+                >
+                  -
+                </Button>
                 <Input id="index" type="number" min={1} value={index} onChange={e => setIndex(Math.max(1, Number(e.target.value)))} className="w-24" />
-                <Button size="sm" variant="outline" onClick={() => setIndex(i => i + 1)}>+</Button>
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  onClick={() => setIndex(i => i + 1)}
+                  disabled={index >= maxFrameCount}
+                  className={`transition-opacity ${index >= maxFrameCount ? 'opacity-40' : 'opacity-100'}`}
+                >
+                  +
+                </Button>
               </div>
 
               <div className={`flex items-center gap-4 mb-4 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
@@ -840,12 +956,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   id="frame-slider"
                   type="range"
                   min={1}
-                  max={9999} // Use a high, arbitrary max
+                  max={maxFrameCount}
                   value={index}
                   onChange={e => setIndex(Number(e.target.value))}
                   className="w-64"
                 />
-                <span className="text-xs text-gray-500">{index}</span>
+                <span className="text-xs text-gray-500">{index} / {maxFrameCount}</span>
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"

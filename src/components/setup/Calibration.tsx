@@ -4,9 +4,169 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-interface Dot { x: number; y: number; }
+type CalibrationMethod = "scale_factor" | "pinhole" | "stereo";
 
-const Calibration: React.FC = () => {
+interface Config {
+  images: { num_images?: number };
+  paths: { camera_numbers?: number[] };
+  calibration?: {
+    active?: CalibrationMethod;
+    scale_factor?: any;
+    pinhole?: any;
+    stereo?: any;
+    [key: string]: any;
+  };
+}
+
+function useConfig(): [Config, (path: string[], value: any) => void] {
+  // Minimal config loader for this page
+  const [config, setConfig] = useState<Config>({ images: {}, paths: {} });
+  useEffect(() => {
+    fetch("/backend/get_config")
+      .then(r => r.json())
+      .then(setConfig)
+      .catch(() => {});
+  }, []);
+  // Improved updateConfig: POST to backend and update local state, with safe deep update
+  function updateConfig(path: string[], value: any) {
+    fetch("/backend/update_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(path.length === 1 ? { [path[0]]: value } : { [path[0]]: { [path[1]]: value } }),
+    }).then(() => {
+      setConfig(prev => {
+        const next = { ...prev };
+        let obj: any = next;
+        for (let i = 0; i < path.length - 1; ++i) {
+          if (typeof obj[path[i]] !== "object" || obj[path[i]] === null) {
+            obj[path[i]] = {};
+          }
+          obj = obj[path[i]];
+        }
+        obj[path[path.length - 1]] = value;
+        return { ...next };
+      });
+    });
+  }
+  return [config, updateConfig];
+}
+
+// --- Scale Factor Calibration UI ---
+const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
+  const numCameras = config.paths?.camera_numbers?.length || 1;
+  const calib = config.calibration?.scale_factor || {};
+  const [dt, setDt] = useState<string>(calib.dt !== undefined ? String(calib.dt) : "");
+  const [pxPerMm, setPxPerMm] = useState<string>(calib.px_per_mm !== undefined ? String(calib.px_per_mm) : "");
+  const [xOffsets, setXOffsets] = useState<string[]>(Array.isArray(calib.x_offset) ? calib.x_offset.map(String) : Array(numCameras).fill(""));
+  const [yOffsets, setYOffsets] = useState<string[]>(Array.isArray(calib.y_offset) ? calib.y_offset.map(String) : Array(numCameras).fill(""));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDt(calib.dt !== undefined ? String(calib.dt) : "");
+    setPxPerMm(calib.px_per_mm !== undefined ? String(calib.px_per_mm) : "");
+    setXOffsets(Array.isArray(calib.x_offset) ? calib.x_offset.map(String) : Array(numCameras).fill(""));
+    setYOffsets(Array.isArray(calib.y_offset) ? calib.y_offset.map(String) : Array(numCameras).fill(""));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.paths?.camera_numbers, config.calibration?.scale_factor]);
+
+  // Update offsets if number of cameras changes
+  useEffect(() => {
+    setXOffsets(prev => {
+      const arr = [...prev];
+      while (arr.length < numCameras) arr.push("");
+      return arr.slice(0, numCameras);
+    });
+    setYOffsets(prev => {
+      const arr = [...prev];
+      while (arr.length < numCameras) arr.push("");
+      return arr.slice(0, numCameras);
+    });
+  }, [numCameras]);
+
+  // Debounced auto-save
+  const debounceTimer = React.useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      const block = {
+        dt: Number(dt),
+        px_per_mm: Number(pxPerMm),
+        x_offset: xOffsets.map(Number),
+        y_offset: yOffsets.map(Number),
+      };
+      updateConfig(["calibration", "scale_factor"], block);
+    }, 500);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dt, pxPerMm, xOffsets, yOffsets]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Scale Factor Calibration</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium">Δt (seconds)</label>
+            <Input type="number" step="any" value={dt} onChange={e=>setDt(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Pixels per mm</label>
+            <Input type="number" step="any" value={pxPerMm} onChange={e=>setPxPerMm(e.target.value)} />
+          </div>
+        </div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium">X Offset (per camera, px)</label>
+            {Array.from({length: numCameras}).map((_,i)=>(
+              <Input key={i} type="number" step="any" value={xOffsets[i]||""}
+                onChange={e=>{
+                  const next = [...xOffsets]; next[i]=e.target.value; setXOffsets(next);
+                }}
+                className="mb-1"
+                placeholder={`Camera ${i+1}`}
+              />
+            ))}
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Y Offset (per camera, px)</label>
+            {Array.from({length: numCameras}).map((_,i)=>(
+              <Input key={i} type="number" step="any" value={yOffsets[i]||""}
+                onChange={e=>{
+                  const next = [...yOffsets]; next[i]=e.target.value; setYOffsets(next);
+                }}
+                className="mb-1"
+                placeholder={`Camera ${i+1}`}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {/* <Button onClick={handleSave} disabled={saving || !dt || !pxPerMm}>Save Scale Factor Calibration</Button> */}
+          {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
+          {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          This method sets the scale using known pixels/mm, dt, and camera offsets.<br />
+          Updates the calibration.scale_factor block in config.yaml.
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+// --- Pinhole Calibration UI ---
+const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
+  // Load pinhole config from YAML
+  const pinholeConfig = config.calibration?.pinhole || {};
+  const [dt, setDt] = useState<number>(pinholeConfig.dt ?? 0.0);
+  const [dotDistance, setDotDistance] = useState<number>(pinholeConfig.dot_distance_mm ?? 28.9);
+  const [gridTolerance, setGridTolerance] = useState<number>(pinholeConfig.grid_tolerance ?? 0.5);
+  const [ransacThresh, setRansacThresh] = useState<number>(pinholeConfig.ransac_threshold ?? 3.0);
   const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem("piv_source_paths") || "[]"); } catch { return []; }
   });
@@ -17,9 +177,6 @@ const Calibration: React.FC = () => {
   const [datum, setDatum] = useState<[number, number] | null>(null);
   const [right, setRight] = useState<[number, number] | null>(null);
   const [above, setAbove] = useState<[number, number] | null>(null);
-  const [dotDistance, setDotDistance] = useState(28.9);
-  const [gridTolerance, setGridTolerance] = useState(0.5);
-  const [ransacThresh, setRansacThresh] = useState(3.0);
   const [dewarpedB64, setDewarpedB64] = useState<string | null>(null);
   const [inlierMask, setInlierMask] = useState<number[]>([]);
   const [gridPoints, setGridPoints] = useState<[number, number][]>([]);
@@ -47,7 +204,6 @@ const Calibration: React.FC = () => {
       return true;
     } catch (e:any) { alert(e.message); }
     finally { setLoading(false); }
-    return false;
   };
 
   const detectDots = async () => {
@@ -126,6 +282,36 @@ const Calibration: React.FC = () => {
     finally { setLoading(false); }
   };
 
+  // Debounced auto-save
+  const debounceTimer = React.useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      updateConfig(["calibration", "pinhole"], {
+        dt,
+        dot_distance_mm: dotDistance,
+        grid_tolerance: gridTolerance,
+        ransac_threshold: ransacThresh,
+        // Add more fields as needed
+      });
+    }, 500);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dt, dotDistance, gridTolerance, ransacThresh]);
+
+  // Camera dropdown options: derive from config like ImagePairViewer
+  const cameraDropdownOptions = React.useMemo(() => {
+    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+      ? (nFromPaths as number)
+      : 1;
+    const count = Number.isFinite(n) ? n : 1;
+    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  }, [config]);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -142,7 +328,15 @@ const Calibration: React.FC = () => {
             </div>
             <div>
               <label className="block text-xs font-medium">Camera</label>
-              <select value={camera} onChange={e=>setCamera(e.target.value)} className="border rounded px-2 py-1"> <option value="1">Cam1</option><option value="2">Cam2</option> </select>
+              <select value={camera} onChange={e=>setCamera(e.target.value)} className="border rounded px-2 py-1">
+                {cameraDropdownOptions.map((cam, i) => (
+                  <option key={i} value={cam}>{cam}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium">Δt (seconds)</label>
+              <Input type="number" step="any" value={dt} onChange={e=>setDt(Number(e.target.value))} />
             </div>
             <div>
               <label className="block text-xs font-medium">Dot Distance (mm)</label>
@@ -242,8 +436,63 @@ const Calibration: React.FC = () => {
           {gridPoints.length>0 && (
             <div className="text-xs text-gray-600">Grid points: {gridPoints.length} (inliers {inlierMask.filter(x=>x).length})</div>
           )}
+          <div className="flex gap-2 mt-2">
+            {/* <Button onClick={handleSave}>Save Pinhole Calibration</Button> */}
+            {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
+            {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
+          </div>
         </CardContent>
       </Card>
+    </div>
+  );
+};
+
+// --- Main Calibration Page ---
+const Calibration: React.FC = () => {
+  const [method, setMethod] = useState<CalibrationMethod>("pinhole");
+  const [config, updateConfig] = useConfig();
+  const active = config.calibration?.active || "pinhole";
+
+  // Only change active method, do not overwrite configs
+  function setActiveMethod(m: CalibrationMethod) {
+    updateConfig(["calibration", "active"], m);
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Calibration</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4 items-center">
+            <label className="text-sm font-medium">Method:</label>
+            <select value={method} onChange={e=>setMethod(e.target.value as CalibrationMethod)} className="border rounded px-2 py-1">
+              <option value="scale_factor">Scale Factor</option>
+              <option value="pinhole">Pinhole (Planar)</option>
+              <option value="stereo" disabled>Stereo (coming soon)</option>
+            </select>
+            <span className="ml-4 text-xs text-gray-500">Active: <b>{active}</b></span>
+          </div>
+        </CardContent>
+      </Card>
+      {method === "scale_factor" && (
+        <ScaleFactorCalibration
+          config={config}
+          updateConfig={updateConfig}
+          setActive={() => setActiveMethod("scale_factor")}
+          isActive={active === "scale_factor"}
+        />
+      )}
+      {method === "pinhole" && (
+        <PinholeCalibration
+          config={config}
+          updateConfig={updateConfig}
+          setActive={() => setActiveMethod("pinhole")}
+          isActive={active === "pinhole"}
+        />
+      )}
+      {/* Stereo method can be added here in the future */}
     </div>
   );
 };

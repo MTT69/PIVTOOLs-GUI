@@ -49,6 +49,10 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
   // Debounce timer for autosave
   const saveTimer = useRef<number | null>(null);
 
+  // When we write config to the backend we set this to Date.now() + ms to ignore
+  // the incoming config update that reflects our own write. Helps avoid a loop.
+  const suppressUntil = useRef<number | null>(null);
+
   // Track last saved values to avoid feedback loop
   const lastSaved = useRef<{ passes: Pass[]; runs: string }>({
     passes: initialPasses,
@@ -57,6 +61,9 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
   // Save to backend and update YAML automatically
   function autoSave(passesVal: Pass[], runsVal: string) {
+    // If we're currently suppressing autosave because we just wrote config, skip.
+    if (suppressUntil.current && Date.now() < suppressUntil.current) return;
+
     // Prevent continual POSTs if nothing changed
     if (
       passesEqual(passesVal, lastSaved.current.passes) &&
@@ -88,6 +95,8 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
         if (res.ok) {
           // Reflect the same instantaneous_piv we sent into local config
           updateConfig(['instantaneous_piv'], instantaneous_piv);
+          // Suppress reacting to the incoming config update for a short window
+          suppressUntil.current = Date.now() + 1500; // 1.5s suppression
         } else {
           // eslint-disable-next-line no-console
           console.error('update_config failed', json);
@@ -108,6 +117,9 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
   // Only update local state from config if different (avoid feedback loop)
   useEffect(() => {
+    // If we recently wrote config and are suppressing reactions, skip syncing.
+    if (suppressUntil.current && Date.now() < suppressUntil.current) return;
+
     const newPasses =
       config.instantaneous_piv?.window_size?.map((w: any, i: number) => ({
         windowX: Number(w?.[0] ?? 128),
@@ -181,45 +193,56 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
           <CardTitle>Instantaneous PIV</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-col md:flex-row md:items-end gap-4">
-            <div className="flex flex-col w-full max-w-xs">
-              <label className="text-sm font-semibold mb-1">Runs</label>
-              <Input value={runs} onChange={e => setRuns(e.target.value)} placeholder="6" />
-              <p className="text-xs text-muted-foreground mt-1">Comma-separated list of run numbers</p>
+          <div className="flex items-center gap-4 flex-wrap mb-10">
+            <div className="flex items-center space-x-3 min-w-0">
+              <label className="text-sm font-semibold w-24">Runs</label>
+              <div className="min-w-0 relative">
+                <Input
+                  className="min-w-0 w-48 md:w-64"
+                  value={runs}
+                  onChange={e => setRuns(e.target.value)}
+                  placeholder="6"
+                />
+                <p className="text-xs text-muted-foreground mt-1 md:mt-0 md:absolute md:left-0 md:top-full md:translate-y-1">
+                  Comma-separated list of run numbers
+                </p>
+              </div>
             </div>
-            <div className="flex items-center gap-2 mt-4 md:mt-0">
-              <Button variant="outline" onClick={addPass}><Plus className="h-4 w-4" /> Pass</Button>
-              <Button variant="outline" disabled={passes.length <= 1} onClick={() => removePass(passes.length - 1)}>
-                <X className="h-4 w-4" /> Last
+            <div className="ml-auto flex items-center gap-2">
+              <Button variant="outline" className="h-9 px-3 text-sm" onClick={addPass}>
+                <Plus className="h-4 w-4 mr-1" /> Add Pass
               </Button>
-            </div>
+               <Button variant="outline" className="h-9 px-3 text-sm" disabled={passes.length <= 1} onClick={() => removePass(passes.length - 1)}>
+                 <X className="h-4 w-4 mr-1" /> Remove Last
+               </Button>
+             </div>
           </div>
           {/* Compact header for passes */}
-          <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-muted-foreground px-1">
+          <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-muted-foreground items-center px- py-0">
             <div className="col-span-2">Window X</div>
             <div className="col-span-2">Window Y</div>
             <div className="col-span-2">Overlap (%)</div>
-            <div className="col-span-3"></div>
-            <div className="col-span-3"></div>
+            <div className="col-span-3 text-center">Actions</div>
+            <div className="col-span-3 text-right">Pass</div>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {passes.map((p, i) => (
-              <div key={i} className="grid grid-cols-12 gap-2 items-end bg-gray-50 p-2 rounded">
+              <div key={i} className="grid grid-cols-12 gap-2 items-center bg-gray-50 p-1 rounded">
                 <div className="col-span-2">
-                  <Input type="number" value={p.windowX} onChange={e => updateField(i, 'windowX', parseInt(e.target.value)||0)} />
+                  <Input className="w-full" type="number" value={p.windowX} onChange={e => updateField(i, 'windowX', parseInt(e.target.value)||0)} />
                 </div>
                 <div className="col-span-2">
-                  <Input type="number" value={p.windowY} onChange={e => updateField(i, 'windowY', parseInt(e.target.value)||0)} />
+                  <Input className="w-full" type="number" value={p.windowY} onChange={e => updateField(i, 'windowY', parseInt(e.target.value)||0)} />
                 </div>
                 <div className="col-span-2">
-                  <Input type="number" value={p.overlap} onChange={e => updateField(i, 'overlap', parseInt(e.target.value)||0)} />
+                  <Input className="w-full" type="number" value={p.overlap} onChange={e => updateField(i, 'overlap', parseInt(e.target.value)||0)} />
                 </div>
-                <div className="col-span-3 flex items-center gap-2">
+                <div className="col-span-3 flex items-center justify-center gap-2">
                   <Button variant="ghost" size="icon" onClick={() => move(i, -1)} disabled={i===0}><ChevronUp className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => move(i, 1)} disabled={i===passes.length-1}><ChevronDown className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" onClick={() => removePass(i)} disabled={passes.length<=1}><X className="h-4 w-4 text-red-500" /></Button>
                 </div>
-                <div className="col-span-3 text-xs text-muted-foreground">Pass {i+1}</div>
+                <div className="col-span-3 text-xs text-muted-foreground text-right">Pass {i+1}</div>
               </div>
             ))}
           </div>

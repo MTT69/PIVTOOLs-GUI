@@ -391,12 +391,12 @@ function ZoomableCanvas({ raw, src, vmin, vmax, colormap, title, scale, setScale
                   height: imageSize.height * scale,
                   pointerEvents: "none",
                   backgroundImage: `
-                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 1px, transparent 1px)
+                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 2px, transparent 2px),
+                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 2px, transparent 2px)
                   `,
                   backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
                   boxSizing: "border-box",
-                  border: "1px solid rgba(50, 150, 255, 0.5)"
+                  border: "2px solid rgba(50, 150, 255, 0.5)"
                 }}
               ></div>
           )}
@@ -464,7 +464,12 @@ function Colorbar({ vmin, vmax, colormap }: { vmin: number; vmax: number; colorm
   );
 }
 
-export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChange, filterSaveNote }: { backendUrl?: string, onFiltersChange?: (filters: any[]) => void, filterSaveNote?: string }) {
+export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChange, filterSaveNote, config }: { 
+  backendUrl?: string, 
+  onFiltersChange?: (filters: any[]) => void, 
+  filterSaveNote?: string,
+  config?: any 
+}) {
   const [camera, setCamera] = useState("Cam1");
   const [index, setIndex] = useState<number>(1);
   // Add separate indices for raw and processed
@@ -515,24 +520,42 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     return 255;
   }, [bitDepth]);
 
-  // Camera dropdown options (Cam1, Cam2, ...)
+  // Derive camera options from config exactly like RunPIV
   const cameraDropdownOptions = useMemo(() => {
-    const opts: string[] = [];
-    for (let i = 1; i <= 10; i++) {
-      opts.push(`Cam${i}`);
-    }
-    return opts;
-  }, []);
+    // Use the same logic as in RunPIV to derive camera options from config
+    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+      ? (nFromPaths as number)
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
+    const count = Number.isFinite(n) ? n : 1;
+    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  }, [config]);
+
+  // Ensure camera state reflects available options
+  useEffect(() => {
+    if (cameraDropdownOptions.length === 0) return;
+    if (!cameraDropdownOptions.includes(camera)) setCamera(cameraDropdownOptions[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraDropdownOptions.length, cameraDropdownOptions[0]]);
 
   // Simple auto-detection of camera folders (Cam1, Cam2, ...)
   const cameraOptions = useMemo(() => {
+    // Also use the same config-based logic for cameraOptions
+    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+      ? (nFromPaths as number)
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
+    const count = Number.isFinite(n) ? n : 1;
+    
     const opts = new Set<string>();
-    for (let i = 1; i <= 10; i++) {
-      opts.add(`Cam${i}`);
-      opts.add(`cam${i}`);
+    for (let i = 0; i < count; i++) {
+      opts.add(`Cam${i + 1}`);
+      opts.add(`cam${i + 1}`);
     }
     return Array.from(opts);
-  }, []);
+  }, [config]);
 
   // Update min/max for raw when new image loaded
   useEffect(() => {
@@ -1043,12 +1066,12 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
                   height: imageSize.height * scale,
                   pointerEvents: "none",
                   backgroundImage: `
-                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 1px, transparent 1px)
+                    linear-gradient(to right, rgba(50, 150, 255, 0.3) 2px, transparent 2px),
+                    linear-gradient(to bottom, rgba(50, 150, 255, 0.3) 2px, transparent 2px)
                   `,
                   backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
                   boxSizing: "border-box",
-                  border: "1px solid rgba(50, 150, 255, 0.5)"
+                  border: "2px solid rgba(50, 150, 255, 0.5)"
                 }}
               />
             )}

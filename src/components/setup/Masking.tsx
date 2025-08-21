@@ -76,8 +76,9 @@ function PolygonMaskEditor({
 	// polygons state: array of {points, closed}
 	type Pt = { x: number; y: number };
 	type Poly = { points: Pt[]; closed: boolean; name: string };
-	const [polys, setPolys] = useState<Poly[]>([]);
-	const [active, setActive] = useState<number>(-1);
+	// start with a single empty polygon named "Polygon 1" and select it
+	const [polys, setPolys] = useState<Poly[]>([{ points: [], closed: false, name: "Polygon 1" }]);
+	const [active, setActive] = useState<number>(0);
 
 	// NEW: state for mask path and loading status
 	const [maskPath, setMaskPath] = useState<string>("");

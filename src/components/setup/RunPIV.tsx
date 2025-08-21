@@ -17,7 +17,7 @@ const POLL_INTERVAL_MS = 3000;
  * implied by the active temporal filter such as time/POD). For now it simply
  * notifies the user. See handleTestPIV for TODO details.
  */
-const RunPIV: React.FC = () => {
+const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
     try {
       return JSON.parse(
@@ -30,7 +30,24 @@ const RunPIV: React.FC = () => {
     }
   });
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
-  const [camera, setCamera] = useState<string>("1");
+  // derive camera options from config if provided (same logic as Masking/VectorViewer)
+  const cameraOptions: string[] = (() => {
+    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
+    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+      ? (nFromPaths as number)
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
+    const count = Number.isFinite(n) ? n : 1;
+    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  })();
+
+  // ensure camera state reflects available options
+  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "Cam1");
+  useEffect(() => {
+    if (cameraOptions.length === 0) return;
+    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraOptions.length, cameraOptions[0]]);
   const [varType, setVarType] = useState<string>("ux");
   const [cmap, setCmap] = useState<string>("default");
   const [run, setRun] = useState<number>(1);
@@ -63,6 +80,10 @@ const RunPIV: React.FC = () => {
   const [statusImageLoading, setStatusImageLoading] = useState(false);
   const [statusImageError, setStatusImageError] = useState<string | null>(null);
   const [showStatusImage, setShowStatusImage] = useState(true);
+  // frame variable list (populated once when first status image arrives)
+  const [frameVars, setFrameVars] = useState<string[] | null>(null);
+  const [frameVarsLoading, setFrameVarsLoading] = useState(false);
+  const [frameVarsError, setFrameVarsError] = useState<string | null>(null);
 
   useEffect(() => {
     lowerLimitRef.current = lowerLimit;
@@ -103,6 +124,11 @@ const RunPIV: React.FC = () => {
           const json = await res.json();
           if (json.image) {
             setStatusImageSrc(json.image);
+            // If backend returned meta.run, update local run state to keep UI in sync
+            if (json.meta && json.meta.run != null) {
+              const parsed = Number(json.meta.run);
+              if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+            }
             // Only update progress if we have an expectedCount (from backend)
             setProgress((prev) => {
               if (!expectedCount) return prev; // Do not increment progress until backend provides count
@@ -220,6 +246,38 @@ const RunPIV: React.FC = () => {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // Fetch available variables in the first frame for the selected source path / camera
+  const fetchFrameVars = async (frameIndex = 1) => {
+    setFrameVarsLoading(true);
+    setFrameVarsError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("basepath_idx", String(sourcePathIdx));
+  params.set("frame", String(frameIndex));
+  params.set("camera", camera);
+  // merged not exposed in this component but keep consistent default 0
+  params.set("merged", "0");
+  // Indicate we are querying uncalibrated .mat for RunPIV
+  params.set("is_uncalibrated", "1");
+      const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `Failed to fetch frame vars (${res.status})`);
+  const rawVars = Array.isArray(json.vars) ? json.vars.map(String) : [];
+  // Only allow this fixed set in RunPIV
+  const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
+  const filtered = rawVars.filter((v: string) => allowed.includes(v));
+  // If backend did not provide any of the allowed vars, still expose the fixed list as fallback
+  const finalVars = filtered.length > 0 ? filtered : allowed;
+  setFrameVars(finalVars);
+  if (finalVars.length > 0) setVarType(prev => finalVars.includes(prev) ? prev : finalVars[0]);
+    } catch (e: any) {
+      setFrameVarsError(e?.message ?? "Unknown error");
+      setFrameVars(null);
+    } finally {
+      setFrameVarsLoading(false);
+    }
+  };
+
   const handleRunPIV = async () => {
     stopPolling({ resetProgress: true });
     stopUncalPolling();
@@ -308,6 +366,10 @@ const RunPIV: React.FC = () => {
       if (contentType && contentType.includes("application/json")) {
         const json = await res.json();
         setStatusImageSrc(json.image ?? null);
+        if (json.meta && json.meta.run != null) {
+          const parsed = Number(json.meta.run);
+          if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+        }
       } else {
         const blob = await res.blob();
         const reader = new FileReader();
@@ -323,6 +385,13 @@ const RunPIV: React.FC = () => {
       setStatusImageError(e.message || "Unknown error");
     } finally { setStatusImageLoading(false); }
   };
+
+  // When the first status image arrives, try to populate available frame variables
+  useEffect(() => {
+    if (statusImageSrc && !frameVars && !frameVarsLoading) {
+      void fetchFrameVars(1).catch(() => {});
+    }
+  }, [statusImageSrc, frameVars, frameVarsLoading]);
 
   // Uncalibrated preview polling helpers
   const startUncalPolling = () => {
@@ -407,15 +476,24 @@ const RunPIV: React.FC = () => {
                 onChange={(e) => setCamera(e.target.value)}
                 className="border rounded px-2 py-1"
               >
-                <option value="1">Camera 1</option>
-                <option value="2">Camera 2</option>
+                {cameraOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
 
               {/* Variable type */}
               <label htmlFor="varType" className="text-sm font-medium">Type:</label>
               <select id="varType" value={varType} onChange={(e) => setVarType(e.target.value)} className="border rounded px-2 py-1">
-                <option value="ux">ux</option>
-                <option value="uy">uy</option>
+                {frameVarsLoading ? (
+                  <option>Loading...</option>
+                ) : frameVars && frameVars.length > 0 ? (
+                  frameVars.map(v => <option key={v} value={v}>{v}</option>)
+                ) : (
+                  <>
+                    <option value="ux">ux</option>
+                    <option value="uy">uy</option>
+                  </>
+                )}
               </select>
 
               {/* Colormap */}
