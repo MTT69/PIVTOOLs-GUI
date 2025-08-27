@@ -166,10 +166,6 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
     try {
       const payload = {
         filters,
-        paths: {
-          base_paths: config.paths?.base_paths || config.paths?.base_dir || [],
-          source_paths: config.paths?.source_paths || config.paths?.source || [],
-        },
       };
       const res = await fetch('/backend/update_config', {
         method: 'POST',
@@ -260,7 +256,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
       />
 
       {/* PIV execution controls */}
-      <RunPIV />
+      <RunPIV config={config} />
     </div>
   );
 }

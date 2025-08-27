@@ -182,7 +182,6 @@ export default function Home() {
                     {/* PathsConfig below image config/dimensions, backend logic retained */}
                     <div>
                       {/* Inline PathsConfig logic here, backend logic retained */}
-                      {/* ...existing PathsConfig code, using config and updateConfig... */}
                       <PathsConfig config={config} updateConfig={updateConfig} />
                     </div>
                   </div>
@@ -253,7 +252,7 @@ export default function Home() {
                 </TabsContent>
 
                 <TabsContent value="viewer">
-                  <ImagePairViewer />
+                  <ImagePairViewer config={config} />
                 </TabsContent>
 
                 <TabsContent value="video">
