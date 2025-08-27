@@ -50,6 +50,7 @@ export default function Home() {
     setMounted(true);
   }, []);
   const [config, setConfig] = useState<any>(emptyConfig);
+  const [configLoaded, setConfigLoaded] = useState(false);
   // Load YAML config from backend once on mount
   useEffect(() => {
     let cancelled = false;
@@ -58,15 +59,17 @@ export default function Home() {
         const res = await fetch('/backend/config');
         const json = await res.json();
         if (!cancelled && res.ok) {
-          // Map YAML structure to frontend structure minimally
+          // Map YAML structure to frontend structure minimally, but preserve camera_numbers
           const mapped = {
             ...json,
             paths: {
               base_dir: json.paths?.base_paths || [],
               source: json.paths?.source_paths || [],
+              camera_numbers: json.paths?.camera_numbers, // Preserve camera_numbers from backend
             },
           };
-            setConfig(mapped);
+          setConfig(mapped);
+          setConfigLoaded(true);
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -120,149 +123,158 @@ export default function Home() {
             setActiveTab('setup');
           }} />
         ) : (
-          <div className="max-w-7xl mx-auto px-4 pt-24 pb-16">
-            <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-              <h1 className="text-3xl font-bold text-soton-blue mb-2">PIVTOOLS Configuration</h1>
-              <p className="text-gray-600 mb-6">
-                Configure your PIV processing pipeline with this intuitive interface. Changes are applied automatically.
-              </p>
-              
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid grid-cols-12 mb-6">
-                  {/* Environment tab removed */}
-                  <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Setup
-                  </TabsTrigger>
-                  {/* <TabsTrigger value="pipeline" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Pipeline
-                  </TabsTrigger> */}
-                  <TabsTrigger value="instantaneous" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    PIV
-                  </TabsTrigger>
-                  {/* <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Ensemble
-                  </TabsTrigger> */}
-                  <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    POD
-                  </TabsTrigger>
-                  {/* <TabsTrigger value="filters" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Filters
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="paths" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Paths
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="runPIV" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Run PIV
-                  </TabsTrigger> */}
-                  <TabsTrigger value="results" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Results
-                  </TabsTrigger>
-                  <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Viewer
-                  </TabsTrigger>
-                  <TabsTrigger value="masking" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Masking
-                  </TabsTrigger>
-                  <TabsTrigger value="calibration" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Calibration
-                  </TabsTrigger>
-                </TabsList>
-                
-                {/* Environment tab content removed */}
-                
-                <TabsContent value="setup">
-                  {/* Combined Setup tab: ImageProperties and PathsConfig merged, batch size removed, image config and dimensions horizontal above paths */}
-                  <div className="space-y-6">
-                    <ImageConfig config={config} updateConfig={updateConfig} />
-                    {/* PathsConfig below image config/dimensions, backend logic retained */}
-                    <div>
-                      {/* Inline PathsConfig logic here, backend logic retained */}
-                      {/* ...existing PathsConfig code, using config and updateConfig... */}
-                      <PathsConfig config={config} updateConfig={updateConfig} />
-                    </div>
-                  </div>
-                </TabsContent>
-                {/*
-                <TabsContent value="pipeline">
-                  <PipelineConfig config={config} updateConfig={updateConfig} />
-                </TabsContent>
-                */}
-                
-                <TabsContent value="instantaneous">
-                  <div className="space-y-6">
-                    {/* InstantaneousPIV section */}
-                    <div>
-                      <InstantaneousPIV config={config} updateConfig={updateConfig} />
-                    </div>
-                    {/* RunPIV section with dummy Test button */}
-                    <div className="mt-4">
-                      <div className="flex flex-col gap-4">
-                        <Button className="w-fit bg-soton-gold text-soton-darkblue hover:bg-yellow-400" onClick={() => alert('Test run (dummy): Processing a temporal length of images...')}>
-                          Test (Temporal Length)
-                        </Button>
-                      </div>
-                    </div>
-                    {/* Window Size Selection Guidelines below RunPIV */}
-                    <div className="mt-4">
-                      <div className="bg-white rounded-xl shadow p-6">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="inline-block"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-soton-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="7" height="7" strokeWidth="2"/><rect x="14" y="3" width="7" height="7" strokeWidth="2"/><rect x="3" y="14" width="7" height="7" strokeWidth="2"/><rect x="14" y="14" width="7" height="7" strokeWidth="2"/></svg></span>
-                          <span className="text-xl font-semibold">Window Size Selection Guidelines</span>
-                        </div>
-                        <div className="text-gray-600 mb-4">Best practices for configuring correlation windows</div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div>
-                            <h3 className="text-lg font-medium mb-2">Window Size Recommendations</h3>
-                            <ul className="space-y-1 text-sm list-disc pl-5">
-                              <li>Start with larger windows (128x128, 64x64) and progressively refine</li>
-                              <li>For final pass, aim for 16x16 or 32x32 depending on particle density</li>
-                              <li>Window size should contain at least 5-10 particles for good correlation</li>
-                              <li>Keep window sizes as powers of 2 for optimal FFT performance</li>
-                            </ul>
-                          </div>
-                          <div>
-                            <h3 className="text-lg font-medium mb-2">Overlap Settings</h3>
-                            <ul className="space-y-1 text-sm list-disc pl-5">
-                              <li>50% overlap is standard and provides good vector density</li>
-                              <li>Higher overlap (75%) increases spatial resolution but not information content</li>
-                              <li>Lower overlap (25%) reduces computation time but may miss flow features</li>
-                              <li>Consistent overlap between passes maintains stable refinement</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </TabsContent>
-                
-                {/* <TabsContent value="ensemble">
-                  <EnsemblePIV config={config} updateConfig={updateConfig} />
-                </TabsContent> */}
-
-                <TabsContent value="pod">
-                  <POD config={config} updateConfig={updateConfig} />
-                </TabsContent>
-
-                <TabsContent value="results">
-                  <VectorViewer />
-                </TabsContent>
-
-                <TabsContent value="viewer">
-                  <ImagePairViewer />
-                </TabsContent>
-
-                <TabsContent value="masking">
-                  {/* Masking tab content */}
-                  <Masking config={config} />
-                </TabsContent>
-
-                <TabsContent value="calibration">
-                  <Calibration />
-                </TabsContent>
-
-              </Tabs>
+          !configLoaded ? (
+            <div className="max-w-7xl mx-auto px-4 pt-24 pb-16 flex items-center justify-center">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-soton-blue mx-auto mb-4"></div>
+                <p className="text-gray-600">Loading configuration...</p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="max-w-7xl mx-auto px-4 pt-24 pb-16">
+              <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                <h1 className="text-3xl font-bold text-soton-blue mb-2">PIVTOOLS Configuration</h1>
+                <p className="text-gray-600 mb-6">
+                  Configure your PIV processing pipeline with this intuitive interface. Changes are applied automatically.
+                </p>
+                
+                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                  <TabsList className="grid grid-cols-12 mb-6">
+                    {/* Environment tab removed */}
+                    <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Setup
+                    </TabsTrigger>
+                    {/* <TabsTrigger value="pipeline" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Pipeline
+                    </TabsTrigger> */}
+                    <TabsTrigger value="instantaneous" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      PIV
+                    </TabsTrigger>
+                    {/* <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Ensemble
+                    </TabsTrigger> */}
+                    <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      POD
+                    </TabsTrigger>
+                    {/* <TabsTrigger value="filters" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Filters
+                    </TabsTrigger> */}
+                    {/* <TabsTrigger value="paths" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Paths
+                    </TabsTrigger> */}
+                    {/* <TabsTrigger value="runPIV" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Run PIV
+                    </TabsTrigger> */}
+                    <TabsTrigger value="results" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Results
+                    </TabsTrigger>
+                    <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Viewer
+                    </TabsTrigger>
+                    <TabsTrigger value="masking" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Masking
+                    </TabsTrigger>
+                    <TabsTrigger value="calibration" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                      Calibration
+                    </TabsTrigger>
+                  </TabsList>
+                  
+                  {/* Environment tab content removed */}
+                  
+                  <TabsContent value="setup">
+                    {/* Combined Setup tab: ImageProperties and PathsConfig merged, batch size removed, image config and dimensions horizontal above paths */}
+                    <div className="space-y-6">
+                      <ImageConfig config={config} updateConfig={updateConfig} />
+                      {/* PathsConfig below image config/dimensions, backend logic retained */}
+                      <div>
+                        {/* Inline PathsConfig logic here, backend logic retained */}
+                        {/* ...existing PathsConfig code, using config and updateConfig... */}
+                        <PathsConfig config={config} updateConfig={updateConfig} />
+                      </div>
+                    </div>
+                  </TabsContent>
+                  {/*
+                  <TabsContent value="pipeline">
+                    <PipelineConfig config={config} updateConfig={updateConfig} />
+                  </TabsContent>
+                  */}
+                  
+                  <TabsContent value="instantaneous">
+                    <div className="space-y-6">
+                      {/* InstantaneousPIV section */}
+                      <div>
+                        <InstantaneousPIV config={config} updateConfig={updateConfig} />
+                      </div>
+                      {/* RunPIV section with dummy Test button */}
+                      <div className="mt-4">
+                        <div className="flex flex-col gap-4">
+                          <Button className="w-fit bg-soton-gold text-soton-darkblue hover:bg-yellow-400" onClick={() => alert('Test run (dummy): Processing a temporal length of images...')}>
+                            Test (Temporal Length)
+                          </Button>
+                        </div>
+                      </div>
+                      {/* Window Size Selection Guidelines below RunPIV */}
+                      <div className="mt-4">
+                        <div className="bg-white rounded-xl shadow p-6">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="inline-block"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-soton-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="7" height="7" strokeWidth="2"/><rect x="14" y="3" width="7" height="7" strokeWidth="2"/><rect x="3" y="14" width="7" height="7" strokeWidth="2"/><rect x="14" y="14" width="7" height="7" strokeWidth="2"/></svg></span>
+                            <span className="text-xl font-semibold">Window Size Selection Guidelines</span>
+                          </div>
+                          <div className="text-gray-600 mb-4">Best practices for configuring correlation windows</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                              <h3 className="text-lg font-medium mb-2">Window Size Recommendations</h3>
+                              <ul className="space-y-1 text-sm list-disc pl-5">
+                                <li>Start with larger windows (128x128, 64x64) and progressively refine</li>
+                                <li>For final pass, aim for 16x16 or 32x32 depending on particle density</li>
+                                <li>Window size should contain at least 5-10 particles for good correlation</li>
+                                <li>Keep window sizes as powers of 2 for optimal FFT performance</li>
+                              </ul>
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-medium mb-2">Overlap Settings</h3>
+                              <ul className="space-y-1 text-sm list-disc pl-5">
+                                <li>50% overlap is standard and provides good vector density</li>
+                                <li>Higher overlap (75%) increases spatial resolution but not information content</li>
+                                <li>Lower overlap (25%) reduces computation time but may miss flow features</li>
+                                <li>Consistent overlap between passes maintains stable refinement</li>
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </TabsContent>
+                  
+                  {/* <TabsContent value="ensemble">
+                    <EnsemblePIV config={config} updateConfig={updateConfig} />
+                  </TabsContent> */}
+
+                  <TabsContent value="pod">
+                    <POD config={config} updateConfig={updateConfig} />
+                  </TabsContent>
+
+                  <TabsContent value="results">
+                    <VectorViewer config={config}/>
+                  </TabsContent>
+
+                  <TabsContent value="viewer">
+                    <ImagePairViewer config={config} updateConfig={updateConfig} />
+                  </TabsContent>
+
+                  <TabsContent value="masking">
+                    {/* Masking tab content */}
+                    <Masking config={config} />
+                  </TabsContent>
+
+                  <TabsContent value="calibration">
+                    <Calibration config={config} updateConfig={updateConfig} />
+                  </TabsContent>
+
+                </Tabs>
+              </div>
+            </div>
+          )
         )
       )}
     </main>

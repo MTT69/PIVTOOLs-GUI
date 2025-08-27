@@ -464,11 +464,12 @@ function Colorbar({ vmin, vmax, colormap }: { vmin: number; vmax: number; colorm
   );
 }
 
-export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChange, filterSaveNote, config }: { 
+export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChange, filterSaveNote, config, updateConfig }: { 
   backendUrl?: string, 
   onFiltersChange?: (filters: any[]) => void, 
   filterSaveNote?: string,
-  config?: any 
+  config?: any,
+  updateConfig?: (path: string[], value: any) => void
 }) {
   const [camera, setCamera] = useState("Cam1");
   const [index, setIndex] = useState<number>(1);
@@ -520,42 +521,35 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
     return 255;
   }, [bitDepth]);
 
-  // Derive camera options from config exactly like RunPIV
-  const cameraDropdownOptions = useMemo(() => {
-    // Use the same logic as in RunPIV to derive camera options from config
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+  const deriveCameraCount = (cfg: any) => {
+    // 1) Try first element of config.paths.camera_numbers
+    const nFromPaths = Array.isArray(cfg?.paths?.camera_numbers) && cfg.paths.camera_numbers.length > 0
+      ? Number(cfg.paths.camera_numbers[0])
+      : undefined;
+    // 2) Fallback to config.imProperties.cameraCount
+    const nFromIm = cfg?.imProperties ? Number(cfg.imProperties.cameraCount) : undefined;
+    // 3) Choose nFromPaths if valid, else nFromIm, else default 1
+    const nChoice = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
       ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0)
+        ? (nFromIm as number)
+        : 1;
+    return Number.isFinite(nChoice) && nChoice > 0 ? Math.floor(nChoice) : 1;
+  };
+  
+  const cameraDropdownOptions = useMemo(() => {
+    const count = deriveCameraCount(config);
     return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
   }, [config]);
 
   // Ensure camera state reflects available options
   useEffect(() => {
-    if (cameraDropdownOptions.length === 0) return;
-    if (!cameraDropdownOptions.includes(camera)) setCamera(cameraDropdownOptions[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraDropdownOptions.length, cameraDropdownOptions[0]]);
+    if (!cameraDropdownOptions || cameraDropdownOptions.length === 0) return;
+    setCamera(prev => cameraDropdownOptions.includes(prev) ? prev : cameraDropdownOptions[0]);
+  }, [cameraDropdownOptions]);
 
-  // Simple auto-detection of camera folders (Cam1, Cam2, ...)
-  const cameraOptions = useMemo(() => {
-    // Also use the same config-based logic for cameraOptions
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    
-    const opts = new Set<string>();
-    for (let i = 0; i < count; i++) {
-      opts.add(`Cam${i + 1}`);
-      opts.add(`cam${i + 1}`);
-    }
-    return Array.from(opts);
-  }, [config]);
+  // unify cameraOptions to the dropdown options
+  const cameraOptions = useMemo(() => cameraDropdownOptions, [cameraDropdownOptions]);
 
   // Update min/max for raw when new image loaded
   useEffect(() => {
@@ -1590,4 +1584,4 @@ export default function ImagePairViewer({ backendUrl = "/backend", onFiltersChan
         <div className="text-xs text-blue-700 mb-6 mt-4">{filterSaveNote}</div>
       )}
     </div>
-    );}
+    )};

@@ -40,16 +40,26 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
   const [numImages, setNumImages] = useState<string>(
     initialImages.num_images !== undefined ? String(initialImages.num_images) : ""
   );
-  // camera_numbers lives under config.paths and is an array in the YAML; default to 1
-  const [numCameras, setNumCameras] = useState<string>(
-    config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1"
-  );
+  // camera_numbers lives under config.paths and can be a number, array, or string in the YAML; default to 1
+  const [numCameras, setNumCameras] = useState<string>(() => {
+    const camNums = config?.paths?.camera_numbers;
+    let num = 1;
+    if (Array.isArray(camNums) && camNums.length > 0) num = Number(camNums[0]);
+    else if (typeof camNums === 'number') num = camNums;
+    else if (typeof camNums === 'string') num = Number(camNums) || 1;
+    return String(num);
+  });
   const [timeResolved, setTimeResolved] = useState<boolean>(!!initialImages.time_resolved);
 
   // Always sync state from config when config changes (for hot reloads or backend edits)
   useEffect(() => {
+    const camNums = config?.paths?.camera_numbers;
+    let num = 1;
+    if (Array.isArray(camNums) && camNums.length > 0) num = Number(camNums[0]);
+    else if (typeof camNums === 'number') num = camNums;
+    else if (typeof camNums === 'string') num = Number(camNums) || 1;
+    setNumCameras(String(num));
     setNumImages(initialImages.num_images !== undefined ? String(initialImages.num_images) : "");
-    setNumCameras(config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1");
     setTimeResolved(!!initialImages.time_resolved);
 
     const rawFmt = initialImages.image_format;

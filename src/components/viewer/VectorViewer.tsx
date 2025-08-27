@@ -24,24 +24,29 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     try { return JSON.parse(typeof window !== "undefined" ? localStorage.getItem("piv_base_paths") || "[]" : "[]"); } catch { return []; }
   });
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
-  // derive camera options from config if provided (same logic as Masking.tsx)
-  const cameraOptions: string[] = (() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
+  // derive camera options from backend config in a robust, consistent way
+  const deriveCameraCount = (cfg: any) => {
+    const nFromPaths = Array.isArray(cfg?.paths?.camera_numbers) && cfg.paths.camera_numbers.length > 0
+      ? Number(cfg.paths.camera_numbers[0])
+      : undefined;
+    const nFromIm = Number(cfg?.imProperties?.cameraCount) || undefined;
     const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
       ? (nFromPaths as number)
       : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
-  })();
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
 
-  // ensure camera state reflects available options
+  const cameraOptions: string[] = useMemo(() => {
+    const count = deriveCameraCount(config);
+    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  }, [config]);
+
+  // ensure camera state reflects available options (pick first valid on change)
   const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "Cam1");
   useEffect(() => {
-    if (cameraOptions.length === 0) return;
-    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions.length, cameraOptions[0]]);
+    if (!cameraOptions || cameraOptions.length === 0) return;
+    setCamera(prev => cameraOptions.includes(prev) ? prev : cameraOptions[0]);
+  }, [cameraOptions]);
   const [merged, setMerged] = useState<boolean>(false);
   const [playing, setPlaying] = useState(false);
   // pending value while dragging slider to avoid firing requests for every tick

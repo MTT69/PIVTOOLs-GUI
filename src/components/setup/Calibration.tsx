@@ -171,7 +171,14 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
     try { return JSON.parse(localStorage.getItem("piv_source_paths") || "[]"); } catch { return []; }
   });
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
-  const [camera, setCamera] = useState("1");
+  const [camera, setCamera] = useState<string>(() => {
+    try {
+      const count = deriveCameraCount((window as any).__CONFIG__ || config);
+      return `Cam1`;
+    } catch { return `Cam1`; }
+  });
+
+  // (camera sync effect moved below after cameraDropdownOptions is declared)
   const [imageB64, setImageB64] = useState<string | null>(null);
   const [dots, setDots] = useState<[number, number][]>([]);
   const [datum, setDatum] = useState<[number, number] | null>(null);
@@ -302,15 +309,32 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dt, dotDistance, gridTolerance, ransacThresh]);
 
-  // Camera dropdown options: derive from config like ImagePairViewer
-  const cameraDropdownOptions = React.useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
+  const deriveCameraCount = (cfg: any) => {
+    // 1) Try first element of config.paths.camera_numbers
+    const nFromPaths = Array.isArray(cfg?.paths?.camera_numbers) && cfg.paths.camera_numbers.length > 0
+      ? Number(cfg.paths.camera_numbers[0])
+      : undefined;
+    // 2) Fallback to config.imProperties.cameraCount
+    const nFromIm = cfg?.imProperties ? Number(cfg.imProperties.cameraCount) : undefined;
+    // 3) Choose nFromPaths if valid, else nFromIm, else default 1
+    const nChoice = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
       ? (nFromPaths as number)
-      : 1;
-    const count = Number.isFinite(n) ? n : 1;
+      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0)
+        ? (nFromIm as number)
+        : 1;
+    return Number.isFinite(nChoice) && nChoice > 0 ? Math.floor(nChoice) : 1;
+  };
+
+  const cameraDropdownOptions = React.useMemo(() => {
+    const count = deriveCameraCount(config);
     return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
   }, [config]);
+
+  // Keep camera in sync with available options
+  useEffect(() => {
+    if (!cameraDropdownOptions || cameraDropdownOptions.length === 0) return;
+    setCamera(prev => cameraDropdownOptions.includes(prev) ? prev : cameraDropdownOptions[0]);
+  }, [cameraDropdownOptions]);
 
   return (
     <div className="space-y-6">
@@ -448,10 +472,14 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
 };
 
 // --- Main Calibration Page ---
-const Calibration: React.FC = () => {
+const Calibration: React.FC<{ config?: any; updateConfig?: (path: string[], value: any) => void }> = ({ config: propConfig, updateConfig: propUpdate }) => {
+  // If parent passed config/updateConfig, prefer those; otherwise fall back to local hook
+  const [localConfig, localUpdate] = useConfig();
+  const config = propConfig ?? localConfig;
+  const updateConfig = propUpdate ?? localUpdate;
+
   const [method, setMethod] = useState<CalibrationMethod>("pinhole");
-  const [config, updateConfig] = useConfig();
-  const active = config.calibration?.active || "pinhole";
+  const active = config?.calibration?.active || "pinhole";
 
   // Only change active method, do not overwrite configs
   function setActiveMethod(m: CalibrationMethod) {

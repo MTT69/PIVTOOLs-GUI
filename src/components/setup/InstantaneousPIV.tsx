@@ -256,10 +256,12 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
       <ImagePairViewer
         backendUrl="/backend"
         onFiltersChange={handleFiltersChange}
+        config={config}
+        updateConfig={updateConfig}
       />
 
       {/* PIV execution controls */}
-      <RunPIV />
+      <RunPIV config={config} />
     </div>
   );
 }
