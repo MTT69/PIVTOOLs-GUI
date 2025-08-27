@@ -22,7 +22,7 @@ function useConfig(): [Config, (path: string[], value: any) => void] {
   // Minimal config loader for this page
   const [config, setConfig] = useState<Config>({ images: {}, paths: {} });
   useEffect(() => {
-    fetch("/backend/get_config")
+    fetch("/backend/config")
       .then(r => r.json())
       .then(setConfig)
       .catch(() => {});
@@ -34,18 +34,11 @@ function useConfig(): [Config, (path: string[], value: any) => void] {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(path.length === 1 ? { [path[0]]: value } : { [path[0]]: { [path[1]]: value } }),
     }).then(() => {
-      setConfig(prev => {
-        const next = { ...prev };
-        let obj: any = next;
-        for (let i = 0; i < path.length - 1; ++i) {
-          if (typeof obj[path[i]] !== "object" || obj[path[i]] === null) {
-            obj[path[i]] = {};
-          }
-          obj = obj[path[i]];
-        }
-        obj[path[path.length - 1]] = value;
-        return { ...next };
-      });
+      // After updating, refetch config from backend to ensure latest camera_numbers
+      fetch("/backend/config")
+        .then(r => r.json())
+        .then(setConfig)
+        .catch(() => {});
     });
   }
   return [config, updateConfig];
@@ -53,7 +46,17 @@ function useConfig(): [Config, (path: string[], value: any) => void] {
 
 // --- Scale Factor Calibration UI ---
 const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
-  const numCameras = config.paths?.camera_numbers?.length || 1;
+  // Determine number of cameras robustly
+  const camNums = config.paths?.camera_numbers;
+  let numCameras = 1;
+  if (Array.isArray(camNums)) {
+    if (camNums.length === 1) {
+      const maybeCount = Number(camNums[0]);
+      if (!Number.isNaN(maybeCount) && maybeCount > 0) numCameras = maybeCount;
+    } else if (camNums.length > 1) {
+      numCameras = camNums.length;
+    }
+  }
   const calib = config.calibration?.scale_factor || {};
   const [dt, setDt] = useState<string>(calib.dt !== undefined ? String(calib.dt) : "");
   const [pxPerMm, setPxPerMm] = useState<string>(calib.px_per_mm !== undefined ? String(calib.px_per_mm) : "");
@@ -67,7 +70,7 @@ const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: st
     setXOffsets(Array.isArray(calib.x_offset) ? calib.x_offset.map(String) : Array(numCameras).fill(""));
     setYOffsets(Array.isArray(calib.y_offset) ? calib.y_offset.map(String) : Array(numCameras).fill(""));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.paths?.camera_numbers, config.calibration?.scale_factor]);
+  }, [numCameras, config.calibration?.scale_factor]);
 
   // Update offsets if number of cameras changes
   useEffect(() => {
@@ -119,30 +122,50 @@ const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: st
             <Input type="number" step="any" value={pxPerMm} onChange={e=>setPxPerMm(e.target.value)} />
           </div>
         </div>
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium">X Offset (per camera, px)</label>
-            {Array.from({length: numCameras}).map((_,i)=>(
-              <Input key={i} type="number" step="any" value={xOffsets[i]||""}
-                onChange={e=>{
-                  const next = [...xOffsets]; next[i]=e.target.value; setXOffsets(next);
-                }}
-                className="mb-1"
-                placeholder={`Camera ${i+1}`}
-              />
-            ))}
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Y Offset (per camera, px)</label>
-            {Array.from({length: numCameras}).map((_,i)=>(
-              <Input key={i} type="number" step="any" value={yOffsets[i]||""}
-                onChange={e=>{
-                  const next = [...yOffsets]; next[i]=e.target.value; setYOffsets(next);
-                }}
-                className="mb-1"
-                placeholder={`Camera ${i+1}`}
-              />
-            ))}
+        {/* Table/grid for X/Y offsets per camera */}
+        <div>
+          <label className="block text-xs font-medium mb-1">Camera Offsets (px)</label>
+          <div className="overflow-x-auto">
+            <table className="min-w-[320px] border text-xs">
+              <thead>
+                <tr>
+                  <th className="px-2 py-1 border">Camera</th>
+                  <th className="px-2 py-1 border">X Offset</th>
+                  <th className="px-2 py-1 border">Y Offset</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({length: numCameras}).map((_,i)=>(
+                  <tr key={i}>
+                    <td className="px-2 py-1 border text-center">{i+1}</td>
+                    <td className="px-2 py-1 border">
+                      <Input
+                        type="number"
+                        step="any"
+                        value={xOffsets[i]||""}
+                        onChange={e=>{
+                          const next = [...xOffsets]; next[i]=e.target.value; setXOffsets(next);
+                        }}
+                        className="w-24"
+                        placeholder="X"
+                      />
+                    </td>
+                    <td className="px-2 py-1 border">
+                      <Input
+                        type="number"
+                        step="any"
+                        value={yOffsets[i]||""}
+                        onChange={e=>{
+                          const next = [...yOffsets]; next[i]=e.target.value; setYOffsets(next);
+                        }}
+                        className="w-24"
+                        placeholder="Y"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
         <div className="flex gap-2">
@@ -163,7 +186,8 @@ const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: st
 const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
   // Load pinhole config from YAML
   const pinholeConfig = config.calibration?.pinhole || {};
-  const [dt, setDt] = useState<number>(pinholeConfig.dt ?? 0.0);
+  // Use string state for dt for consistency and to avoid losing precision
+  const [dt, setDt] = useState<string>(pinholeConfig.dt !== undefined ? String(pinholeConfig.dt) : "");
   const [dotDistance, setDotDistance] = useState<number>(pinholeConfig.dot_distance_mm ?? 28.9);
   const [gridTolerance, setGridTolerance] = useState<number>(pinholeConfig.grid_tolerance ?? 0.5);
   const [ransacThresh, setRansacThresh] = useState<number>(pinholeConfig.ransac_threshold ?? 3.0);
@@ -282,6 +306,11 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
     finally { setLoading(false); }
   };
 
+  // On config change, update dt state
+  useEffect(() => {
+    setDt(pinholeConfig.dt !== undefined ? String(pinholeConfig.dt) : "");
+  }, [pinholeConfig.dt]);
+
   // Debounced auto-save
   const debounceTimer = React.useRef<NodeJS.Timeout | null>(null);
 
@@ -289,7 +318,7 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       updateConfig(["calibration", "pinhole"], {
-        dt,
+        dt: Number(dt),
         dot_distance_mm: dotDistance,
         grid_tolerance: gridTolerance,
         ransac_threshold: ransacThresh,
@@ -302,15 +331,30 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dt, dotDistance, gridTolerance, ransacThresh]);
 
-  // Camera dropdown options: derive from config like ImagePairViewer
+  // Camera dropdown options: derive count robustly from config.paths.camera_numbers
   const cameraDropdownOptions = React.useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+    const camNums = config?.paths?.camera_numbers;
+    let count = 1;
+    if (Array.isArray(camNums)) {
+      if (camNums.length === 1) {
+        // Single-element array may store the count (e.g. [4])
+        const maybeCount = Number(camNums[0]);
+        if (!Number.isNaN(maybeCount) && maybeCount > 0) count = maybeCount;
+      } else if (camNums.length > 1) {
+        // Multi-element array likely lists camera indices => use length
+        count = camNums.length;
+      }
+    }
+    // Return numeric string values so they match the `camera` state (which is "1", "2", ...)
+    return Array.from({ length: Math.max(1, Math.floor(count)) }, (_, i) => String(i + 1));
   }, [config]);
+
+  // Ensure selected camera string matches available options
+  useEffect(() => {
+    if (!cameraDropdownOptions.includes(camera)) {
+      setCamera(cameraDropdownOptions[0] || "1");
+    }
+  }, [cameraDropdownOptions]);
 
   return (
     <div className="space-y-6">
@@ -336,7 +380,7 @@ const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string
             </div>
             <div>
               <label className="block text-xs font-medium">Δt (seconds)</label>
-              <Input type="number" step="any" value={dt} onChange={e=>setDt(Number(e.target.value))} />
+              <Input type="number" step="any" value={dt} onChange={e=>setDt(e.target.value)} />
             </div>
             <div>
               <label className="block text-xs font-medium">Dot Distance (mm)</label>

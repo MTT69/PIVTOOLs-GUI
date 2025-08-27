@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card";
 // ...no direct button usage; kept minimal imports
 import { Switch } from "@/components/ui/switch";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
-import { useRef } from "react";
+// useRef is imported above with React
 
 interface PODProps {
   config?: any;
@@ -21,26 +21,32 @@ export default function POD({ config, updateConfig }: PODProps) {
   });
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
   
-  // Derive camera options from config like RunPIV and ImagePairViewer
+  // Derive camera options robustly from config.paths.camera_numbers or imProperties.cameraCount
   const cameraOptions = useMemo(() => {
-    // Use the same logic to derive camera options from config
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => String(i + 1));
+    const camNums = config?.paths?.camera_numbers;
+    const imCount = config?.imProperties?.cameraCount;
+    let count = 1;
+    if (Array.isArray(camNums)) {
+      if (camNums.length === 1) {
+        const maybe = Number(camNums[0]);
+        if (!Number.isNaN(maybe) && maybe > 0) count = maybe;
+      } else if (camNums.length > 1) {
+        count = camNums.length;
+      }
+    } else if (typeof imCount === 'number' && Number.isFinite(imCount) && imCount > 0) {
+      count = imCount;
+    }
+    return Array.from({ length: Math.max(1, Math.floor(count)) }, (_, i) => String(i + 1));
   }, [config]);
 
-  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "1");
+  const [camera, setCamera] = useState<string>(() => (cameraOptions && cameraOptions.length > 0 ? cameraOptions[0] : "1"));
   
   // Ensure camera state reflects available options when config changes
   useEffect(() => {
     if (cameraOptions.length === 0) return;
-    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
+    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0] || "1");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions.length, cameraOptions[0]]);
+  }, [cameraOptions.join(',')]);
 
   // merged data toggle (next to camera)
   const [merged, setMerged] = useState<boolean>(false);
@@ -78,29 +84,51 @@ export default function POD({ config, updateConfig }: PODProps) {
   const [frameVarsError, setFrameVarsError] = useState<string | null>(null);
   const POLL_INTERVAL_MS = 20000; // 20s as in RunPIV
 
-  // Load existing POD settings from config if available
+  // --- Run selection state ---
+  const [availableRuns, setAvailableRuns] = useState<number[]>([]);
+  const [selectedRun, setSelectedRun] = useState<number>(1);
+  const [runHasVars, setRunHasVars] = useState<Record<number, boolean>>({});
+
+  // --- Calibrated data check for selected run ---
+  const [runHasCalibratedData, setRunHasCalibratedData] = useState<boolean>(true);
+  const [runCheckLoading, setRunCheckLoading] = useState(false);
+  const [runCheckError, setRunCheckError] = useState<string | null>(null);
+
+  // --- Available POD runs for current selection (for energy plot after POD) ---
+  const [availablePodRuns, setAvailablePodRuns] = useState<number[] | null>(null);
+  const [podRunsLoading, setPodRunsLoading] = useState(false);
+  const [podRunsError, setPodRunsError] = useState<string | null>(null);
+  const [runWarning, setRunWarning] = useState<string | null>(null);
+
+  // --- Energy plot state ---
+  const [energyLoading, setEnergyLoading] = useState(false);
+  const [energyError, setEnergyError] = useState<string | null>(null);
+  const [energyData, setEnergyData] = useState<any>(null);
+
+  // Load existing POD settings from the passed `config` prop (stay in sync when it changes)
   useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/backend/config");
-        const json = await res.json();
-        if (!res.ok) return;
-        const pp = json.post_processing || [];
-        const pod = pp.find((e: any) => String(e.type || "").toLowerCase() === "pod");
-        const settings = pod?.settings || {};
-        if (typeof settings.randomised === "boolean") setRandomised(settings.randomised);
-        if (typeof settings.normalise === "boolean") setNormalise(settings.normalise);
-        if (typeof settings.stack_u_y === "boolean") setStackUy(settings.stack_u_y);
-        if (typeof settings.k_modes === "number") setKModes(settings.k_modes);
-    // also try to initialize basePath/camera from config if present
-    if (typeof settings.basepath_idx === "number") setBasePathIdx(settings.basepath_idx);
-    if (settings.camera) setCamera(String(settings.camera));
-      } catch (e) {
-        // ignore
-      }
+    try {
+      const json = config || {};
+      const pp = json.post_processing || [];
+      const pod = pp.find((e: any) => String(e.type || "").toLowerCase() === "pod");
+      const settings = pod?.settings || {};
+      if (typeof settings.randomised === "boolean") setRandomised(settings.randomised);
+      if (typeof settings.normalise === "boolean") setNormalise(settings.normalise);
+      const stackVal =
+        typeof settings.stack_u_y === "boolean" ? settings.stack_u_y :
+        typeof settings.stack_U_y === "boolean" ? settings.stack_U_y :
+        typeof settings.stackUy === "boolean" ? settings.stackUy : undefined;
+      if (typeof stackVal === "boolean") setStackUy(stackVal);
+      if (typeof settings.k_modes === "number") setKModes(settings.k_modes);
+      // also try to initialize basePath/camera from config if present
+      if (typeof settings.basepath_idx === "number") setBasePathIdx(settings.basepath_idx);
+      if (pod && typeof pod.use_merged === "boolean") setMerged(Boolean(pod.use_merged));
+      else if (typeof settings.use_merged === "boolean") setMerged(Boolean(settings.use_merged));
+      if (settings.camera) setCamera(String(settings.camera));
+    } catch (e) {
+      // ignore
     }
-    load();
-  }, []);
+  }, [config]);
 
   // Save one or more fields to backend immediately
   const saveChange = async (payload: any) => {
@@ -166,17 +194,216 @@ export default function POD({ config, updateConfig }: PODProps) {
 
   useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
 
-  const handleStartPOD = async () => {
-    setLoading(true);
+  // --- Check for calibrated data (ux/uy) for selected run ---
+  useEffect(() => {
+    const checkCalibratedData = async () => {
+      setRunCheckLoading(true);
+      setRunCheckError(null);
+      setRunHasCalibratedData(false);
+      try {
+        const basePath = getSelectedBasePath();
+        if (!basePath) throw new Error("No base path selected");
+        const params = new URLSearchParams();
+        params.set("base_path", basePath);
+        params.set("camera", camera);
+        params.set("frame", String(selectedRun));
+        params.set("merged", merged ? "1" : "0");
+        // Use check_vars to see if ux/uy are present for this run
+  const url = `/backend/plot/check_vars?${params.toString()}`;
+  const res = await fetch(url);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || "Failed to check data");
+  const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
+  const hasUxUy = vars.includes("ux") && vars.includes("uy");
+  setRunHasCalibratedData(hasUxUy);
+  setRunHasVars(prev => ({ ...prev, [selectedRun]: hasUxUy }));
+  if (!hasUxUy) setRunCheckError("No calibrated ux/uy data found for this run.");
+      } catch (e: any) {
+        setRunHasCalibratedData(false);
+        setRunCheckError(e?.message ?? "Unknown error");
+      } finally {
+        setRunCheckLoading(false);
+      }
+    };
+    checkCalibratedData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRun, basePathIdx, camera, merged, config]);
+
+  // --- Query available POD runs for the selected base/camera/merged (for energy plot) ---
+  const getStatsBase = async () => {
     try {
-  // include the actual base_path string so backend receives it (fallback to null if not available)
-  const selectedBasePath = (Array.isArray(basePaths) && basePaths.length > 0 && basePathIdx >= 0 && basePathIdx < basePaths.length)
-    ? basePaths[basePathIdx]
-    : null;
-  const payload: any = { basepath_idx: basePathIdx, base_path: selectedBasePath, camera };
-   const res = await fetch("/backend/start_pod", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const basePath = getSelectedBasePath();
+      if (!basePath) return null;
+      const cfg = config || {};
+      let endpoint = "";
+      let source_type = "instantaneous";
+      try {
+        for (const entry of (cfg.post_processing || [])) {
+          if (entry.type === "POD") {
+            const s = entry.settings || {};
+            endpoint = entry.endpoint || s.endpoint || "";
+            source_type = entry.source_type || s.source_type || "instantaneous";
+            break;
+          }
+        }
+      } catch {}
+      return {
+        stats_base: `${basePath}/statistics/${cfg.num_images || 1000}/Cam${camera}/${source_type}${endpoint ? "/" + endpoint : ""}`,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  // Query available POD runs by checking which run_xx folders exist
+  const fetchAvailablePodRuns = async () => {
+    setPodRunsLoading(true);
+    setPodRunsError(null);
+    try {
+      const statsInfo = await getStatsBase();
+      if (!statsInfo) throw new Error("Could not resolve stats directory");
+      const podDirs = [
+        `${statsInfo.stats_base}/pod_randomised`,
+        `${statsInfo.stats_base}/POD`,
+      ];
+      let foundRuns: Set<number> = new Set();
+      for (const dir of podDirs) {
+        for (let i = 1; i <= 10; ++i) {
+          const params = new URLSearchParams();
+          params.set("base_path", getSelectedBasePath() || "");
+          params.set("camera", camera);
+          params.set("run", String(i));
+          params.set("merged", merged ? "1" : "0");
+          const url = `/backend/pod_energy_modes?${params.toString()}`;
+          try {
+            const res = await fetch(url, { method: "HEAD" });
+            if (res.ok) foundRuns.add(i);
+          } catch {}
+        }
+      }
+      setAvailablePodRuns(Array.from(foundRuns).sort((a, b) => a - b));
+    } catch (e: any) {
+      setPodRunsError(e?.message ?? "Failed to list POD runs");
+      setAvailablePodRuns(null);
+    } finally {
+      setPodRunsLoading(false);
+    }
+  };
+
+  // Fetch available POD runs when base/camera/merged changes or after POD completes
+  useEffect(() => {
+    void fetchAvailablePodRuns();
+  }, [basePathIdx, camera, merged, config]);
+
+  // Populate a sensible list of runs for the run selector (prefer config.instantaneous_runs)
+  useEffect(() => {
+    // Build the candidate run list from config (same as before), then check each run for calibrated ux/uy data
+    let cancelled = false;
+    const populateRuns = async () => {
+      try {
+        const cfg = config || {};
+        let candidateRuns: number[] = [];
+        if (Array.isArray(cfg.instantaneous_runs) && cfg.instantaneous_runs.length > 0) {
+          candidateRuns = cfg.instantaneous_runs.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n > 0);
+        } else if (Number.isFinite(Number(cfg.num_images))) {
+          const approx = Math.max(1, Math.min(50, Math.floor(Number(cfg.num_images) / 10)));
+          candidateRuns = Array.from({ length: approx }, (_, i) => i + 1);
+        } else {
+          candidateRuns = Array.from({ length: 10 }, (_, i) => i + 1);
+        }
+
+        // Optimistically set candidate runs while we check availability
+        setAvailableRuns(candidateRuns);
+
+        const basePath = getSelectedBasePath();
+        if (!basePath) {
+          // no base path -> keep candidate list and reset mapping
+          setRunHasVars(prev => {
+            const map = { ...prev };
+            candidateRuns.forEach(r => { map[r] = false; });
+            return map;
+          });
+          if (!candidateRuns.includes(selectedRun)) setSelectedRun(candidateRuns[0] || 1);
+          return;
+        }
+
+        const okRuns: number[] = [];
+        const hasMap: Record<number, boolean> = {};
+        await Promise.all(candidateRuns.map(async (r) => {
+          if (cancelled) return;
+          try {
+            const params = new URLSearchParams();
+            params.set("base_path", basePath);
+            params.set("camera", camera);
+            params.set("frame", String(r));
+            params.set("merged", merged ? "1" : "0");
+            const url = `/backend/plot/check_vars?${params.toString()}`;
+            const res = await fetch(url);
+            const json = await res.json();
+            const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
+            const hasUxUy = vars.includes("ux") && vars.includes("uy");
+            hasMap[r] = hasUxUy;
+            if (hasUxUy) okRuns.push(r);
+          } catch {
+            hasMap[r] = false;
+          }
+        }));
+
+        if (cancelled) return;
+        // update mapping and availableRuns to only those with calibrated data (or fall back to candidateRuns if none)
+        setRunHasVars(prev => ({ ...prev, ...hasMap }));
+        if (okRuns.length > 0) {
+          okRuns.sort((a, b) => a - b);
+          setAvailableRuns(okRuns);
+          // default to highest available run if current isn't available
+          setSelectedRun(prev => okRuns.includes(prev) ? prev : okRuns[okRuns.length - 1]);
+        } else {
+          // No runs with calibrated ux/uy found; keep candidateRuns so user can still pick but mark as no-data via runHasVars
+          setAvailableRuns(candidateRuns);
+          if (!candidateRuns.includes(selectedRun)) setSelectedRun(candidateRuns[0] || 1);
+        }
+      } catch {
+        // on error fallback to a single run
+        setAvailableRuns([1]);
+        setSelectedRun(1);
+      }
+    };
+    void populateRuns();
+    return () => { cancelled = true; };
+  // also re-run when basePaths change so availability is checked once localStorage paths are loaded/updated
+  }, [config, basePaths, basePathIdx, camera, merged]);
+
+  // Warn if selected run is not available
+  useEffect(() => {
+    if (!availablePodRuns) {
+      setRunWarning(null);
+      return;
+    }
+    if (!availablePodRuns.includes(selectedRun)) {
+      setRunWarning(`Warning: Run ${selectedRun} has no POD data. Please select a run with data.`);
+    } else {
+      setRunWarning(null);
+    }
+  }, [availablePodRuns, selectedRun]);
+
+  // --- Update handleStartPOD to use selectedRun and block if not available ---
+  const handleStartPOD = async () => {
+    if (!runHasCalibratedData) return;
+    setLoading(true);
+    setProgress(0);
+    try {
+      const selectedBasePath = (Array.isArray(basePaths) && basePaths.length > 0 && basePathIdx >= 0 && basePathIdx < basePaths.length)
+        ? basePaths[basePathIdx]
+        : null;
+      const payload: any = {
+        basepath_idx: basePathIdx,
+        base_path: selectedBasePath,
+        camera,
+        instantaneous_runs: [selectedRun],
+      };
+      const res = await fetch("/backend/start_pod", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(`Failed to start POD: ${res.statusText}`);
-      const json = await res.json().catch(() => ({}));
+      await res.json().catch(() => ({}));
       setProcessing(true);
       startPolling();
     } catch (e: any) {
@@ -346,6 +573,48 @@ export default function POD({ config, updateConfig }: PODProps) {
     };
   }, []);
 
+  // Energy plot component selection state
+  const [energyComponent, setEnergyComponent] = useState<string>("ux");
+
+  // Fetch cumulative energy breakdown after POD completes, for selected run
+  const fetchEnergyData = async () => {
+    setEnergyLoading(true);
+    setEnergyError(null);
+    try {
+      const basePath = getSelectedBasePath();
+      if (!basePath) throw new Error("Please select a base path");
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("camera", camera);
+      params.set("run", String(runVis));
+      params.set("merged", merged ? "1" : "0");
+      const url = `/backend/pod_energy_modes?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to fetch POD energy");
+      setEnergyData(json);
+      // Set maxMode from energy data if available
+      if (json.stacked && Array.isArray(json.energy_fraction)) {
+        setMaxMode(json.energy_fraction.length);
+      } else if (!json.stacked && Array.isArray(json.energy_fraction_ux)) {
+        setMaxMode(Math.max(json.energy_fraction_ux.length, json.energy_fraction_uy?.length || 0));
+      }
+    } catch (e: any) {
+      setEnergyError(e?.message ?? "Unknown error");
+      setEnergyData(null);
+    } finally {
+      setEnergyLoading(false);
+    }
+  };
+
+  // Fetch energy data after POD completes and processing is false, and only for selected run
+  useEffect(() => {
+    if (progress < 100 || processing) return;
+    if (!selectedRun) return;
+    void fetchEnergyData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress, processing, basePathIdx, camera, merged, selectedRun]);
+
   return (
     <div className="space-y-6">
       <Card>
@@ -361,7 +630,12 @@ export default function POD({ config, updateConfig }: PODProps) {
                 {basePaths.length > 0 ? (
                   <select
                     value={String(basePathIdx)}
-                    onChange={e => setBasePathIdx(Number(e.target.value))}
+                    onChange={e => {
+                      const idx = Number(e.target.value);
+                      setBasePathIdx(idx);
+                      // persist selection to backend so it can be remembered
+                      saveChange({ basepath_idx: idx });
+                    }}
                     className="border rounded px-2 py-1"
                   >
                     {basePaths.map((p, i) => {
@@ -382,10 +656,16 @@ export default function POD({ config, updateConfig }: PODProps) {
                 <select
                   id="camera"
                   value={camera}
-                  onChange={e => setCamera(e.target.value)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setCamera(val);
+                    // persist preferred camera for POD settings
+                    const num = Number(val);
+                    if (Number.isFinite(num)) saveChange({ camera: num });
+                  }}
                   className="border rounded px-2 py-1"
                 >
-                  {cameraOptions.map((cam) => (
+                  {cameraOptions.map((cam: string) => (
                     <option key={cam} value={cam}>Camera {cam}</option>
                   ))}
                 </select>
@@ -393,30 +673,60 @@ export default function POD({ config, updateConfig }: PODProps) {
                   <input
                     type="checkbox"
                     checked={merged}
-                    onChange={e => setMerged(e.target.checked)}
+                    onChange={e => {
+                      const v = e.target.checked;
+                      setMerged(v);
+                      // persist as part of POD settings; backend supports either entry-level or settings
+                      saveChange({ use_merged: v });
+                    }}
                     className="accent-soton-blue w-4 h-4 rounded border-gray-300"
                   />
                   Merged Data
                 </label>
+                {/* Run selection */}
+                <label className="text-sm font-medium ml-4">Run:</label>
+                <select
+                  value={selectedRun}
+                  onChange={e => setSelectedRun(Number(e.target.value))}
+                  className="border rounded px-2 py-1"
+                  disabled={runCheckLoading}
+                >
+                  {availableRuns.map(r => (
+                    <option key={r} value={r} disabled={runHasVars[r] === false}>
+                      {r}{runHasVars[r] === false ? ' (no ux/uy)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {runCheckLoading && <span className="text-xs text-gray-500 ml-2">Checking data...</span>}
+                {runCheckError && (
+                  <span className="text-xs text-red-600 ml-2">{runCheckError}</span>
+                )}
               </div>
 
               <div className="flex items-center gap-4">
                 <div className="w-2/3 flex flex-col justify-center">
                   <label className="text-sm font-medium">Number of modes (k_modes)</label>
-                  <div className="text-xs text-gray-500">0 for automatic / all modes</div>
+                  <div className="text-xs text-gray-500">Minimum 1</div>
                 </div>
                 <div className="w-1/3 text-right">
                   <Input
                     type="number"
-                    min={0}
+                    min={1}
                     max={99999}
                     // visually limit to ~5 digits
                     className="w-20 inline-block"
                     value={kModes}
                     onChange={e => {
                       const raw = e.target.value;
-                      const nm = raw === "" ? 0 : Number(raw);
-                      setKModes(raw === "" ? "" : nm);
+                      if (raw === "") {
+                        setKModes("");
+                        // don't save empty to avoid forcing zero modes
+                        return;
+                      }
+                      let nm = Number(raw);
+                      if (!Number.isFinite(nm)) nm = 1;
+                      nm = Math.max(1, Math.floor(nm));
+                      setKModes(nm);
                       saveChange({ k_modes: nm });
                     }}
                   />
@@ -480,7 +790,11 @@ export default function POD({ config, updateConfig }: PODProps) {
             </div>
 
             <div className="flex items-center justify-center gap-4 mt-4">
-              <Button className="bg-green-600 hover:bg-green-700" onClick={handleStartPOD} disabled={loading || processing}>
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={handleStartPOD}
+                disabled={loading || processing || !runHasCalibratedData}
+              >
                 {loading ? "Starting..." : (processing ? "Running..." : "Start POD")}
               </Button>
               <Button className="bg-red-600 hover:bg-red-700" onClick={handleCancelPOD} disabled={loading || !processing}>
@@ -597,6 +911,48 @@ export default function POD({ config, updateConfig }: PODProps) {
             </div>
           )}
 
+          {/* After POD, show available runs and warning if needed */}
+          {progress >= 100 && (
+            <div className="mb-4">
+              {podRunsLoading && <div className="text-xs text-gray-500">Checking available POD runs...</div>}
+              {podRunsError && <div className="text-xs text-red-500">{podRunsError}</div>}
+              {availablePodRuns && (
+                <div className="flex items-center gap-4 mb-2">
+                  <label className="text-sm font-medium">Available POD Runs:</label>
+                  <select
+                    value={runVis}
+                    onChange={e => setRunVis(Number(e.target.value))}
+                    className="border rounded px-2 py-1"
+                  >
+                    {availablePodRuns.map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                  {runWarning && (
+                    <span className="text-xs text-red-600">{runWarning}</span>
+                  )}
+                </div>
+              )}
+              {runWarning && !availablePodRuns && (
+                <div className="text-xs text-red-600">{runWarning}</div>
+              )}
+            </div>
+          )}
+
+          {/* Energy plot after POD completion, only if energyData exists and not processing */}
+          {progress >= 100 && !processing && energyData && (
+            <div className="bg-white rounded-xl shadow p-4 mb-4">
+              {energyLoading && <div className="text-xs text-gray-500">Loading energy breakdown...</div>}
+              {energyError && <div className="text-xs text-red-500">{energyError}</div>}
+              <EnergyPlot
+                data={energyData}
+                component={energyComponent}
+                onComponentChange={setEnergyComponent}
+                downloadUrl={`/backend/pod_energy_png?base_path=${encodeURIComponent(getSelectedBasePath() || '')}&camera=${encodeURIComponent(String(camera))}&run=${encodeURIComponent(String(runVis))}&merged=${encodeURIComponent(merged ? '1' : '0')}`}
+              />
+            </div>
+          )}
+
           {/* Visualization image area (shown when an image is available and POD finished) */}
           {progress >= 100 && (
             <div className="mt-4">
@@ -624,3 +980,83 @@ export default function POD({ config, updateConfig }: PODProps) {
   );
 }
 
+// Minimal EnergyPlot placeholder
+function EnergyPlot({
+  data,
+  component,
+  onComponentChange,
+  downloadUrl,
+}: {
+  data: any;
+  component: string;
+  onComponentChange: (c: string) => void;
+  downloadUrl?: string;
+}) {
+  // Example: show available modes and cumulative energy if present
+  if (!data) return null;
+  let ef: number[] = [];
+  let ec: number[] = [];
+  if (data.stacked) {
+    ef = data.energy_fraction || [];
+    ec = data.energy_cumulative || [];
+  } else if (component === "ux") {
+    ef = data.energy_fraction_ux || [];
+    ec = data.energy_cumulative_ux || [];
+  } else {
+    ef = data.energy_fraction_uy || [];
+    ec = data.energy_cumulative_uy || [];
+  }
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-2">
+        <span className="font-medium text-sm">Cumulative Energy Breakdown</span>
+        {!data.stacked && (
+          <select
+            value={component}
+            onChange={e => onComponentChange(e.target.value)}
+            className="border rounded px-2 py-1 text-xs"
+          >
+            <option value="ux">ux</option>
+            <option value="uy">uy</option>
+          </select>
+        )}
+      </div>
+      <div className="text-xs text-gray-500 mb-2">
+        {ef.length > 0 && (
+          <span>
+            Mode 1: {(ef[0] * 100).toFixed(1)}% | Mode {ef.length}: {(ec[ef.length - 1] * 100).toFixed(1)}% total
+          </span>
+        )}
+      </div>
+      {/* Inline SVG cumulative plot */}
+      {ec.length > 0 && (
+        <div className="w-full max-w-md">
+          <svg viewBox={`0 0 300 120`} width="100%" height="120" className="border rounded">
+            <rect x="0" y="0" width="300" height="120" fill="#fff" />
+            {/* grid lines */}
+            {[0, .25, .5, .75, 1].map((g, i) => (
+              <line key={i} x1={40} x2={280} y1={10 + (1 - g) * 90} y2={10 + (1 - g) * 90} stroke="#eee" />
+            ))}
+            {/* axes */}
+            <line x1={40} y1={10} x2={40} y2={100} stroke="#333" />
+            <line x1={40} y1={100} x2={280} y2={100} stroke="#333" />
+            {/* polyline */}
+            {(() => {
+              const points = ec.map((v, i) => {
+                const x = 40 + (i / Math.max(1, ec.length - 1)) * 240;
+                const y = 10 + (1 - Math.min(1, Math.max(0, v))) * 90;
+                return `${x},${y}`;
+              }).join(" ");
+              return <polyline points={points} fill="none" stroke="#1f77b4" strokeWidth={2} />;
+            })()}
+          </svg>
+          {downloadUrl && (
+            <div className="mt-2 text-xs">
+              <a className="text-soton-blue underline" href={downloadUrl} target="_blank" rel="noreferrer">Download cumulative energy PNG</a>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

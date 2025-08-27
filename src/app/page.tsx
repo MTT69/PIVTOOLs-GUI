@@ -13,6 +13,7 @@ import POD from '@/components/setup/POD';
 import ImageConfig from '@/components/setup/ImageConfig';
 import VectorViewer from '@/components/viewer/VectorViewer';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
+import VideoMaker from '@/components/viewer/VideoMaker';
 import Masking from '@/components/setup/Masking';
 import Calibration from '@/components/setup/Calibration';
 
@@ -58,15 +59,16 @@ export default function Home() {
         const res = await fetch('/backend/config');
         const json = await res.json();
         if (!cancelled && res.ok) {
-          // Map YAML structure to frontend structure minimally
+          // Map YAML structure to frontend structure, preserving all fields in paths
           const mapped = {
             ...json,
             paths: {
+              ...json.paths,
               base_dir: json.paths?.base_paths || [],
               source: json.paths?.source_paths || [],
             },
           };
-            setConfig(mapped);
+          setConfig(mapped);
         }
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -160,6 +162,9 @@ export default function Home() {
                   <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Viewer
                   </TabsTrigger>
+                  <TabsTrigger value="video" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    Video
+                  </TabsTrigger>
                   <TabsTrigger value="masking" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Masking
                   </TabsTrigger>
@@ -244,11 +249,15 @@ export default function Home() {
                 </TabsContent>
 
                 <TabsContent value="results">
-                  <VectorViewer />
+                  <VectorViewer config={config} />
                 </TabsContent>
 
                 <TabsContent value="viewer">
                   <ImagePairViewer />
+                </TabsContent>
+
+                <TabsContent value="video">
+                  <VideoMaker config={config} />
                 </TabsContent>
 
                 <TabsContent value="masking">

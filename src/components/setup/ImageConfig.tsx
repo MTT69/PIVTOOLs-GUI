@@ -40,16 +40,36 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
   const [numImages, setNumImages] = useState<string>(
     initialImages.num_images !== undefined ? String(initialImages.num_images) : ""
   );
-  // camera_numbers lives under config.paths and is an array in the YAML; default to 1
-  const [numCameras, setNumCameras] = useState<string>(
-    config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1"
-  );
+  
+  // Update camera_numbers extraction to handle more cases and ensure a default is shown
+  const [numCameras, setNumCameras] = useState<string>(() => {
+    // First check paths.camera_numbers array
+    if (config.paths?.camera_numbers?.length) {
+      return String(config.paths.camera_numbers[0]);
+    }
+    // Then check imProperties.cameraCount
+    if (config.imProperties?.cameraCount) {
+      return String(config.imProperties.cameraCount);
+    }
+    // Always default to "1" to ensure something is displayed
+    return "1";
+  });
+  
   const [timeResolved, setTimeResolved] = useState<boolean>(!!initialImages.time_resolved);
 
   // Always sync state from config when config changes (for hot reloads or backend edits)
   useEffect(() => {
     setNumImages(initialImages.num_images !== undefined ? String(initialImages.num_images) : "");
-    setNumCameras(config.paths?.camera_numbers?.length ? String(config.paths.camera_numbers[0]) : "1");
+    
+    // Update numCameras from config, but always default to "1" if nothing exists
+    if (config.paths?.camera_numbers?.length) {
+      setNumCameras(String(config.paths.camera_numbers[0]));
+    } else if (config.imProperties?.cameraCount) {
+      setNumCameras(String(config.imProperties.cameraCount));
+    } else {
+      setNumCameras("1");  // Always ensure a value is displayed
+    }
+    
     setTimeResolved(!!initialImages.time_resolved);
 
     const rawFmt = initialImages.image_format;
@@ -68,7 +88,13 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
       initialCalibration.image_format || initialImages.calibration_image_format || "calib%05d.tif"
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
+  }, [
+    config,
+    initialImages.num_images,
+    initialImages.time_resolved,
+    config.paths?.camera_numbers,
+    config.imProperties?.cameraCount
+  ]);
 
   // Raw filename patterns
   const rawFmt = initialImages.image_format;
@@ -130,6 +156,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
       // Only send if at least one numeric field is present and valid
       const validNumImages = numImages !== "" && !isNaN(Number(numImages));
       const validNumCameras = numCameras !== "" && !isNaN(Number(numCameras));
+      
       if (validNumImages || validNumCameras) {
         // Merge camera_numbers under paths so it matches YAML structure:
         const payload: any = {
@@ -141,8 +168,12 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
             source_paths: config.paths?.source_paths || config.paths?.source || [],
           },
         };
+        
         if (validNumImages) payload.images.num_images = Number(numImages);
+        
+        // Only include camera_numbers if user has entered a value
         if (validNumCameras) payload.paths.camera_numbers = [Number(numCameras)];
+        
          const res = await fetch("/backend/update_config", {
            method: "POST",
            headers: { "Content-Type": "application/json" },
@@ -209,13 +240,17 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     updateConfig(["paths", "camera_numbers"], [next]);
   }
 
+  // Update the blur handler to always ensure a valid value (minimum of 1)
   function setNumCamerasFromInput(v: string) {
-    // sanitize numeric input, clamp to >=1 when valid
+    // Allow empty string while typing, but ensure a valid number is set
     const n = v === "" ? NaN : Number(v);
     const clamped = !isNaN(n) ? Math.max(1, n) : NaN;
-    const normalized = isNaN(clamped) ? "" : String(clamped);
-    setNumCameras(normalized);
-    if (!isNaN(clamped)) updateConfig(["paths", "camera_numbers"], [clamped]);
+    setNumCameras(v); // Allow empty string temporarily while typing
+    
+    // Only update config if a valid number was entered
+    if (!isNaN(clamped)) {
+      updateConfig(["paths", "camera_numbers"], [clamped]);
+    }
   }
 
   // Toggle time resolved resets rawPatterns to single or pair
