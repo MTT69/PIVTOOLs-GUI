@@ -182,311 +182,661 @@ const ScaleFactorCalibration: React.FC<{ config: Config; updateConfig: (path: st
   );
 };
 
-// --- Pinhole Calibration UI ---
+// --- Pinhole Calibration UI (Production CV2) ---
 const PinholeCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
-  // Load pinhole config from YAML
-  const pinholeConfig = config.calibration?.pinhole || {};
-  // Use string state for dt for consistency and to avoid losing precision
-  const [dt, setDt] = useState<string>(pinholeConfig.dt !== undefined ? String(pinholeConfig.dt) : "");
-  const [dotDistance, setDotDistance] = useState<number>(pinholeConfig.dot_distance_mm ?? 28.9);
-  const [gridTolerance, setGridTolerance] = useState<number>(pinholeConfig.grid_tolerance ?? 0.5);
-  const [ransacThresh, setRansacThresh] = useState<number>(pinholeConfig.ransac_threshold ?? 3.0);
-  const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem("piv_source_paths") || "[]"); } catch { return []; }
-  });
+  // States for calibration parameters
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState("1");
+  const [imageIndex, setImageIndex] = useState(0);
+  const [filePattern, setFilePattern] = useState("planar_calibration_plate_*.tif");
+  const [patternCols, setPatternCols] = useState(10);
+  const [patternRows, setPatternRows] = useState(10);
+  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [enhanceDots, setEnhanceDots] = useState(true);
+  const [asymmetric, setAsymmetric] = useState(false);
+  
+  // States for display
   const [imageB64, setImageB64] = useState<string | null>(null);
-  const [dots, setDots] = useState<[number, number][]>([]);
-  const [datum, setDatum] = useState<[number, number] | null>(null);
-  const [right, setRight] = useState<[number, number] | null>(null);
-  const [above, setAbove] = useState<[number, number] | null>(null);
-  const [dewarpedB64, setDewarpedB64] = useState<string | null>(null);
-  const [inlierMask, setInlierMask] = useState<number[]>([]);
+  const [totalImages, setTotalImages] = useState(0);
   const [gridPoints, setGridPoints] = useState<[number, number][]>([]);
-  const [gridIndices, setGridIndices] = useState<[number, number][]>([]);
   const [showIndices, setShowIndices] = useState(true);
+  const [dewarpedB64, setDewarpedB64] = useState<string | null>(null);
+  const [cameraModel, setCameraModel] = useState<any>(null);
+  const [gridData, setGridData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  // Add native image size state
   const [nativeSize, setNativeSize] = useState<{ w: number; h: number }>({ w: 1024, h: 1024 });
-
+  
+  // Get source paths from config
+  const sourcePaths = config?.paths || [];
+  
   const loadImage = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ source_path_idx: String(sourcePathIdx), camera });
-      const res = await fetch(`/backend/calibration/get_image?${params.toString()}`);
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || "Failed to load calibration image");
-      setImageB64(j.image);
-      // If backend provides width/height, use them; else fallback to 1024
-      setNativeSize({
-        w: j.width || 1024,
-        h: j.height || 1024
-      });
-      setDots([]); setDatum(null); setRight(null); setAbove(null);
-      setDewarpedB64(null); setGridPoints([]); setGridIndices([]); setInlierMask([]);
-      return true;
-    } catch (e:any) { alert(e.message); }
-    finally { setLoading(false); }
+      const response = await fetch(`/backend/calibration/planar/get_image?source_path_idx=${sourcePathIdx}&camera=${camera}&image_index=${imageIndex}&file_pattern=${encodeURIComponent(filePattern)}`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        setImageB64(data.image);
+        setNativeSize({ w: data.width, h: data.height });
+        setTotalImages(data.total_images);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e: any) {
+      alert(`Error loading image: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
-
-  const detectDots = async () => {
+  
+  const detectGrid = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const params = new URLSearchParams({ source_path_idx: String(sourcePathIdx), camera });
-      const res = await fetch(`/backend/calibration/detect_dots?${params.toString()}`);
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || "Failed to detect dots");
-      setDots(j.dots || []);
-    } catch (e:any) { alert(e.message); }
-    finally { setLoading(false); }
+      const response = await fetch('/backend/calibration/planar/detect_grid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          camera: camera,
+          image_index: imageIndex,
+          file_pattern: filePattern,
+          pattern_cols: patternCols,
+          pattern_rows: patternRows,
+          enhance_dots: enhanceDots,
+          asymmetric: asymmetric
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.found) {
+        setGridPoints(data.grid_points);
+      } else {
+        alert(`Grid detection failed: ${data.error || 'Unknown error'}`);
+        setGridPoints([]);
+      }
+    } catch (e: any) {
+      alert(`Error detecting grid: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
-
-  // Auto-load image and detect dots when this component mounts (e.g., when tab opens).
-  // Assumption: the component is mounted when the calibration tab is opened. If the
-  // tab keeps the component mounted while hidden, a different visibility signal is
-  // required from the parent and this effect should be adjusted.
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const ok = await loadImage();
-      if (!mounted) return;
-      if (ok) await detectDots();
-    })();
-    return () => { mounted = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function findNearest(pt:[number,number]): [number,number] {
-    if (!dots.length) return pt;
-    let best = dots[0]; let bd = Infinity;
-    for (const d of dots) { const dx = d[0]-pt[0]; const dy = d[1]-pt[1]; const dist = dx*dx+dy*dy; if (dist<bd){bd=dist; best=d as [number,number];}}
-    return best as [number,number];
-  }
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!imageB64) return;
-    const canvas = e.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
-    // Map to image coordinates using native size
-    const scaleX = canvas.width / canvas.clientWidth;
-    const scaleY = canvas.height / canvas.clientHeight;
-    const ix = x * scaleX * (nativeSize.w / canvas.width);
-    const iy = y * scaleY * (nativeSize.h / canvas.height);
-    const snapped = findNearest([ix, iy]);
-    if (!datum) setDatum(snapped);
-    else if (!right) setRight(snapped);
-    else if (!above) setAbove(snapped);
-    else { setDatum(snapped); setRight(null); setAbove(null); }
-  };
-
+  
   const computeCalibration = async () => {
-    if (!datum || !right || !above) { alert("Select datum, right, above dots."); return; }
+    setLoading(true);
     try {
-      setLoading(true);
-      const body = {
-        source_path_idx: sourcePathIdx,
-        camera,
-        datum,
-        right,
-        above,
-        dot_distance_mm: dotDistance,
-        grid_tolerance: gridTolerance,
-        ransac_threshold: ransacThresh
-      };
-      const res = await fetch('/backend/calibration/compute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || 'Calibration failed');
-      setDewarpedB64(j.dewarped);
-      setInlierMask(j.inlier_mask || []);
-      setGridPoints(j.grid_points || []);
-      setGridIndices(j.grid_indices || []);
-    } catch (e:any) { alert(e.message); }
-    finally { setLoading(false); }
-  };
-
-  // On config change, update dt state
-  useEffect(() => {
-    setDt(pinholeConfig.dt !== undefined ? String(pinholeConfig.dt) : "");
-  }, [pinholeConfig.dt]);
-
-  // Debounced auto-save
-  const debounceTimer = React.useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      updateConfig(["calibration", "pinhole"], {
-        dt: Number(dt),
-        dot_distance_mm: dotDistance,
-        grid_tolerance: gridTolerance,
-        ransac_threshold: ransacThresh,
-        // Add more fields as needed
+      const response = await fetch('/backend/calibration/planar/compute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          camera: camera,
+          image_index: imageIndex,
+          file_pattern: filePattern,
+          pattern_cols: patternCols,
+          pattern_rows: patternRows,
+          dot_spacing_mm: dotSpacingMm,
+          enhance_dots: enhanceDots,
+          asymmetric: asymmetric
+        })
       });
-    }, 500);
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dt, dotDistance, gridTolerance, ransacThresh]);
-
-  // Camera dropdown options: derive count robustly from config.paths.camera_numbers
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        if (data.results?.grid_data) {
+          setGridData(data.results.grid_data);
+          setGridPoints(data.results.grid_data.grid_points);
+        }
+        if (data.results?.camera_model) {
+          setCameraModel(data.results.camera_model);
+        }
+        if (data.results?.dewarped_image) {
+          setDewarpedB64(data.results.dewarped_image);
+        }
+        alert('Calibration computed successfully!');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e: any) {
+      alert(`Error computing calibration: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const loadResults = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/backend/calibration/planar/load_results?source_path_idx=${sourcePathIdx}&camera=${camera}&image_index=${imageIndex}`);
+      const data = await response.json();
+      
+      if (response.ok && data.exists) {
+        if (data.results?.grid_data) {
+          setGridData(data.results.grid_data);
+          setGridPoints(data.results.grid_data.grid_points);
+        }
+        if (data.results?.camera_model) {
+          setCameraModel(data.results.camera_model);
+        }
+        if (data.results?.dewarped_image) {
+          setDewarpedB64(data.results.dewarped_image);
+        }
+        alert('Previous results loaded successfully!');
+      } else {
+        alert('No previous results found for this configuration.');
+      }
+    } catch (e: any) {
+      alert(`Error loading results: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Camera dropdown options
   const cameraDropdownOptions = React.useMemo(() => {
     const camNums = config?.paths?.camera_numbers;
     let count = 1;
     if (Array.isArray(camNums)) {
-      if (camNums.length === 1) {
-        // Single-element array may store the count (e.g. [4])
-        const maybeCount = Number(camNums[0]);
-        if (!Number.isNaN(maybeCount) && maybeCount > 0) count = maybeCount;
-      } else if (camNums.length > 1) {
-        // Multi-element array likely lists camera indices => use length
-        count = camNums.length;
-      }
+      count = camNums.length;
     }
-    // Return numeric string values so they match the `camera` state (which is "1", "2", ...)
     return Array.from({ length: Math.max(1, Math.floor(count)) }, (_, i) => String(i + 1));
   }, [config]);
-
-  // Ensure selected camera string matches available options
+  
+  // Auto-load image when parameters change
   useEffect(() => {
-    if (!cameraDropdownOptions.includes(camera)) {
-      setCamera(cameraDropdownOptions[0] || "1");
+    if (filePattern) {
+      loadImage();
     }
-  }, [cameraDropdownOptions]);
-
+  }, [sourcePathIdx, camera, imageIndex, filePattern]);
+  
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Planar Calibration</CardTitle>
+          <CardTitle>Pinhole Calibration (CV2 Production)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-4 items-end">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium">Source Path</label>
-              <select value={sourcePathIdx} onChange={e=>setSourcePathIdx(Number(e.target.value))} className="border rounded px-2 py-1">
-                {sourcePaths.map((p,i)=> <option key={i} value={i}>{i}</option>)}
-              </select>
+              <label className="text-sm font-medium">Source Path Index:</label>
+              <Input
+                type="number"
+                value={sourcePathIdx}
+                onChange={e => setSourcePathIdx(parseInt(e.target.value) || 0)}
+                min="0"
+              />
             </div>
             <div>
-              <label className="block text-xs font-medium">Camera</label>
-              <select value={camera} onChange={e=>setCamera(e.target.value)} className="border rounded px-2 py-1">
-                {cameraDropdownOptions.map((cam, i) => (
-                  <option key={i} value={cam}>{cam}</option>
+              <label className="text-sm font-medium">Camera:</label>
+              <select 
+                value={camera} 
+                onChange={e => setCamera(e.target.value)} 
+                className="border rounded px-2 py-1 w-full"
+              >
+                {cameraDropdownOptions.map(c => (
+                  <option key={c} value={c}>{`Camera ${c}`}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium">Δt (seconds)</label>
-              <Input type="number" step="any" value={dt} onChange={e=>setDt(e.target.value)} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium">Dot Distance (mm)</label>
-              <Input type="number" step="0.1" value={dotDistance} onChange={e=>setDotDistance(Number(e.target.value))} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium">Grid Tol</label>
-              <Input type="number" step="0.05" value={gridTolerance} onChange={e=>setGridTolerance(Number(e.target.value))} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium">RANSAC Thresh</label>
-              <Input type="number" step="0.1" value={ransacThresh} onChange={e=>setRansacThresh(Number(e.target.value))} />
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={loadImage} disabled={loading}>Load Image</Button>
-              <Button onClick={detectDots} disabled={!imageB64 || loading}>Detect Dots</Button>
-              <Button onClick={computeCalibration} disabled={!above || loading}>Compute</Button>
-              <Button variant="outline" onClick={()=>setShowIndices(s=>!s)} disabled={!gridPoints.length}>{showIndices?"Hide Indices":"Show Indices"}</Button>
+              <label className="text-sm font-medium">Image Index:</label>
+              <div className="flex gap-1">
+                <Input
+                  type="number"
+                  value={imageIndex}
+                  onChange={e => setImageIndex(parseInt(e.target.value) || 0)}
+                  min="0"
+                  max={totalImages - 1}
+                />
+                <span className="text-xs text-gray-500 self-center">/ {totalImages}</span>
+              </div>
             </div>
           </div>
-
-          <div className="flex flex-col lg:flex-row gap-6">
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold mb-2">Calibration Image</h3>
-              {imageB64 ? (
-                <div className="relative border rounded inline-block">
-                  <canvas
-                    width={nativeSize.w}
-                    height={nativeSize.h}
-                    style={{ maxWidth: "512px", width: "100%", imageRendering: "pixelated" }}
-                    onClick={handleCanvasClick}
-                    ref={el => {
-                      if (el && imageB64) {
-                        const ctx = el.getContext('2d');
-                        if (ctx) {
-                          const img = new Image();
-                          img.onload = () => {
-                            ctx.clearRect(0,0,el.width, el.height);
-                            ctx.drawImage(img,0,0, el.width, el.height);
-                            // draw dots
-                            ctx.strokeStyle = 'lime'; ctx.fillStyle='rgba(0,255,0,0.6)';
-                            dots.forEach((d,i)=>{
-                              ctx.beginPath();
-                              ctx.arc(
-                                d[0] * (el.width / nativeSize.w),
-                                d[1] * (el.height / nativeSize.h),
-                                4, 0, Math.PI*2
-                              );
-                              ctx.fill();
-                            });
-                            const drawMark=(pt:[number,number]|null, color:string, label:string)=>{
-                              if(!pt) return;
-                              ctx.strokeStyle=color; ctx.lineWidth=2;
-                              ctx.beginPath();
-                              ctx.arc(
-                                pt[0] * (el.width / nativeSize.w),
-                                pt[1] * (el.height / nativeSize.h),
-                                8,0,Math.PI*2
-                              );
-                              ctx.stroke();
-                              ctx.fillStyle=color; ctx.font='12px sans-serif';
-                              ctx.fillText(
-                                label,
-                                pt[0] * (el.width / nativeSize.w) + 10,
-                                pt[1] * (el.height / nativeSize.h)
-                              );
-                            };
-                            drawMark(datum,'yellow','D'); drawMark(right,'orange','X'); drawMark(above,'cyan','Y');
-                          };
-                          img.src = `data:image/png;base64,${imageB64}`;
-                        }
-                      }
-                    }}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Click to select Datum -&gt; Right -&gt; Above. Fourth click resets.</p>
-                  {/* Show native size for debugging */}
-                  <div className="absolute top-1 right-2 text-xs text-gray-400 bg-white/70 px-1 rounded">
-                    {nativeSize.w}×{nativeSize.h}
-                  </div>
-                </div>
-              ) : <div className="w-full h-64 border rounded flex items-center justify-center text-gray-400">No image</div>}
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">File Pattern:</label>
+              <Input
+                value={filePattern}
+                onChange={e => setFilePattern(e.target.value)}
+                placeholder="planar_calibration_plate_*.tif"
+              />
             </div>
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold mb-2">Dewarped Image</h3>
-              {dewarpedB64 ? (
-                <div className="relative border rounded inline-block">
-                  <img src={`data:image/png;base64,${dewarpedB64}`} className="max-w-full" />
-                  {showIndices && gridPoints.length>0 && (
-                    <div className="absolute inset-0 pointer-events-none">
-                      {/* Could add overlay in future */}
-                    </div>
-                  )}
-                </div>
-              ) : <div className="w-full h-64 border rounded flex items-center justify-center text-gray-400">No dewarped</div>}
+            <div>
+              <label className="text-sm font-medium">Pattern Cols:</label>
+              <Input
+                type="number"
+                value={patternCols}
+                onChange={e => setPatternCols(parseInt(e.target.value) || 10)}
+                min="1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Pattern Rows:</label>
+              <Input
+                type="number"
+                value={patternRows}
+                onChange={e => setPatternRows(parseInt(e.target.value) || 10)}
+                min="1"
+              />
             </div>
           </div>
-          {gridPoints.length>0 && (
-            <div className="text-xs text-gray-600">Grid points: {gridPoints.length} (inliers {inlierMask.filter(x=>x).length})</div>
-          )}
-          <div className="flex gap-2 mt-2">
-            {/* <Button onClick={handleSave}>Save Pinhole Calibration</Button> */}
-            {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
-            {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">Dot Spacing (mm):</label>
+              <Input
+                type="number"
+                step="0.01"
+                value={dotSpacingMm}
+                onChange={e => setDotSpacingMm(parseFloat(e.target.value) || 28.89)}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={enhanceDots}
+                  onChange={e => setEnhanceDots(e.target.checked)}
+                  className="mr-2"
+                />
+                Enhance Dots
+              </label>
+            </div>
+            <div>
+              <label className="text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={asymmetric}
+                  onChange={e => setAsymmetric(e.target.checked)}
+                  className="mr-2"
+                />
+                Asymmetric Grid
+              </label>
+            </div>
+          </div>
+          
+          <div className="flex gap-2">
+            <Button onClick={loadImage} disabled={loading}>Load Image</Button>
+            <Button onClick={detectGrid} disabled={!imageB64 || loading}>Detect Grid</Button>
+            <Button onClick={computeCalibration} disabled={!gridPoints.length || loading}>Compute Calibration</Button>
+            <Button variant="outline" onClick={loadResults} disabled={loading}>Load Previous Results</Button>
+            <Button variant="outline" onClick={() => setShowIndices(!showIndices)}>
+              {showIndices ? "Hide Indices" : "Show Indices"}
+            </Button>
           </div>
         </CardContent>
       </Card>
+      
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Calibration Image</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {imageB64 ? (
+              <div className="relative border rounded inline-block">
+                <canvas
+                  width={nativeSize.w}
+                  height={nativeSize.h}
+                  style={{ maxWidth: "512px", width: "100%", imageRendering: "pixelated" }}
+                  ref={el => {
+                    if (el && imageB64) {
+                      const ctx = el.getContext('2d');
+                      if (ctx) {
+                        const img = new Image();
+                        img.onload = () => {
+                          ctx.clearRect(0, 0, el.width, el.height);
+                          ctx.drawImage(img, 0, 0, el.width, el.height);
+                          
+                          // Draw detected grid points
+                          ctx.strokeStyle = 'lime';
+                          ctx.fillStyle = 'rgba(0,255,0,0.6)';
+                          gridPoints.forEach((point, i) => {
+                            ctx.beginPath();
+                            ctx.arc(
+                              point[0] * (el.width / nativeSize.w),
+                              point[1] * (el.height / nativeSize.h),
+                              4, 0, Math.PI * 2
+                            );
+                            ctx.fill();
+                            
+                            // Show indices if enabled
+                            if (showIndices) {
+                              const row = Math.floor(i / patternCols);
+                              const col = i % patternCols;
+                              ctx.fillStyle = 'cyan';
+                              ctx.font = '10px sans-serif';
+                              ctx.fillText(
+                                `(${row},${col})`,
+                                point[0] * (el.width / nativeSize.w) + 8,
+                                point[1] * (el.height / nativeSize.h) - 8
+                              );
+                              ctx.fillStyle = 'rgba(0,255,0,0.6)';
+                            }
+                          });
+                        };
+                        img.src = 'data:image/png;base64,' + imageB64;
+                      }
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="text-gray-500">No image loaded</div>
+            )}
+            
+            {gridPoints.length > 0 && (
+              <div className="text-xs text-gray-600 mt-2">
+                Grid points detected: {gridPoints.length}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader>
+            <CardTitle>Dewarped Image</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {dewarpedB64 ? (
+              <img 
+                src={`data:image/png;base64,${dewarpedB64}`}
+                alt="Dewarped calibration image"
+                style={{ maxWidth: "512px", width: "100%" }}
+              />
+            ) : (
+              <div className="text-gray-500">No dewarped image available</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      
+      {(cameraModel || gridData) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Calibration Results</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 gap-4">
+              {gridData && (
+                <div>
+                  <h4 className="font-semibold text-sm mb-2">Grid Detection</h4>
+                  <div className="text-xs space-y-1">
+                    <div>Reprojection Error: {gridData.reprojection_error?.toFixed(2)} px</div>
+                    <div>Pattern Size: {gridData.pattern_size?.join(' x ')}</div>
+                    <div>Dot Spacing: {gridData.dot_spacing_mm} mm</div>
+                  </div>
+                </div>
+              )}
+              
+              {cameraModel && (
+                <div>
+                  <h4 className="font-semibold text-sm mb-2">Camera Model</h4>
+                  <div className="text-xs space-y-1">
+                    <div>Focal Length: fx={cameraModel.focal_length?.[0]?.toFixed(1)}, fy={cameraModel.focal_length?.[1]?.toFixed(1)}</div>
+                    <div>Principal Point: cx={cameraModel.principal_point?.[0]?.toFixed(1)}, cy={cameraModel.principal_point?.[1]?.toFixed(1)}</div>
+                    <div>Reprojection Error: {cameraModel.reprojection_error?.toFixed(3)} px</div>
+                    <div>Distortion Coeffs: [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(4)).join(', ')}]</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
+      <div className="flex gap-2">
+        {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
+        {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
+      </div>
+    </div>
+  );
+};
+
+// --- Stereo Calibration UI ---
+const StereoCalibration: React.FC<{ config: Config; updateConfig: (path: string[], value: any) => void; setActive: () => void; isActive: boolean }> = ({ config, updateConfig, setActive, isActive }) => {
+  // States for calibration parameters
+  const [sourcePathIdx, setSourcePathIdx] = useState(0);
+  const [cameraPair, setCameraPair] = useState([1, 2]);
+  const [filePattern, setFilePattern] = useState("planar_calibration_plate_*.tif");
+  const [patternCols, setPatternCols] = useState(10);
+  const [patternRows, setPatternRows] = useState(10);
+  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [enhanceDots, setEnhanceDots] = useState(true);
+  const [asymmetric, setAsymmetric] = useState(false);
+  
+  // States for display
+  const [stereoModel, setStereoModel] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  
+  // Get available cameras from config
+  const availableCameras = React.useMemo(() => {
+    const camNums = config?.paths?.camera_numbers;
+    if (Array.isArray(camNums)) {
+      return camNums;
+    }
+    return [1, 2]; // Default
+  }, [config]);
+  
+  const computeStereoCalibration = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/backend/calibration/stereo/compute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          camera_pair: cameraPair,
+          file_pattern: filePattern,
+          pattern_cols: patternCols,
+          pattern_rows: patternRows,
+          dot_spacing_mm: dotSpacingMm,
+          enhance_dots: enhanceDots,
+          asymmetric: asymmetric
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        if (data.stereo_model) {
+          setStereoModel(data.stereo_model);
+        }
+        alert('Stereo calibration computed successfully!');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e: any) {
+      alert(`Error computing stereo calibration: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const loadStereoResults = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/backend/calibration/stereo/load_results?source_path_idx=${sourcePathIdx}&camera_pair=${cameraPair.join(',')}`);
+      const data = await response.json();
+      
+      if (response.ok && data.exists) {
+        setStereoModel(data.results);
+        alert('Previous stereo results loaded successfully!');
+      } else {
+        alert('No previous stereo results found for this configuration.');
+      }
+    } catch (e: any) {
+      alert(`Error loading stereo results: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Stereo Calibration</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">Source Path Index:</label>
+              <Input
+                type="number"
+                value={sourcePathIdx}
+                onChange={e => setSourcePathIdx(parseInt(e.target.value) || 0)}
+                min="0"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Camera 1:</label>
+              <select 
+                value={cameraPair[0]} 
+                onChange={e => setCameraPair([parseInt(e.target.value), cameraPair[1]])} 
+                className="border rounded px-2 py-1 w-full"
+              >
+                {availableCameras.map(c => (
+                  <option key={c} value={c}>{`Camera ${c}`}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Camera 2:</label>
+              <select 
+                value={cameraPair[1]} 
+                onChange={e => setCameraPair([cameraPair[0], parseInt(e.target.value)])} 
+                className="border rounded px-2 py-1 w-full"
+              >
+                {availableCameras.map(c => (
+                  <option key={c} value={c}>{`Camera ${c}`}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">File Pattern:</label>
+              <Input
+                value={filePattern}
+                onChange={e => setFilePattern(e.target.value)}
+                placeholder="planar_calibration_plate_*.tif"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Pattern Cols:</label>
+              <Input
+                type="number"
+                value={patternCols}
+                onChange={e => setPatternCols(parseInt(e.target.value) || 10)}
+                min="1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Pattern Rows:</label>
+              <Input
+                type="number"
+                value={patternRows}
+                onChange={e => setPatternRows(parseInt(e.target.value) || 10)}
+                min="1"
+              />
+            </div>
+          </div>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">Dot Spacing (mm):</label>
+              <Input
+                type="number"
+                step="0.01"
+                value={dotSpacingMm}
+                onChange={e => setDotSpacingMm(parseFloat(e.target.value) || 28.89)}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={enhanceDots}
+                  onChange={e => setEnhanceDots(e.target.checked)}
+                  className="mr-2"
+                />
+                Enhance Dots
+              </label>
+            </div>
+            <div>
+              <label className="text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={asymmetric}
+                  onChange={e => setAsymmetric(e.target.checked)}
+                  className="mr-2"
+                />
+                Asymmetric Grid
+              </label>
+            </div>
+          </div>
+          
+          <div className="flex gap-2">
+            <Button onClick={computeStereoCalibration} disabled={loading}>Compute Stereo Calibration</Button>
+            <Button variant="outline" onClick={loadStereoResults} disabled={loading}>Load Previous Results</Button>
+          </div>
+        </CardContent>
+      </Card>
+      
+      {stereoModel && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Stereo Calibration Results</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <h4 className="font-semibold text-sm mb-2">Camera Pair</h4>
+                <div className="text-xs space-y-1">
+                  <div>Cameras: {stereoModel.camera_pair?.join(' - ')}</div>
+                  <div>Images Used: {stereoModel.num_images}</div>
+                  <div>Stereo Reprojection Error: {stereoModel.stereo_reprojection_error?.toFixed(3)} px</div>
+                </div>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold text-sm mb-2">Fundamental Matrix</h4>
+                <div className="text-xs font-mono bg-gray-100 p-2 rounded">
+                  {stereoModel.fundamental_matrix && 
+                    stereoModel.fundamental_matrix.map((row: number[], i: number) => (
+                      <div key={i}>
+                        [{row.map(val => val.toFixed(6)).join(', ')}]
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+              
+              <div>
+                <h4 className="font-semibold text-sm mb-2">Essential Matrix</h4>
+                <div className="text-xs font-mono bg-gray-100 p-2 rounded">
+                  {stereoModel.essential_matrix && 
+                    stereoModel.essential_matrix.map((row: number[], i: number) => (
+                      <div key={i}>
+                        [{row.map(val => val.toFixed(6)).join(', ')}]
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
+      <div className="flex gap-2">
+        {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
+        {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
+      </div>
     </div>
   );
 };
@@ -513,8 +863,8 @@ const Calibration: React.FC = () => {
             <label className="text-sm font-medium">Method:</label>
             <select value={method} onChange={e=>setMethod(e.target.value as CalibrationMethod)} className="border rounded px-2 py-1">
               <option value="scale_factor">Scale Factor</option>
-              <option value="pinhole">Pinhole (Planar)</option>
-              <option value="stereo" disabled>Stereo (coming soon)</option>
+              <option value="pinhole">Pinhole (CV2 Production)</option>
+              <option value="stereo">Stereo Calibration</option>
             </select>
             <span className="ml-4 text-xs text-gray-500">Active: <b>{active}</b></span>
           </div>
@@ -534,6 +884,14 @@ const Calibration: React.FC = () => {
           updateConfig={updateConfig}
           setActive={() => setActiveMethod("pinhole")}
           isActive={active === "pinhole"}
+        />
+      )}
+      {method === "stereo" && (
+        <StereoCalibration
+          config={config}
+          updateConfig={updateConfig}
+          setActive={() => setActiveMethod("stereo")}
+          isActive={active === "stereo"}
         />
       )}
       {/* Stereo method can be added here in the future */}
