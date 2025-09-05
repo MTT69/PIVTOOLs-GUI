@@ -43,10 +43,12 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
   const [lower, setLower] = useState<string>('');
   const [upper, setUpper] = useState<string>('');
   const [merged, setMerged] = useState<boolean>(false);
+  const [upscale, setUpscale] = useState<number>(1);
 
   // Add new state for handling the video creation process
   const [creating, setCreating] = useState<boolean>(false);
   const [videoResult, setVideoResult] = useState<{ success?: boolean; message?: string } | null>(null);
+  const [videoStatus, setVideoStatus] = useState<{ processing: boolean; progress: number; status: string } | null>(null);
 
   // Effective directory: prefer selected base path if available
   const effectiveDir = useMemo(() => {
@@ -90,12 +92,15 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     cmap,
     lower,
     upper,
+    num_images: config?.images?.num_images || 0,
+    upscale,
   });
 
   // Function to handle video creation
   const handleCreateVideo = async () => {
     setCreating(true);
     setVideoResult(null);
+    setVideoStatus(null);
     
     try {
       const params = buildParams();
@@ -115,17 +120,67 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
         throw new Error(result.error || 'Failed to create video');
       }
       
-      setVideoResult({
-        success: true,
-        message: result.message || 'Video creation started successfully. This process runs in the background.'
-      });
+      // Start polling status after initial delay
+      setTimeout(() => {
+        const pollStatus = () => {
+          fetch(`${backendUrl}/video/video_status`)
+            .then(res => res.json())
+            .then(status => {
+              setVideoStatus(status);
+              if (status.processing) {
+                setTimeout(pollStatus, 1000);
+              } else {
+                setCreating(false);
+                setVideoResult({
+                  success: true,
+                  message: 'Video creation completed.'
+                });
+              }
+            })
+            .catch(err => {
+              console.error('Polling error', err);
+              setCreating(false);
+              setVideoResult({
+                success: false,
+                message: 'Error polling status.'
+              });
+            });
+        };
+        pollStatus();
+      }, 3000);
     } catch (error: any) {
       setVideoResult({
         success: false,
         message: `Error: ${error.message}`
       });
-    } finally {
       setCreating(false);
+    }
+  };
+
+  // Function to handle video cancellation
+  const handleCancelVideo = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/video/cancel_video`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        throw new Error('Failed to cancel video');
+      }
+      setVideoStatus({ processing: false, progress: 0, status: 'canceled' });
+      setVideoResult({
+        success: false,
+        message: 'Video creation canceled.'
+      });
+      setCreating(false);
+    } catch (error: any) {
+      console.error('Cancel error', error);
+      setVideoResult({
+        success: false,
+        message: `Error canceling: ${error.message}`
+      });
     }
   };
 
@@ -279,6 +334,31 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Upscale</label>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setUpscale(prev => Math.max(1, prev - 1))}
+                  >
+                    -
+                  </Button>
+                  <Input 
+                    type="number" 
+                    min={1} 
+                    value={upscale} 
+                    onChange={(e) => setUpscale(Number(e.target.value) || 1)} 
+                    className="w-20 text-center" 
+                  />
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setUpscale(prev => prev + 1)}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+
               {/* Display result message */}
               {videoResult && (
                 <div className={`w-full p-3 mb-3 rounded border ${
@@ -290,14 +370,29 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 </div>
               )}
 
+              {/* Loading spinner */}
+              {videoStatus && videoStatus.processing && (
+                <div className="w-full flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-soton-blue"></div>
+                  <div className="text-sm">Processing...</div>
+                </div>
+              )}
+
               <div className="pt-4 flex flex-col gap-2">
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
+                  <Button 
+                    variant="outline" 
+                    onClick={handleCancelVideo}
+                    disabled={!videoStatus?.processing}
+                  >
+                    Cancel
+                  </Button>
                   <Button 
                     className="bg-soton-blue" 
                     onClick={handleCreateVideo}
-                    disabled={creating || !effectiveDir}
+                    disabled={creating || videoStatus?.processing}
                   >
-                    {creating ? "Starting..." : "Create Video"}
+                    {creating ? "Starting..." : videoStatus?.processing ? "Processing..." : "Create Video"}
                   </Button>
                 </div>
                 <div className="mt-2 text-xs bg-gray-100 p-2 rounded">

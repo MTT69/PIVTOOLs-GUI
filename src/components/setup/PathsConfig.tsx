@@ -203,6 +203,12 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
       localStorage.setItem("piv_image_format", JSON.stringify(updImages.image_format || payload.images.image_format));
       localStorage.setItem("piv_vector_format", JSON.stringify(updImages.vector_format || payload.images.vector_format));
       localStorage.setItem("piv_calibration_image_format", JSON.stringify(updCalib.image_format || payload.calibration.image_format));
+
+      // Update local config state with backend response to prevent stale values
+      if (updPaths) updateConfig(['paths'], { ...config.paths, ...updPaths });
+      if (updImages) updateConfig(['images'], { ...config.images, ...updImages });
+      if (updCalib) updateConfig(['calibration'], { ...config.calibration, ...updCalib });
+
       // eslint-disable-next-line no-console
       console.log("Path configuration updated");
     } catch (err) {
