@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function VectorViewer({ backendUrl = "/backend", config }: { backendUrl?: string; config?: any }) {
   const [hasRendered, setHasRendered] = useState(false);
@@ -78,19 +79,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     bottomRight: {x: number, y: number}
   } | null>(null);
   const [showCorners, setShowCorners] = useState<boolean>(false);
-
-  // --- POD mode state ---
-  const [podMode, setPodMode] = useState<boolean>(false);
-  const [podRun, setPodRun] = useState<number>(1);
-  const [podModeIndex, setPodModeIndex] = useState<number>(1);
-  const [podMaxMode, setPodMaxMode] = useState<number>(1);
-  const [podStacked, setPodStacked] = useState<boolean>(true);
-  const [podComponent, setPodComponent] = useState<"ux" | "uy">("ux");
-  const [podAlgorithm, setPodAlgorithm] = useState<string>("exact");
-  const [podAvailable, setPodAvailable] = useState<{ randomised: boolean; exact: boolean }>({ randomised: false, exact: false });
-  const [podEnergy, setPodEnergy] = useState<any>(null);
-  const [podEnergyLoading, setPodEnergyLoading] = useState(false);
-  const [podEnergyError, setPodEnergyError] = useState<string | null>(null);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -499,75 +487,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     }
   };
 
-  // --- POD mode state and handlers ---
-  const fetchPodImage = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // Compose params for backend
-      const basePath = effectiveDir;
-      if (!basePath) throw new Error("Please provide a base path");
-      const params = new URLSearchParams();
-      params.set("base_path", basePath);
-      params.set("camera", camera.replace(/[^\d]/g, "") || "1");
-      params.set("run", String(podRun || run));
-      params.set("mode", String(podModeIndex));
-      params.set("component", podComponent);
-      params.set("algorithm", podAlgorithm);
-      params.set("cmap", cmap);
-      if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
-      if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("merged", merged ? "1" : "0");
-
-      const url = `${backendUrl}/plot_pod_mode?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok || json.error) throw new Error(json.error || "Failed to fetch POD mode image");
-      setImageSrc(json.image_base64 ?? null);
-      setMeta(json.meta ?? null);
-      return true;
-    } catch (e: any) {
-      setError(e.message || "Unknown error");
-      setImageSrc(null);
-      setMeta(null);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    effectiveDir,
-    camera,
-    podRun,
-    run,
-    podModeIndex,
-    podComponent,
-    podAlgorithm,
-    cmap,
-    lower,
-    upper,
-    merged,
-    backendUrl,
-  ]);
-
-  // Add togglePodMode
-  const togglePodMode = useCallback(async () => {
-    setPodMode(v => !v);
-    // Optionally: fetch POD data when enabling
-    // TODO: Add logic if needed
-  }, []);
-
-  // Add handlePodRender
-  const handlePodRender = useCallback(async () => {
-    await fetchPodImage();
-  }, [fetchPodImage]);
-
   // Automatically render when index or other relevant parameters change
   useEffect(() => {
     if (!hasRendered || !(effectiveDir || basePaths.length > 0)) return;
     // When POD mode is active, use POD endpoint; when meanMode is active, use stats endpoint; otherwise use normal plot
-    if (podMode) {
-      void fetchPodImage();
-    } else if (meanMode) {
+    if (meanMode) {
       void fetchStatsImage();
     } else {
       void fetchImage();
@@ -586,10 +510,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     merged,
     basePathIdx,
     meanMode,
-    podMode,
     fetchImage,
     fetchStatsImage,
-    fetchPodImage,
   ]);
   
   // Play/pause effect
@@ -823,6 +745,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     fetchConfig();
   }, [backendUrl]);
 
+  // Helper to show just the last segment of a path
+  const basename = (p: string) => {
+    if (!p) return "";
+    const parts = p.replace(/\\/g, "/").split("/");
+    return parts.filter(Boolean).pop() || p;
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -832,26 +761,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
         <CardContent>
           <div className="flex flex-col gap-4 mb-4">
             <div className="flex flex-col gap-4 mb-4">
-              {/* Internal: last response meta is available in the compact status below */}
               {/* Base path selection */}
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium">Base Path:</label>
                 {basePaths.length > 0 ? (
-                  <>
-                    <select
-                      value={String(basePathIdx)}
-                      onChange={e => setBasePathIdx(Number(e.target.value))}
-                      className="border rounded px-2 py-1"
-                    >
-                      {basePaths.map((p, i) => {
-                        // Show last two segments of the path
-                        const norm = p.replace(/\\/g, "/").replace(/\/+$/, "");
-                        const parts = norm.split("/").filter(Boolean);
-                        const lastTwo = parts.length >= 2 ? parts.slice(-2).join("/") : norm;
-                        return <option key={i} value={i}>{`${i}: /${lastTwo}`}</option>;
-                      })}
-                    </select>
-                  </>
+                  <Select value={String(basePathIdx)} onValueChange={v => setBasePathIdx(Number(v))}>
+                    <SelectTrigger id="basepath"><SelectValue placeholder="Pick base path" /></SelectTrigger>
+                    <SelectContent>
+                      {basePaths.map((p, i) => (
+                        <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 ) : (
                   <>
                     <Input
@@ -884,16 +805,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               {/* Camera and merged controls */}
               <div className="flex items-center gap-4">
                 <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                <select
-                  id="camera"
-                  value={camera}
-                  onChange={e => setCamera(e.target.value)}
-                  className="border rounded px-2 py-1"
-                >
-                  {cameraOptions.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                <Select value={camera} onValueChange={v => setCamera(v)}>
+                  <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                  <SelectContent>
+                    {cameraOptions.map((c, i) => (
+                      <SelectItem key={i} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
 
                 {/* Merged Data and Mean Statistics (checkbox) */}
                 <label className="flex items-center gap-2 text-sm font-medium">
@@ -913,116 +832,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     checked={meanMode}
                     onChange={() => { void toggleMeanMode(); }}
                     className="accent-soton-blue w-4 h-4 rounded border-gray-300"
-                    disabled={podMode} // Disable when POD mode is active
                   />
                   Mean Statistics
                   {statVarsLoading && <span className="ml-2 text-xs text-gray-500">Loading vars...</span>}
                   {meanMode && statsLoading && <span className="ml-2 text-xs text-gray-500">Computing...</span>}
                 </label>
-                
-                {/* New: POD Mode toggle */}
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={podMode}
-                    onChange={() => { void togglePodMode(); }}
-                    className="accent-soton-blue w-4 h-4 rounded border-gray-300"
-                    disabled={meanMode} // Disable when mean mode is active
-                  />
-                  POD Mode
-                </label>
               </div>
-
-              {/* New: POD Mode Controls (show only when podMode is active) */}
-              {podMode && (
-                <div className="p-3 bg-gray-50 border rounded-md">
-                  <h4 className="font-medium mb-2">POD Mode Settings</h4>
-                  <div className="flex flex-wrap gap-3 items-center">
-                    <label className="text-sm font-medium">Algorithm:</label>
-                    <select
-                      value={podAlgorithm}
-                      onChange={e => setPodAlgorithm(e.target.value)}
-                      className="border rounded px-2 py-1"
-                    >
-                      <option value="exact" disabled={!podAvailable.exact}>Exact</option>
-                      <option value="randomised" disabled={!podAvailable.randomised}>Randomised</option>
-                    </select>
-                    
-                    <label className="text-sm font-medium">Run:</label>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={podRun}
-                      onChange={e => setPodRun(Math.max(1, Number(e.target.value)))}
-                      className="w-20"
-                    />
-                    
-                    <label className="text-sm font-medium">Mode:</label>
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      onClick={() => setPodModeIndex(i => Math.max(1, i - 1))}
-                      disabled={podModeIndex <= 1}
-                      className={`transition-opacity ${podModeIndex <= 1 ? 'opacity-40' : 'opacity-100'}`}
-                    >
-                      -
-                    </Button>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={podMaxMode}
-                      value={podModeIndex}
-                      onChange={e => setPodModeIndex(Math.max(1, Math.min(podMaxMode, Number(e.target.value))))}
-                      className="w-20"
-                    />
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      onClick={() => setPodModeIndex(i => Math.min(podMaxMode, i + 1))}
-                      disabled={podModeIndex >= podMaxMode}
-                      className={`transition-opacity ${podModeIndex >= podMaxMode ? 'opacity-40' : 'opacity-100'}`}
-                    >
-                      +
-                    </Button>
-                    <span className="text-xs text-gray-500">{podModeIndex} / {podMaxMode}</span>
-                    
-                    <label className="text-sm font-medium">Component:</label>
-                    <select
-                      value={podComponent}
-                      onChange={e => setPodComponent(e.target.value as "ux" | "uy")}
-                      className="border rounded px-2 py-1"
-                    >
-                      <option value="ux">ux</option>
-                      <option value="uy">uy</option>
-                    </select>
-                    
-                    <Button
-                      className="bg-soton-blue ml-auto"
-                      onClick={handlePodRender}
-                      disabled={loading}
-                    >
-                      {loading ? "Loading..." : "Render POD Mode"}
-                    </Button>
-                  </div>
-                  
-                  {/* POD Energy Plot */}
-                  {podEnergy && !podEnergyError && (
-                    <PODModalEnergyPlot 
-                      energy={podEnergy}
-                      selectedMode={podModeIndex}
-                      onSelectMode={setPodModeIndex}
-                      component={podComponent}
-                      onComponentChange={setPodComponent}
-                    />
-                  )}
-                  
-                  {podEnergyError && (
-                    <div className="mt-2 p-2 bg-red-50 text-red-700 text-sm rounded">
-                      {podEnergyError}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* New: X and Y Offset inputs */}
               <div className="flex items-center gap-4">
@@ -1108,8 +923,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </div>
               )}
 
-              <div className={`flex items-center gap-2 transition-opacity duration-200 ${meanMode || podMode ? "opacity-40 pointer-events-none" : ""}`}>
-                {/* File Index controls - faded/disabled when meanMode or podMode is active */}
+              <div className={`flex items-center gap-2 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
+                {/* File Index controls - faded/disabled when meanMode is active */}
                 <label htmlFor="index" className="text-sm font-medium">File Index:</label>
                 <Button 
                   size="sm" 
@@ -1132,8 +947,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               </div>
 
-              <div className={`flex items-center gap-4 mb-4 transition-opacity duration-200 ${meanMode || podMode ? "opacity-40 pointer-events-none" : ""}`}>
-                {/* Frame slider - faded/disabled when meanMode or podMode is active */}
+              <div className={`flex items-center gap-4 mb-4 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
+                {/* Frame slider - faded/disabled when meanMode is active */}
                 <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
                 <input
                   id="frame-slider"
@@ -1159,51 +974,57 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   
               <div className="flex items-center gap-3 flex-wrap">
                 <label htmlFor="type" className="text-sm font-medium">Type:</label>
-                <select id="type" value={type} onChange={e => setType(e.target.value)} className="border rounded px-2 py-1">
-                  {meanMode ? (
-                    statVarsLoading ? (
-                      <option>Loading...</option>
-                    ) : statVars && statVars.length > 0 ? (
-                      statVars.map(v => <option key={v} value={v}>{v}</option>)
+                <Select value={type} onValueChange={v => setType(v)}>
+                  <SelectTrigger id="type"><SelectValue placeholder="Select type" /></SelectTrigger>
+                  <SelectContent>
+                    {meanMode ? (
+                      statVarsLoading ? (
+                        <SelectItem value="loading">Loading...</SelectItem>
+                      ) : statVars && statVars.length > 0 ? (
+                        statVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
+                      ) : (
+                        <SelectItem value="none" disabled>No vars</SelectItem>
+                      )
                     ) : (
-                      <option disabled>No vars</option>
-                    )
-                  ) : (
-                    frameVarsLoading ? (
-                      <option>Loading...</option>
-                    ) : frameVars && frameVars.length > 0 ? (
-                      frameVars.map(v => <option key={v} value={v}>{v}</option>)
-                    ) : (
-                      <>
-                        <option value="ux">ux</option>
-                        <option value="uy">uy</option>
-                      </>
-                    )
-                  )}
-                </select>
+                      frameVarsLoading ? (
+                        <SelectItem value="loading">Loading...</SelectItem>
+                      ) : frameVars && frameVars.length > 0 ? (
+                        frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
+                      ) : (
+                        <>
+                          <SelectItem value="ux">ux</SelectItem>
+                          <SelectItem value="uy">uy</SelectItem>
+                        </>
+                      )
+                    )}
+                  </SelectContent>
+                </Select>
                 <label htmlFor="cmap" className="text-sm font-medium">Colormap:</label>
-                <select id="cmap" value={cmap} onChange={e => setCmap(e.target.value)} className="border rounded px-2 py-1">
-                  <option value="default">default</option>
-                  <option value="viridis">viridis</option>
-                  <option value="plasma">plasma</option>
-                  <option value="inferno">inferno</option>
-                  <option value="magma">magma</option>
-                  <option value="cividis">cividis</option>
-                  <option value="jet">jet</option>
-                  <option value="gray">gray</option>
-                  <option value="bone">bone</option>
-                  <option value="copper">copper</option>
-                  <option value="pink">pink</option>
-                  <option value="spring">spring</option>
-                  <option value="summer">summer</option>
-                  <option value="autumn">autumn</option>
-                  <option value="winter">winter</option>
-                  <option value="hot">hot</option>
-                  <option value="cool">cool</option>
-                  <option value="Wistia">Wistia</option>
-                  <option value="twilight">twilight</option>
-                  <option value="hsv">hsv</option>
-                </select>
+                <Select value={cmap} onValueChange={v => setCmap(v)}>
+                  <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">default</SelectItem>
+                    <SelectItem value="viridis">viridis</SelectItem>
+                    <SelectItem value="plasma">plasma</SelectItem>
+                    <SelectItem value="inferno">inferno</SelectItem>
+                    <SelectItem value="magma">magma</SelectItem>
+                    <SelectItem value="cividis">cividis</SelectItem>
+                    <SelectItem value="jet">jet</SelectItem>
+                    <SelectItem value="gray">gray</SelectItem>
+                    <SelectItem value="bone">bone</SelectItem>
+                    <SelectItem value="copper">copper</SelectItem>
+                    <SelectItem value="pink">pink</SelectItem>
+                    <SelectItem value="spring">spring</SelectItem>
+                    <SelectItem value="summer">summer</SelectItem>
+                    <SelectItem value="autumn">autumn</SelectItem>
+                    <SelectItem value="winter">winter</SelectItem>
+                    <SelectItem value="hot">hot</SelectItem>
+                    <SelectItem value="cool">cool</SelectItem>
+                    <SelectItem value="Wistia">Wistia</SelectItem>
+                    <SelectItem value="twilight">twilight</SelectItem>
+                    <SelectItem value="hsv">hsv</SelectItem>
+                  </SelectContent>
+                </Select>
                 <label htmlFor="run" className="text-sm font-medium">Run:</label>
                 <Input id="run" type="number" min={1} value={run} onChange={e => setRun(Math.max(1, Number(e.target.value)))} className="w-24" />
                 <label className="text-sm font-medium">Lower:</label>
@@ -1361,100 +1182,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-// --- PODModalEnergyPlot component ---
-function PODModalEnergyPlot({
-  energy,
-  selectedMode,
-  onSelectMode,
-  component,
-  onComponentChange,
-}: {
-  energy: any;
-  selectedMode: number;
-  onSelectMode: (k: number) => void;
-  component: "ux" | "uy";
-  onComponentChange: (c: "ux" | "uy") => void;
-}) {
-  // ...existing code for energy plot...
-  let ef: number[] = [];
-  let ec: number[] = [];
-  if (energy.stacked) {
-    ef = energy.energy_fraction || [];
-    ec = energy.energy_cumulative || [];
-  } else if (component === "ux") {
-    ef = energy.energy_fraction_ux || [];
-    ec = energy.energy_cumulative_ux || [];
-  } else {
-    ef = energy.energy_fraction_uy || [];
-    ec = energy.energy_cumulative_uy || [];
-  }
-  const width = 340, height = 120, margin = 32;
-  const barW = Math.max(6, (width - 2 * margin) / Math.max(1, ef.length));
-  return (
-    <div className="my-4">
-      <div className="flex items-center gap-4 mb-2">
-        <span className="font-medium text-sm">Cumulative Energy Breakdown</span>
-        {!energy.stacked && (
-          <select value={component} onChange={e => onComponentChange(e.target.value as "ux" | "uy")} className="border rounded px-2 py-1 text-xs">
-            <option value="ux">ux</option>
-            <option value="uy">uy</option>
-          </select>
-        )}
-      </div>
-      <svg width={width} height={height} style={{ background: "#f9fafb", borderRadius: 8 }}>
-        {ef.map((v, i) => (
-          <rect
-            key={i}
-            x={margin + i * barW}
-            y={height - margin - v * (height - 2 * margin)}
-            width={barW * 0.7}
-            height={v * (height - 2 * margin)}
-            fill="#005fa3"
-            opacity={0.5}
-          />
-        ))}
-        <polyline
-          fill="none"
-          stroke="#e67e22"
-          strokeWidth={2}
-          points={ec.map((v, i) => {
-            const x = margin + i * barW + barW * 0.35;
-            const y = height - margin - v * (height - 2 * margin);
-            return `${x},${y}`;
-          }).join(" ")}
-        />
-        <line x1={margin} y1={height - margin} x2={width - margin} y2={height - margin} stroke="#bbb" />
-        <line x1={margin} y1={margin} x2={margin} y2={height - margin} stroke="#bbb" />
-        {[0, 0.25, 0.5, 0.75, 1].map((v, idx) => {
-          const y = height - margin - v * (height - 2 * margin);
-          return (
-            <g key={idx}>
-              <line x1={margin - 4} y1={y} x2={margin} y2={y} stroke="#888" />
-              <text x={margin - 8} y={y + 4} fontSize={10} textAnchor="end" fill="#444">{Math.round(v * 100)}%</text>
-            </g>
-          );
-        })}
-        {ef.map((_, i) => {
-          const x = margin + i * barW + barW * 0.35;
-          return (
-            <g key={i}>
-              <line x1={x} y1={height - margin} x2={x} y2={height - margin + 4} stroke="#888" />
-              {(i + 1) % Math.ceil(ef.length / 10) === 0 || i === 0 || i === ef.length - 1 ? (
-                <text x={x} y={height - margin + 16} fontSize={10} textAnchor="middle" fill="#444">{i + 1}</text>
-              ) : null}
-            </g>
-          );
-        })}
-        <text x={width / 2} y={height - 4} fontSize={12} textAnchor="middle" fill="#333">Mode</text>
-        <text x={margin - 24} y={margin - 8} fontSize={12} textAnchor="start" fill="#333" transform={`rotate(-90,${margin - 24},${margin - 8})`}>Energy</text>
-      </svg>
-      <div className="text-xs text-gray-500 mt-1">
-        <span>Mode 1: {(ef[0] * 100).toFixed(1)}% | Mode {ef.length}: {(ec[ef.length - 1] * 100).toFixed(1)}% total</span>
-      </div>
     </div>
   );
 }

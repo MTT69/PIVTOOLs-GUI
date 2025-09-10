@@ -144,9 +144,9 @@ export default function Home() {
                   {/* <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Ensemble
                   </TabsTrigger> */}
-                  <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                  {/* <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     POD
-                  </TabsTrigger>
+                  </TabsTrigger> */}
                   {/* <TabsTrigger value="filters" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Filters
                   </TabsTrigger> */}

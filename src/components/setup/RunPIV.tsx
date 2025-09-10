@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 // Polling interval (ms) for backend status checks (3 seconds to look cool)
 const POLL_INTERVAL_MS = 3000;
@@ -436,6 +437,13 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
     alert("Test PIV (dummy): will run PIV for temporal filter batch size in future.");
   };
 
+  // Helper to show just the last segment of a path
+  const basename = (p: string) => {
+    if (!p) return "";
+    const parts = p.replace(/\\/g, "/").split("/");
+    return parts.filter(Boolean).pop() || p;
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -448,66 +456,60 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium">Source Path:</label>
               {sourcePaths.length > 0 ? (
-                <select
-                  value={String(sourcePathIdx)}
-                  onChange={(e) => setSourcePathIdx(Number(e.target.value))}
-                  className="border rounded px-2 py-1"
-                >
-                  {sourcePaths.map((p, i) => {
-                    const norm = p.replace(/\\/g, "/").replace(/\/+$/, "");
-                    const parts = norm.split("/").filter(Boolean);
-                    const lastTwo = parts.length >= 2 ? parts.slice(-2).join("/") : norm;
-                    return (
-                      <option key={i} value={i}>{`${i}: /${lastTwo}`}</option>
-                    );
-                  })}
-                </select>
+                <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
+                  <SelectTrigger id="sourcepath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
+                  <SelectContent>
+                    {sourcePaths.map((p, i) => (
+                      <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               ) : (
                 <Input type="text" value="No source paths available" readOnly className="w-full" />
               )}
             </div>
 
-            {/* Camera selection */}
+            {/* Camera selection, type, colormap */}
             <div className="flex items-center gap-4">
               <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-              <select
-                id="camera"
-                value={camera}
-                onChange={(e) => setCamera(e.target.value)}
-                className="border rounded px-2 py-1"
-              >
-                {cameraOptions.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-
-              {/* Variable type */}
+              <Select value={camera} onValueChange={v => setCamera(v)}>
+                <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                <SelectContent>
+                  {cameraOptions.map((c, i) => (
+                    <SelectItem key={i} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <label htmlFor="varType" className="text-sm font-medium">Type:</label>
-              <select id="varType" value={varType} onChange={(e) => setVarType(e.target.value)} className="border rounded px-2 py-1">
-                {frameVarsLoading ? (
-                  <option>Loading...</option>
-                ) : frameVars && frameVars.length > 0 ? (
-                  frameVars.map(v => <option key={v} value={v}>{v}</option>)
-                ) : (
-                  <>
-                    <option value="ux">ux</option>
-                    <option value="uy">uy</option>
-                  </>
-                )}
-              </select>
-
-              {/* Colormap */}
+              <Select value={varType} onValueChange={v => setVarType(v)}>
+                <SelectTrigger id="varType"><SelectValue placeholder="Select type" /></SelectTrigger>
+                <SelectContent>
+                  {frameVarsLoading ? (
+                    <SelectItem value="loading">Loading...</SelectItem>
+                  ) : frameVars && frameVars.length > 0 ? (
+                    frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
+                  ) : (
+                    <>
+                      <SelectItem value="ux">ux</SelectItem>
+                      <SelectItem value="uy">uy</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
               <label htmlFor="cmap" className="text-sm font-medium">Colormap:</label>
-              <select id="cmap" value={cmap} onChange={(e) => setCmap(e.target.value)} className="border rounded px-2 py-1">
-                <option value="default">default</option>
-                <option value="viridis">viridis</option>
-                <option value="plasma">plasma</option>
-                <option value="inferno">inferno</option>
-                <option value="magma">magma</option>
-                <option value="cividis">cividis</option>
-                <option value="jet">jet</option>
-                <option value="gray">gray</option>
-              </select>
+              <Select value={cmap} onValueChange={v => setCmap(v)}>
+                <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">default</SelectItem>
+                  <SelectItem value="viridis">viridis</SelectItem>
+                  <SelectItem value="plasma">plasma</SelectItem>
+                  <SelectItem value="inferno">inferno</SelectItem>
+                  <SelectItem value="magma">magma</SelectItem>
+                  <SelectItem value="cividis">cividis</SelectItem>
+                  <SelectItem value="jet">jet</SelectItem>
+                  <SelectItem value="gray">gray</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Run and Limits */}

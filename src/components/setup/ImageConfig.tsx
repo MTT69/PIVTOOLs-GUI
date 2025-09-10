@@ -373,10 +373,6 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
             <Label className="font-semibold">Vector Pattern</Label>
             <Input className="font-mono mt-2" value={vectorPattern} onChange={e => { setVectorPattern(e.target.value); sync(["images", "vector_format"], [e.target.value]); }} />
           </div>
-          <div>
-            <Label className="font-semibold">Calibration Pattern</Label>
-            <Input className="font-mono mt-2" value={calibrationPattern} onChange={e => { setCalibrationPattern(e.target.value); sync(["calibration", "image_format"], e.target.value); }} />
-          </div>
           <div className="text-xs text-muted-foreground flex items-center gap-2">
             <RefreshCcw className="h-3 w-3" /> {savingMeta || "Autosaves ~0.5s after changes"}
           </div>

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type DType = "uint8" | "uint16";
 type RawImage = {
@@ -698,9 +699,37 @@ function PolygonMaskEditor({
 	);
 }
 
+const basename = (p: string) => {
+  if (!p) return "";
+  const parts = p.replace(/\\/g, "/").split("/");
+  return parts.filter(Boolean).pop() || p;
+};
+
+// Helper to load source paths from localStorage
+function useSourcePaths() {
+  const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
+    try {
+      return JSON.parse(typeof window !== "undefined" ? localStorage.getItem("piv_source_paths") || "[]" : "[]");
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "piv_source_paths") {
+        try { setSourcePaths(JSON.parse(e.newValue || "[]")); } catch {}
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  return [sourcePaths, setSourcePaths] as const;
+}
+
 const Masking: React.FC<{ config?: any }> = ({ config }) => {
-	const [basePathIdx, setBasePathIdx] = useState(0);
-	const [camera, setCamera] = useState("Cam1");
+  const [sourcePaths] = useSourcePaths();
+  const [basePathIdx, setBasePathIdx] = useState(0);
+  const [camera, setCamera] = useState("Cam1");
 	// derive camera options from config if provided
 	const cameraOptions: string[] = (() => {
 		// Prefer paths.camera_numbers (array with first element number of cameras)
@@ -806,24 +835,32 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 				<CardHeader>
 					<CardTitle>Raw Image Viewer</CardTitle>
 					<CardDescription>
-						Load and view raw images. Select base path, camera, image index, and frame. Create mask polygons and export.
+						Load and view raw images. Select source path, camera, image index, and frame. Create mask polygons and export.
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
 						<div>
-							<Label htmlFor="basepath">Base Path Index</Label>
-							<Input id="basepath" type="number" value={basePathIdx} min={0} onChange={e => setBasePathIdx(Number(e.target.value))} />
+							<Label htmlFor="basepath">Source Path</Label>
+							<Select value={String(basePathIdx)} onValueChange={v => setBasePathIdx(Number(v))}>
+								<SelectTrigger id="basepath"><SelectValue placeholder="Pick base path" /></SelectTrigger>
+								<SelectContent>
+									{sourcePaths.map((p, i) => (
+										<SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
 						</div>
 						<div>
 							<Label htmlFor="camera">Camera</Label>
-							<div>
-								<select id="camera" value={camera} onChange={e => setCamera(e.target.value)} className="border rounded px-2 py-1">
-									{cameraOptions.map((c) => (
-										<option key={c} value={c}>{c}</option>
+							<Select value={camera} onValueChange={v => setCamera(v)}>
+								<SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+								<SelectContent>
+									{cameraOptions.map((c, i) => (
+										<SelectItem key={i} value={c}>{c}</SelectItem>
 									))}
-								</select>
-							</div>
+								</SelectContent>
+							</Select>
 						</div>
 						<div>
 							<Label htmlFor="index">Image Index</Label>

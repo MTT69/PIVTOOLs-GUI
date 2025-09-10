@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function VideoMaker({ backendUrl = '/backend', config }: { backendUrl?: string; config?: any }) {
   // Directory / base paths
@@ -44,11 +45,27 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
   const [upper, setUpper] = useState<string>('');
   const [merged, setMerged] = useState<boolean>(false);
   const [upscale, setUpscale] = useState<number>(1);
+  const [crf, setCrf] = useState<number>(18);
+  const [ditherStrength, setDitherStrength] = useState<number>(1.0 / 2048.0);
 
   // Add new state for handling the video creation process
   const [creating, setCreating] = useState<boolean>(false);
-  const [videoResult, setVideoResult] = useState<{ success?: boolean; message?: string } | null>(null);
-  const [videoStatus, setVideoStatus] = useState<{ processing: boolean; progress: number; status: string } | null>(null);
+  const [videoResult, setVideoResult] = useState<{ success?: boolean; message?: string; out_path?: string } | null>(null);
+  const [videoStatus, setVideoStatus] = useState<{ 
+    processing: boolean; 
+    progress: number; 
+    status: string; 
+    message?: string;
+    out_path?: string;
+    computed_limits?: {
+      lower: number;
+      upper: number;
+      actual_min: number;
+      actual_max: number;
+      percentile_based: boolean;
+    };
+  } | null>(null);
+  const [showTestOption, setShowTestOption] = useState<boolean>(false);
 
   // Effective directory: prefer selected base path if available
   const effectiveDir = useMemo(() => {
@@ -83,27 +100,36 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
   };
 
   // Assemble params (but do not send anything yet)
-  const buildParams = () => ({
-    base_path: effectiveDir,
-    camera: camera.replace(/[^\d]/g, '') || '1',
-    var: type,
-    run: String(run),
-    merged: merged ? '1' : '0',
-    cmap,
-    lower,
-    upper,
-    num_images: config?.images?.num_images || 0,
-    upscale,
-  });
+  const buildParams = () => {
+    const params: any = {
+      base_path: effectiveDir,
+      camera: camera.replace(/[^\d]/g, '') || '1',
+      var: type,
+      run: String(run),
+      merged: merged ? '1' : '0',
+      cmap,
+      lower,
+      upper,
+      num_images: config?.images?.num_images || 0,
+      upscale,
+      crf,
+      dither_strength: ditherStrength,
+    };
+    return params;
+  };
 
   // Function to handle video creation
-  const handleCreateVideo = async () => {
+  const handleCreateVideo = async (isTest: boolean = false) => {
     setCreating(true);
     setVideoResult(null);
     setVideoStatus(null);
     
     try {
       const params = buildParams();
+      if (isTest) {
+        params.test_mode = true;
+        params.test_frames = 50;
+      }
       const url = `${backendUrl}/video/start_video`;
       
       const response = await fetch(url, {
@@ -117,37 +143,43 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
       const result = await response.json();
       
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to create video');
+        throw new Error(result.error || 'Failed to start video creation');
       }
       
-      // Start polling status after initial delay
-      setTimeout(() => {
-        const pollStatus = () => {
-          fetch(`${backendUrl}/video/video_status`)
-            .then(res => res.json())
-            .then(status => {
-              setVideoStatus(status);
-              if (status.processing) {
-                setTimeout(pollStatus, 1000);
+      // Start polling status immediately
+      const pollStatus = () => {
+        fetch(`${backendUrl}/video/video_status`)
+          .then(res => res.json())
+          .then(status => {
+            setVideoStatus(status);
+            if (status.processing) {
+              setTimeout(pollStatus, 500); // Poll every 500ms for smoother progress
+            } else {
+              setCreating(false);
+              if (status.error) {
+                setVideoResult({
+                  success: false,
+                  message: status.error
+                });
               } else {
-                setCreating(false);
                 setVideoResult({
                   success: true,
-                  message: 'Video creation completed.'
+                  message: isTest ? 'Test video created successfully!' : 'Video creation completed!',
+                  out_path: status.out_path
                 });
               }
-            })
-            .catch(err => {
-              console.error('Polling error', err);
-              setCreating(false);
-              setVideoResult({
-                success: false,
-                message: 'Error polling status.'
-              });
+            }
+          })
+          .catch(err => {
+            console.error('Polling error', err);
+            setCreating(false);
+            setVideoResult({
+              success: false,
+              message: 'Error polling status.'
             });
-        };
-        pollStatus();
-      }, 3000);
+          });
+      };
+      pollStatus();
     } catch (error: any) {
       setVideoResult({
         success: false,
@@ -184,6 +216,13 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     }
   };
 
+  // Helper to show just the last segment of a path
+  const basename = (p: string) => {
+    if (!p) return "";
+    const parts = p.replace(/\\/g, "/").split("/");
+    return parts.filter(Boolean).pop() || p;
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -197,21 +236,14 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium">Base Path:</label>
                 {basePaths.length > 0 ? (
-                  <>
-                    <select
-                      value={String(basePathIdx)}
-                      onChange={(e) => setBasePathIdx(Number(e.target.value))}
-                      className="border rounded px-2 py-1 flex-1"
-                    >
-                      {basePaths.map((p, i) => {
-                        // Show last two segments of the path
-                        const norm = p.replace(/\\/g, "/").replace(/\/+$/, "");
-                        const parts = norm.split("/").filter(Boolean);
-                        const lastTwo = parts.length >= 2 ? parts.slice(-2).join("/") : norm;
-                        return <option key={i} value={i}>{`${i}: /${lastTwo}`}</option>;
-                      })}
-                    </select>
-                  </>
+                  <Select value={String(basePathIdx)} onValueChange={v => setBasePathIdx(Number(v))}>
+                    <SelectTrigger id="basepath"><SelectValue placeholder="Pick base path" /></SelectTrigger>
+                    <SelectContent>
+                      {basePaths.map((p, i) => (
+                        <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 ) : (
                   <>
                     <Input
@@ -237,17 +269,14 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               {/* Camera selection and merged checkbox */}
               <div className="flex items-center gap-4">
                 <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                <select
-                  id="camera"
-                  value={camera}
-                  onChange={e => setCamera(e.target.value)}
-                  className="border rounded px-2 py-1"
-                >
-                  {cameraOptions.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-
+                <Select value={camera} onValueChange={v => setCamera(v)}>
+                  <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                  <SelectContent>
+                    {cameraOptions.map((c, i) => (
+                      <SelectItem key={i} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {/* Merged Data checkbox */}
                 <label className="flex items-center gap-2 text-sm font-medium">
                   <input
@@ -263,45 +292,43 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Type (variable)</label>
-                  <select 
-                    value={type} 
-                    onChange={(e) => setType(e.target.value)}
-                    className="w-full border rounded px-2 py-1"
-                  >
-                    <option value="ux">ux</option>
-                    <option value="uy">uy</option>
-                    <option value="mag">mag</option>
-                  </select>
+                  <Select value={type} onValueChange={v => setType(v)}>
+                    <SelectTrigger id="type"><SelectValue placeholder="Select type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ux">ux</SelectItem>
+                      <SelectItem value="uy">uy</SelectItem>
+                      <SelectItem value="mag">mag</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Colormap</label>
-                  <select 
-                    value={cmap} 
-                    onChange={(e) => setCmap(e.target.value)}
-                    className="w-full border rounded px-2 py-1"
-                  >
-                    <option value="default">default</option>
-                    <option value="viridis">viridis</option>
-                    <option value="plasma">plasma</option>
-                    <option value="inferno">inferno</option>
-                    <option value="magma">magma</option>
-                    <option value="cividis">cividis</option>
-                    <option value="jet">jet</option>
-                    <option value="gray">gray</option>
-                    <option value="bone">bone</option>
-                    <option value="copper">copper</option>
-                    <option value="pink">pink</option>
-                    <option value="spring">spring</option>
-                    <option value="summer">summer</option>
-                    <option value="autumn">autumn</option>
-                    <option value="winter">winter</option>
-                    <option value="hot">hot</option>
-                    <option value="cool">cool</option>
-                    <option value="Wistia">Wistia</option>
-                    <option value="twilight">twilight</option>
-                    <option value="hsv">hsv</option>
-                  </select>
+                  <Select value={cmap} onValueChange={v => setCmap(v)}>
+                    <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">default</SelectItem>
+                      <SelectItem value="viridis">viridis</SelectItem>
+                      <SelectItem value="plasma">plasma</SelectItem>
+                      <SelectItem value="inferno">inferno</SelectItem>
+                      <SelectItem value="magma">magma</SelectItem>
+                      <SelectItem value="cividis">cividis</SelectItem>
+                      <SelectItem value="jet">jet</SelectItem>
+                      <SelectItem value="gray">gray</SelectItem>
+                      <SelectItem value="bone">bone</SelectItem>
+                      <SelectItem value="copper">copper</SelectItem>
+                      <SelectItem value="pink">pink</SelectItem>
+                      <SelectItem value="spring">spring</SelectItem>
+                      <SelectItem value="summer">summer</SelectItem>
+                      <SelectItem value="autumn">autumn</SelectItem>
+                      <SelectItem value="winter">winter</SelectItem>
+                      <SelectItem value="hot">hot</SelectItem>
+                      <SelectItem value="cool">cool</SelectItem>
+                      <SelectItem value="Wistia">Wistia</SelectItem>
+                      <SelectItem value="twilight">twilight</SelectItem>
+                      <SelectItem value="hsv">hsv</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
@@ -359,6 +386,31 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">CRF (quality, lower=better)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={51}
+                    value={crf}
+                    onChange={e => setCrf(Number(e.target.value) || 18)}
+                    className="w-20 text-center"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Dither Strength</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.0001}
+                    value={ditherStrength}
+                    onChange={e => setDitherStrength(Number(e.target.value) || 0)}
+                    className="w-20 text-center"
+                  />
+                </div>
+              </div>
+
               {/* Display result message */}
               {videoResult && (
                 <div className={`w-full p-3 mb-3 rounded border ${
@@ -367,14 +419,49 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     : 'border-red-200 bg-red-50 text-red-700'
                 } text-sm`}>
                   {videoResult.message}
+                  
+                  {/* Display computed limits if available */}
+                  {videoStatus?.computed_limits && (
+                    <div className="mt-2 p-2 bg-white bg-opacity-50 rounded text-xs">
+                      <div className="font-medium mb-1">Video Limits:</div>
+                      <div>Lower: {videoStatus.computed_limits.lower.toFixed(3)} | Upper: {videoStatus.computed_limits.upper.toFixed(3)}</div>
+                      <div>Data range: {videoStatus.computed_limits.actual_min.toFixed(3)} to {videoStatus.computed_limits.actual_max.toFixed(3)}</div>
+                      {videoStatus.computed_limits.percentile_based && (
+                        <div className="text-gray-600 italic">Limits auto-computed from 5th-95th percentiles</div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {videoResult.out_path && (
+                    <div className="mt-2">
+                      <video
+                        controls
+                        className="w-full max-w-md rounded border"
+                        src={`${backendUrl}/video/download?path=${encodeURIComponent(videoResult.out_path)}`}
+                      >
+                        Your browser does not support the video tag.
+                      </video>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Loading spinner */}
+              {/* Progress bar and status */}
               {videoStatus && videoStatus.processing && (
-                <div className="w-full flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-soton-blue"></div>
-                  <div className="text-sm">Processing...</div>
+                <div className="w-full space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Processing video...</span>
+                    <span>{videoStatus.progress}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div 
+                      className="bg-soton-blue h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${videoStatus.progress}%` }}
+                    />
+                  </div>
+                  {videoStatus.message && (
+                    <div className="text-xs text-gray-600">{videoStatus.message}</div>
+                  )}
                 </div>
               )}
 
@@ -388,16 +475,19 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     Cancel
                   </Button>
                   <Button 
-                    className="bg-soton-blue" 
-                    onClick={handleCreateVideo}
+                    variant="outline"
+                    onClick={() => handleCreateVideo(true)}
                     disabled={creating || videoStatus?.processing}
                   >
-                    {creating ? "Starting..." : videoStatus?.processing ? "Processing..." : "Create Video"}
+                    Test Video (50 frames)
                   </Button>
-                </div>
-                <div className="mt-2 text-xs bg-gray-100 p-2 rounded">
-                  <div className="font-medium mb-1">Request Parameters:</div>
-                  <pre className="overflow-auto">{JSON.stringify(buildParams(), null, 2)}</pre>
+                  <Button 
+                    className="bg-soton-blue" 
+                    onClick={() => handleCreateVideo(false)}
+                    disabled={creating || videoStatus?.processing}
+                  >
+                    {creating ? "Starting..." : videoStatus?.processing ? "Processing..." : "Create Full Video"}
+                  </Button>
                 </div>
               </div>
             </div>
