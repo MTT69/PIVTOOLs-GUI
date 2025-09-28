@@ -10,14 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 // Polling interval (ms) for backend status checks (3 seconds to look cool)
 const POLL_INTERVAL_MS = 3000;
 
-/**
- * RunPIV component
- *
- * NOTE: Added a "Test PIV" button (dummy) which will later be implemented to
- * run PIV only for the temporal filter / batch length (e.g. the number of frames
- * implied by the active temporal filter such as time/POD). For now it simply
- * notifies the user. See handleTestPIV for TODO details.
- */
 const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
     try {
