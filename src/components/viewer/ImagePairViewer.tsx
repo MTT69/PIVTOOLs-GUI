@@ -12,14 +12,13 @@ import { useImagePair } from '@/hooks/useImagePair';
 import { useImageFilters } from '@/hooks/useImageFilters';
 import ZoomableCanvas from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
+import { basename } from "@/lib/utils";
 
 interface ImagePairViewerProps {
   backendUrl?: string;
   config?: any;
   onFiltersChange?: (filters: any[]) => Promise<void>;
 }
-
-const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
 
 export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange }: ImagePairViewerProps) {
   // --- UI State ---

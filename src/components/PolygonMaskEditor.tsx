@@ -665,31 +665,4 @@ function PolygonMaskEditor({
 	);
 }
 
-const basename = (p: string) => {
-  if (!p) return "";
-  const parts = p.replace(/\\/g, "/").split("/");
-  return parts.filter(Boolean).pop() || p;
-};
-
-// Helper to load source paths from localStorage
-function useSourcePaths() {
-  const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
-    try {
-      return JSON.parse(typeof window !== "undefined" ? localStorage.getItem("piv_source_paths") || "[]" : "[]");
-    } catch {
-      return [];
-    }
-  });
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "piv_source_paths") {
-        try { setSourcePaths(JSON.parse(e.newValue || "[]")); } catch {}
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-  return [sourcePaths, setSourcePaths] as const;
-}
-
 export default PolygonMaskEditor;

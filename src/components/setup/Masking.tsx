@@ -6,12 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useImagePair } from "@/hooks/useImagePair";
 import PolygonMaskEditor from "@/components/PolygonMaskEditor";
-
-const basename = (p: string) => {
-  if (!p) return "";
-  const parts = p.replace(/\\/g, "/").split("/");
-  return parts.filter(Boolean).pop() || p;
-};
+import { basename } from "@/lib/utils";
 
 const Masking: React.FC<{ config?: any }> = ({ config }) => {
   const sourcePaths = config?.paths?.source_paths || [];
