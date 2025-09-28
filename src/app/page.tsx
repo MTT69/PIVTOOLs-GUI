@@ -27,6 +27,8 @@ export default function Home() {
   // Don't read localStorage during render — keep server and client markup identical.
   const [seenHero, setSeenHero] = useState<boolean>(false);
   const [mounted, setMounted] = useState(false);
+  const [config, setConfig] = useState<any>(emptyConfig);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   useEffect(() => {
     // Clear localStorage hero flag if FORCE_RESET_HERO is true
@@ -50,29 +52,49 @@ export default function Home() {
     }
     setMounted(true);
   }, []);
-  const [config, setConfig] = useState<any>(emptyConfig);
+
   // Load YAML config from backend once on mount
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         const res = await fetch('/backend/config');
+        if (!res.ok) {
+          if (!cancelled) {
+            setConfigError('Cannot connect to backend server. Please ensure the server is running.');
+          }
+          return;
+        }
         const json = await res.json();
-        if (!cancelled && res.ok) {
-          // Map YAML structure to frontend structure, preserving all fields in paths
+        if (!cancelled) {
+          // Map YAML structure to frontend structure, preserving all fields
           const mapped = {
             ...json,
             paths: {
-              ...json.paths,
-              base_dir: json.paths?.base_paths || [],
-              source: json.paths?.source_paths || [],
+              base_paths: json.paths?.base_paths || [],
+              source_paths: json.paths?.source_paths || [],
+              camera_numbers: json.paths?.camera_numbers || [],
             },
+            images: json.images || {},
+            batches: json.batches || {},
+            processing: json.processing || {},
+            post_processing: json.post_processing || [],
+            plots: json.plots || {},
+            videos: json.videos || [],
+            statistics_extraction: json.statistics_extraction ?? null,
+            instantaneous_piv: json.instantaneous_piv || {},
+            ensemble_piv: json.ensemble_piv || {},
+            calibration_format: json.calibration_format || {},
+            calibration: json.calibration || {},
+            filters: json.filters || [],
           };
           setConfig(mapped);
+          setConfigError(null);
         }
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to load backend config', e);
+        if (!cancelled) {
+          setConfigError('Cannot connect to backend server. Please ensure the server is running.');
+        }
       }
     }
     load();
@@ -121,6 +143,14 @@ export default function Home() {
             setSeenHero(true);
             setActiveTab('setup');
           }} />
+        ) : configError ? (
+          <div className="max-w-2xl mx-auto px-4 pt-24 pb-16">
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-6 rounded-xl shadow-lg">
+              <h2 className="text-2xl font-bold mb-2">Backend Server Not Detected</h2>
+              <p>{configError}</p>
+              <p className="mt-2 text-gray-700">The frontend cannot run without the backend server. Please start the backend and reload this page.</p>
+            </div>
+          </div>
         ) : (
           <div className="max-w-7xl mx-auto px-4 pt-24 pb-16">
             <div className="bg-white rounded-xl shadow-lg p-6 mb-6">

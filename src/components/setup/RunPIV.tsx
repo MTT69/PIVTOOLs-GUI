@@ -1,575 +1,163 @@
+// src/components/RunPIV.tsx
+
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { usePivRunner } from '@/hooks/usePivRunner'; 
 
-// Polling interval (ms) for backend status checks (3 seconds to look cool)
-const POLL_INTERVAL_MS = 3000;
+// Helper to display a user-friendly path name
+const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
 
 const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
-  const [sourcePaths, setSourcePaths] = useState<string[]>(() => {
-    try {
-      return JSON.parse(
-        typeof window !== "undefined"
-          ? localStorage.getItem("piv_source_paths") || "[]"
-          : "[]"
-      );
-    } catch {
-      return [];
-    }
-  });
+  // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
-  // derive camera options from config if provided (same logic as Masking/VectorViewer)
-  const cameraOptions: string[] = (() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
-  })();
-
-  // ensure camera state reflects available options
-  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "Cam1");
-  useEffect(() => {
-    if (cameraOptions.length === 0) return;
-    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions.length, cameraOptions[0]]);
+  const [camera, setCamera] = useState<string>("Cam1");
   const [varType, setVarType] = useState<string>("ux");
   const [cmap, setCmap] = useState<string>("default");
-  const [run, setRun] = useState<number>(1);
+  const [runNum, setRunNum] = useState<number>(1);
   const [lowerLimit, setLowerLimit] = useState<string>("");
   const [upperLimit, setUpperLimit] = useState<string>("");
-  // Refs to always read the latest limits inside async/interval callbacks
-  const lowerLimitRef = useRef<string>(lowerLimit);
-  const upperLimitRef = useRef<string>(upperLimit);
-  // Refs for other settings so interval callbacks/readers always see latest values
-  const sourcePathIdxRef = useRef<number>(sourcePathIdx);
-  const cameraRef = useRef<string>(camera);
-  const varTypeRef = useRef<string>(varType);
-  const cmapRef = useRef<string>(cmap);
-  const runRef = useRef<number>(run);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState<number>(0);
-  const [isPolling, setIsPolling] = useState<boolean>(false);
-  const [polling, setPolling] = useState<ReturnType<typeof setInterval> | null>(null);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollOnceRef = useRef<(() => Promise<void>) | null>(null);
-  const uncalPollFnRef = useRef<(() => Promise<void>) | null>(null);
-
-  // Uncalibrated preview polling
-  const [expectedCount, setExpectedCount] = useState<number | null>(null);
-  const nextUncalIndexRef = useRef<number>(1);
-  const uncalPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Status image state
-  const [statusImageSrc, setStatusImageSrc] = useState<string | null>(null);
-  const [statusImageLoading, setStatusImageLoading] = useState(false);
-  const [statusImageError, setStatusImageError] = useState<string | null>(null);
   const [showStatusImage, setShowStatusImage] = useState(true);
-  // frame variable list (populated once when first status image arrives)
-  const [frameVars, setFrameVars] = useState<string[] | null>(null);
+  const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
-  const [frameVarsError, setFrameVarsError] = useState<string | null>(null);
 
+  // --- Derived State (memoized for performance) ---
+  const cameraOptions = useMemo(() => {
+    const numCameras = config?.paths?.camera_numbers?.[0] ?? 1;
+    return Array.from({ length: numCameras }, (_, i) => `Cam${i + 1}`);
+  }, [config]);
+
+  const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
+
+  // --- PIV Logic from Custom Hook ---
+  const { isLoading, isPolling, progress, statusImage, run, cancel } = usePivRunner({
+    sourcePathIdx, camera, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage
+  });
+
+  // --- Effects for UI Sync ---
+  // Only fetch available variables when PIV is running
   useEffect(() => {
-    lowerLimitRef.current = lowerLimit;
-  }, [lowerLimit]);
-
-  useEffect(() => {
-    upperLimitRef.current = upperLimit;
-  }, [upperLimit]);
-
-  useEffect(() => { sourcePathIdxRef.current = sourcePathIdx; }, [sourcePathIdx]);
-  useEffect(() => { cameraRef.current = camera; }, [camera]);
-  useEffect(() => { varTypeRef.current = varType; }, [varType]);
-  useEffect(() => { cmapRef.current = cmap; }, [cmap]);
-  useEffect(() => { runRef.current = run; }, [run]);
-
-  // This function will be updated on every render with the latest state
-  useEffect(() => {
-    uncalPollFnRef.current = async () => {
-      const idx = nextUncalIndexRef.current;
-      // If we know expected and already beyond it, stop
-      if (expectedCount && idx > expectedCount) {
-        stopUncalPolling();
-        return;
-      }
+    if (!isPolling) return;
+    const fetchFrameVars = async () => {
+      setFrameVarsLoading(true);
       try {
-        const params = new URLSearchParams();
-        params.set("basepath_idx", String(sourcePathIdx));
-        params.set("camera", camera);
-        params.set("index", String(idx));
-        params.set("var", varType); // Use latest varType
-        if (cmap && cmap !== "default") params.set("cmap", cmap);
-  if (run > 0) params.set("run", String(run)); // Use latest run
-  // Read from refs so interval callbacks always use the freshest values
-  if (lowerLimitRef.current.trim()) params.set("lower_limit", lowerLimitRef.current);
-  if (upperLimitRef.current.trim()) params.set("upper_limit", upperLimitRef.current);
-  const res = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (json.image) {
-            setStatusImageSrc(json.image);
-            // If backend returned meta.run, update local run state to keep UI in sync
-            if (json.meta && json.meta.run != null) {
-              const parsed = Number(json.meta.run);
-              if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
-            }
-            // Only update progress if we have an expectedCount (from backend)
-            setProgress((prev) => {
-              if (!expectedCount) return prev; // Do not increment progress until backend provides count
-              const newP = Math.round((idx / expectedCount) * 100);
-              return newP > prev ? newP : prev;
-            });
-            // advance to next
-            nextUncalIndexRef.current = idx + 1;
-            // If we've reached expected count, stop
-            if (expectedCount && idx >= expectedCount) stopUncalPolling();
-          }
-        }
-      } catch (err) {
-        console.error("uncal polling error", err);
-      }
-    };
-  }, [sourcePathIdx, camera, varType, cmap, run, lowerLimit, upperLimit, expectedCount]);
-
-  const startPolling = () => {
-    // Stop existing polling first
-    stopPolling({ resetProgress: false });
-    const pollOnce = async () => {
-      try {
-        // Use the existing get_uncalibrated_count endpoint instead of a separate check_status endpoint.
-  const params = new URLSearchParams();
-  params.set("basepath_idx", String(sourcePathIdxRef.current));
-  params.set("camera", cameraRef.current);
-  params.set("var", varTypeRef.current);
-  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
-
-  const statusResponse = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
+        const params = new URLSearchParams({
+          basepath_idx: String(sourcePathIdx),
+          camera: camera,
+          frame: '1',
+          is_uncalibrated: '1',
         });
-        if (!statusResponse.ok) return;
-        const statusData = await statusResponse.json();
-        // Prefer percent if provided by backend, otherwise leave progress as-is.
-        const percent = typeof statusData.percent === "number" ? statusData.percent : Number(statusData.percent ?? statusData.progress ?? 0);
-        const newProgress = Number.isFinite(percent) ? Math.min(Math.max(Math.round(percent), 0), 100) : 0;
-        setProgress((prev) => (newProgress > prev ? newProgress : prev));
-        if (showStatusImage) await fetchStatusImage();
-        if (newProgress >= 100) stopPolling();
-      } catch (err) {
-        // Log only
-        console.error("Polling error", err);
-      }
-    };
-    pollOnceRef.current = pollOnce;
-    const interval = setInterval(pollOnce, POLL_INTERVAL_MS);
-    pollingRef.current = interval;
-    setPolling(interval);
-    setIsPolling(true);
-    pollOnce();
-  };
-
-  const stopPolling = (options?: { resetProgress?: boolean }) => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    setPolling(null);
-    setIsPolling(false);
-    if (options?.resetProgress) setProgress(0);
-  };
-
-  useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
-
-  useEffect(() => () => { if (uncalPollingRef.current) clearInterval(uncalPollingRef.current); }, []);
-
-  const uncalCountPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const startUncalCountPolling = () => {
-    stopUncalCountPolling();
-    const pollUncalCount = async () => {
-      try {
-        const params = new URLSearchParams();
-        params.set("basepath_idx", String(sourcePathIdx));
-        params.set("camera", camera);
-        params.set("var", varType);
-        if (cmap && cmap !== "default") params.set("cmap", cmap);
-        const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
-        if (cntRes.ok) {
-          const cntJson = await cntRes.json();
-          const newCount = Number(cntJson.count) || null;
-          setExpectedCount(newCount);
-          if (typeof cntJson.percent === "number") {
-            setProgress(Math.round(cntJson.percent));
-          }
-        }
-      } catch (e) {
-        // Silent fail
-      }
-    };
-    pollUncalCount(); // Initial call
-    uncalCountPollingRef.current = setInterval(pollUncalCount, POLL_INTERVAL_MS);
-  };
-
-  const stopUncalCountPolling = () => {
-    if (uncalCountPollingRef.current) {
-      clearInterval(uncalCountPollingRef.current);
-      uncalCountPollingRef.current = null;
-    }
-  };
-
-  useEffect(() => () => { if (uncalCountPollingRef.current) clearInterval(uncalCountPollingRef.current); }, []);
-
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "piv_source_paths") {
-        try { setSourcePaths(JSON.parse(e.newValue || "[]")); } catch {}
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
-  // Fetch available variables in the first frame for the selected source path / camera
-  const fetchFrameVars = async (frameIndex = 1) => {
-    setFrameVarsLoading(true);
-    setFrameVarsError(null);
-    try {
-      const params = new URLSearchParams();
-      params.set("basepath_idx", String(sourcePathIdx));
-  params.set("frame", String(frameIndex));
-  params.set("camera", camera);
-  // merged not exposed in this component but keep consistent default 0
-  params.set("merged", "0");
-  // Indicate we are querying uncalibrated .mat for RunPIV
-  params.set("is_uncalibrated", "1");
-      const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch frame vars (${res.status})`);
-  const rawVars = Array.isArray(json.vars) ? json.vars.map(String) : [];
-  // Only allow this fixed set in RunPIV
-  const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
-  const filtered = rawVars.filter((v: string) => allowed.includes(v));
-  // If backend did not provide any of the allowed vars, still expose the fixed list as fallback
-  const finalVars = filtered.length > 0 ? filtered : allowed;
-  setFrameVars(finalVars);
-  if (finalVars.length > 0) setVarType(prev => finalVars.includes(prev) ? prev : finalVars[0]);
-    } catch (e: any) {
-      setFrameVarsError(e?.message ?? "Unknown error");
-      setFrameVars(null);
-    } finally {
-      setFrameVarsLoading(false);
-    }
-  };
-
-  const handleRunPIV = async () => {
-    stopPolling({ resetProgress: true });
-    stopUncalPolling();
-    stopUncalCountPolling();
-    setLoading(true);
-    try {
-      const response = await fetch("/backend/run_piv", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourcePathIdx: sourcePathIdx,
-          camera,
-        }),
-      });
-      if (!response.ok) throw new Error(`Failed: ${response.statusText}`);
-      const data = await response.json();
-      console.log("Run PIV response", data);
-      // Query backend for existing uncalibrated .mat count (may be 0)
-  const params = new URLSearchParams();
-  params.set("basepath_idx", String(sourcePathIdxRef.current));
-  params.set("camera", cameraRef.current);
-  params.set("var", varTypeRef.current);
-  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
-  const cntRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
-      let exp: number | null = null;
-      if (cntRes.ok) {
-        try {
-          const cntJson = await cntRes.json();
-          exp = Number(cntJson.count) || null;
-          // If backend provides a percent, seed the progress bar with it
-          if (typeof cntJson.percent === "number") setProgress(Math.round(cntJson.percent));
-          else setProgress(0); // Explicitly set to 0 if no percent from backend
-        } catch {
-          setProgress(0); // Explicitly set to 0 if error parsing backend response
-        }
-      } else {
-        setProgress(0); // Explicitly set to 0 if backend does not respond
-      }
-      // Start lightweight uncalibrated preview polling (3s interval)
-      setExpectedCount(exp);
-      nextUncalIndexRef.current = 1;
-      startUncalPolling();
-      // --- Ensure main polling is started for progress updates every 3s ---
-      startPolling();
-      // --- Start polling uncalibrated count every 3s ---
-      startUncalCountPolling();
-    } catch (e: any) {
-      alert(e.message || "Error starting PIV");
-    } finally { setLoading(false); }
-  };
-
-  const handleCancelRun = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch("/backend/cancel_run", { method: "POST" });
-      if (!response.ok) throw new Error(`Failed: ${response.statusText}`);
-      await response.json().catch(() => ({}));
-      stopPolling({ resetProgress: true });
-      stopUncalPolling();
-      stopUncalCountPolling();
-    } catch (e: any) {
-      alert(e.message || "Error cancelling");
-    } finally { setLoading(false); }
-  };
-
-  const fetchStatusImage = async () => {
-    if (!sourcePaths[sourcePathIdx]) return;
-    setStatusImageLoading(true);
-    setStatusImageError(null);
-    try {
-  const params = new URLSearchParams();
-  params.set("basepath_idx", String(sourcePathIdxRef.current));
-  params.set("camera", cameraRef.current);
-  params.set("var", varTypeRef.current);
-  if (cmapRef.current && cmapRef.current !== "default") params.set("cmap", cmapRef.current);
-  if (runRef.current > 0) params.set("run", String(runRef.current));
-  // Use refs so this helper uses the latest values like the uncal polling path
-  if (lowerLimitRef.current.trim()) params.set("lower_limit", lowerLimitRef.current);
-  if (upperLimitRef.current.trim()) params.set("upper_limit", upperLimitRef.current);
-      // default index for a quick preview (use 1 if nothing else)
-  params.set("index", String(nextUncalIndexRef.current || 1));
-      // FIX: use /backend/plot/get_uncalibrated_image instead of /plot/get_uncalibrated_image
-      const res = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}`);
-      if (!res.ok) throw new Error(`Status image failed: ${res.status}`);
-      const contentType = res.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
+        const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
+        if (!res.ok) throw new Error('Failed to fetch variables');
         const json = await res.json();
-        setStatusImageSrc(json.image ?? null);
-        if (json.meta && json.meta.run != null) {
-          const parsed = Number(json.meta.run);
-          if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+        const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
+        const filtered = (json.vars || []).filter((v: string) => allowed.includes(v));
+        setFrameVars(filtered.length > 0 ? filtered : allowed);
+        if (filtered.length > 0 && !filtered.includes(varType)) {
+          setVarType(filtered[0]);
         }
-      } else {
-        const blob = await res.blob();
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-            // strip prefix
-          const base64Content = base64data.split(",")[1] || base64data;
-          setStatusImageSrc(base64Content);
-        };
-        reader.readAsDataURL(blob);
-      }
-    } catch (e: any) {
-      setStatusImageError(e.message || "Unknown error");
-    } finally { setStatusImageLoading(false); }
-  };
-
-  // When the first status image arrives, try to populate available frame variables
-  useEffect(() => {
-    if (statusImageSrc && !frameVars && !frameVarsLoading) {
-      void fetchFrameVars(1).catch(() => {});
-    }
-  }, [statusImageSrc, frameVars, frameVarsLoading]);
-
-  // Uncalibrated preview polling helpers
-  const startUncalPolling = () => {
-    stopUncalPolling();
-    const poll = async () => {
-      if (uncalPollFnRef.current) {
-        await uncalPollFnRef.current();
+      } catch (error) {
+        console.error("Error fetching frame variables:", error);
+      } finally {
+        setFrameVarsLoading(false);
       }
     };
-    poll(); // Initial call
-    const id = setInterval(poll, POLL_INTERVAL_MS);
-    uncalPollingRef.current = id;
-  };
-
-  const stopUncalPolling = () => {
-    if (uncalPollingRef.current) {
-      clearInterval(uncalPollingRef.current);
-      uncalPollingRef.current = null;
-    }
-  };
-
-  const toggleStatusImage = () => {
-    const newVal = !showStatusImage;
-    setShowStatusImage(newVal);
-    if (newVal && !statusImageSrc && !statusImageLoading) fetchStatusImage();
-  };
-
-  // Dummy Test PIV button handler
-  const handleTestPIV = () => {
-    /**
-     * TODO: Implement running PIV only over a *test subset* of frames defined by:
-     *  - If a temporal filter (e.g. type==='time' or 'POD') is active, use its batch_size.
-     *  - Otherwise fall back to a small default window (e.g. 10 frames) centered or starting
-     *    at the first requested index.
-     * This should call a future backend endpoint (e.g. /backend/run_piv_test) with parameters:
-     *  { sourcePath, camera, windowSize: <temporal_batch_length>, strategy: 'temporal-filter' }
-     * Backend would then:
-     *  - Load only that subset
-     *  - Run the same multi-pass PIV pipeline
-     *  - Store intermediate / final vectors for preview
-     */
-    alert("Test PIV (dummy): will run PIV for temporal filter batch size in future.");
-  };
-
-  // Helper to show just the last segment of a path
-  const basename = (p: string) => {
-    if (!p) return "";
-    const parts = p.replace(/\\/g, "/").split("/");
-    return parts.filter(Boolean).pop() || p;
-  };
+    fetchFrameVars();
+  }, [isPolling, sourcePathIdx, camera]);
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Run PIV</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-4 mb-4">
-            {/* Source path selection */}
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">Source Path:</label>
-              {sourcePaths.length > 0 ? (
-                <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-                  <SelectTrigger id="sourcepath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
+    <Card>
+      <CardHeader><CardTitle>Run PIV</CardTitle></CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium">Source Path</label>
+            <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {sourcePaths.length > 0 ? sourcePaths.map((p: string, i: number) => (
+                  <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                )) : <SelectItem value="0" disabled>No paths</SelectItem>}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Camera</label>
+            <Select value={camera} onValueChange={setCamera}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {cameraOptions.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          <div>
+                <label className="text-sm font-medium">Variable</label>
+                <Select value={varType} onValueChange={setVarType} disabled={frameVarsLoading}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {sourcePaths.map((p, i) => (
-                      <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
-                    ))}
+                    {frameVarsLoading ? <SelectItem value="loading" disabled>Loading...</SelectItem> : // <-- FIX HERE
+                     frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
                   </SelectContent>
                 </Select>
-              ) : (
-                <Input type="text" value="No source paths available" readOnly className="w-full" />
-              )}
-            </div>
-
-            {/* Camera selection, type, colormap */}
-            <div className="flex items-center gap-4">
-              <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-              <Select value={camera} onValueChange={v => setCamera(v)}>
-                <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
-                <SelectContent>
-                  {cameraOptions.map((c, i) => (
-                    <SelectItem key={i} value={c}>{c}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <label htmlFor="varType" className="text-sm font-medium">Type:</label>
-              <Select value={varType} onValueChange={v => setVarType(v)}>
-                <SelectTrigger id="varType"><SelectValue placeholder="Select type" /></SelectTrigger>
-                <SelectContent>
-                  {frameVarsLoading ? (
-                    <SelectItem value="loading">Loading...</SelectItem>
-                  ) : frameVars && frameVars.length > 0 ? (
-                    frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
-                  ) : (
-                    <>
-                      <SelectItem value="ux">ux</SelectItem>
-                      <SelectItem value="uy">uy</SelectItem>
-                    </>
-                  )}
-                </SelectContent>
-              </Select>
-              <label htmlFor="cmap" className="text-sm font-medium">Colormap:</label>
-              <Select value={cmap} onValueChange={v => setCmap(v)}>
-                <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">default</SelectItem>
-                  <SelectItem value="viridis">viridis</SelectItem>
-                  <SelectItem value="plasma">plasma</SelectItem>
-                  <SelectItem value="inferno">inferno</SelectItem>
-                  <SelectItem value="magma">magma</SelectItem>
-                  <SelectItem value="cividis">cividis</SelectItem>
-                  <SelectItem value="jet">jet</SelectItem>
-                  <SelectItem value="gray">gray</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Run and Limits */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <label htmlFor="run" className="text-sm font-medium">Run:</label>
-              <Input id="run" type="number" min={1} value={run} onChange={e => setRun(Math.max(1, Number(e.target.value)))} className="w-24" />
-              <label className="text-sm font-medium">Lower:</label>
-              <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" className="w-28" />
-              <label className="text-sm font-medium">Upper:</label>
-              <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" className="w-28" />
-            </div>
-
-            {/* Progress */}
-            <div className="flex flex-col gap-2">
-              <Progress value={progress} className="w-full" />
-              <span className="text-xs text-gray-500">{progress}%{isPolling && " (polling)"}</span>
-            </div>
-
-            {/* Status image */}
-            <div className="mt-2">
-              <div className="flex items-center mb-2">
-                <Button variant="outline" onClick={toggleStatusImage} size="sm" className="flex items-center gap-2">
-                  {showStatusImage ? "Hide Status Image" : "Show Status Image"}
-                </Button>
               </div>
-              {showStatusImage && (
-                <div className="border rounded p-4 bg-gray-50">
-                  {statusImageError && (
-                    <div className="w-full p-3 mb-3 rounded border border-red-200 bg-red-50 text-red-700 text-sm">{statusImageError}</div>
-                  )}
-                  {statusImageSrc ? (
-                    <div className="flex flex-col items-center relative">
-                      <img
-                        src={`data:image/png;base64,${statusImageSrc}`}
-                        alt="Processing Status"
-                        className="rounded border w-full max-w-3xl"
-                      />
-                      {statusImageLoading && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-white/60">
-                          <span className="text-gray-500">Refreshing...</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="w-full h-48 flex items-center justify-center bg-gray-100 border rounded">
-                      <span className="text-gray-500">{statusImageLoading ? "Loading status image..." : "No status image available"}</span>
-                    </div>
-                  )}
-                </div>
+          <div>
+            <label className="text-sm font-medium">Colormap</label>
+            <Select value={cmap} onValueChange={setCmap}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {['default', 'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'jet', 'gray'].map(c =>
+                  <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Lower Limit</label>
+            <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" />
+          </div>
+          <div>
+            <label className="text-sm font-medium">Upper Limit</label>
+            <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Progress value={progress} />
+          <p className="text-sm text-center font-medium text-gray-500">
+            {isPolling ? `Processing... ${progress}%` : (progress === 100 ? "✅ Completed!" : "Idle")}
+          </p>
+        </div>
+        <div>
+          <Button variant="outline" size="sm" onClick={() => setShowStatusImage(!showStatusImage)}>
+            {showStatusImage ? "Hide" : "Show"} Status Image
+          </Button>
+          {showStatusImage && (
+            <div className="mt-2 border rounded-lg p-2 bg-gray-50 min-h-[200px] flex items-center justify-center">
+              {statusImage.error && <p className="text-red-600 font-semibold">{statusImage.error}</p>}
+              {statusImage.src && !statusImage.error && (
+                <img src={`data:image/png;base64,${statusImage.src}`} alt="PIV Status" className="rounded max-w-full"/>
+              )}
+              {!statusImage.src && !statusImage.error && (
+                <p className="text-gray-500">{isPolling ? "Waiting for first frame..." : "No image available"}</p>
               )}
             </div>
-
-            {/* Action buttons */}
-            <div className="flex items-center gap-4 flex-wrap">
-              <Button className="bg-green-600 hover:bg-green-700" onClick={handleRunPIV} disabled={loading}>
-                {loading ? "Running..." : "Run PIV"}
-              </Button>
-              <Button className="bg-red-600 hover:bg-red-700" onClick={handleCancelRun} disabled={loading}>
-                {loading ? "Canceling..." : "Cancel Run"}
-              </Button>
-              <Button variant="outline" onClick={handleTestPIV} disabled={loading}>
-                Test PIV (dummy)
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+          )}
+        </div>
+        <div className="flex items-center gap-4 pt-2">
+          <Button className="bg-green-600 hover:bg-green-700" onClick={run} disabled={isLoading || isPolling}>
+            {isPolling ? "Running..." : "Run PIV"}
+          </Button>
+          <Button className="bg-red-600 hover:bg-red-700" onClick={cancel} disabled={!isPolling && !isLoading}>
+            Cancel Run
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 };
 

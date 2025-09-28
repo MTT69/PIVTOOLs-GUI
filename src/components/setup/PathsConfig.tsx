@@ -43,6 +43,9 @@ export default function PathsConfig({ config, updateConfig }: PathsConfigProps) 
       if (!res.ok) throw new Error(json.error || "Failed to save paths");
       if (json.updated?.paths) {
         updateConfig(['paths'], { ...config.paths, ...json.updated.paths });
+        // Remove localStorage updates
+        // localStorage.setItem("piv_source_paths", JSON.stringify(json.updated.paths.source_paths || []));
+        // localStorage.setItem("piv_base_paths", JSON.stringify(json.updated.paths.base_paths || []));
       }
       setSaveStatus('success');
     } catch (err) {
