@@ -553,19 +553,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const magnifierRef = useRef<HTMLCanvasElement | null>(null);
   const [magVisible, setMagVisible] = useState(false);
   const [magPos, setMagPos] = useState({ left: 0, top: 0 });
-  const [magnifierEnabled, setMagnifierEnabled] = useState(false);
   const MAG_SIZE = 180;
   const MAG_FACTOR = 2.5;
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
   const handleMagnifierMove = (e: React.MouseEvent) => {
-    if (!magnifierEnabled) {
+    // Always enable magnifier when mouse is over image
+    const img = imgRef.current;
+    const mag = magnifierRef.current;
+    if (!img || !mag) {
       setMagVisible(false);
       return;
     }
-    const img = imgRef.current;
-    const mag = magnifierRef.current;
-    if (!img || !mag) return;
     const rect = img.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -575,11 +574,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
       return;
     }
     setMagVisible(true);
-    // Position magnifier near cursor, but not off image
-    let left = x + 24;
-    let top = y + 24;
-    if (left + MAG_SIZE > rect.width) left = x - MAG_SIZE - 24;
-    if (top + MAG_SIZE > rect.height) top = y - MAG_SIZE - 24;
+    // Center magnifier around cursor
+    const left = x - (MAG_SIZE / 2);
+    const top = y - (MAG_SIZE / 2);
     setMagPos({ left, top });
     // Draw zoomed region
     const ctx = mag.getContext('2d');
@@ -602,19 +599,19 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     // Draw crosshairs
     const cx = (MAG_SIZE * dpr) / 2;
     const cy = (MAG_SIZE * dpr) / 2;
-    const lineLen = MAG_SIZE * dpr * 0.4;
+    const lineLen = MAG_SIZE * dpr * 0.3;
     ctx.save();
     ctx.beginPath();
-    ctx.lineWidth = Math.max(1, dpr);
-    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = Math.max(2, dpr * 1.5);
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
     ctx.moveTo(cx - lineLen, cy);
     ctx.lineTo(cx + lineLen, cy);
     ctx.moveTo(cx, cy - lineLen);
     ctx.lineTo(cx, cy + lineLen);
     ctx.stroke();
     ctx.beginPath();
-    ctx.lineWidth = Math.max(1, Math.ceil(dpr / 1.5));
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = Math.max(1, dpr);
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     ctx.moveTo(cx - lineLen, cy);
     ctx.lineTo(cx + lineLen, cy);
     ctx.moveTo(cx, cy - lineLen);
@@ -625,8 +622,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     // Draw border
     ctx.beginPath();
     ctx.arc(cx, cy, (MAG_SIZE * dpr) / 2 - 2 * dpr, 0, Math.PI * 2);
-    ctx.lineWidth = 2 * dpr;
-    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 3 * dpr;
+    ctx.strokeStyle = '#005fa3';
     ctx.stroke();
   };
 
@@ -751,6 +748,50 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     const parts = p.replace(/\\/g, "/").split("/");
     return parts.filter(Boolean).pop() || p;
   };
+
+  // Helper: convert base64 image string to Blob
+  const base64ToBlob = useCallback((base64: string, mime = "image/png") => {
+    const byteChars = atob(base64);
+    const byteArrays: BlobPart[] = [];
+    for (let offset = 0; offset < byteChars.length; offset += 512) {
+      const slice = byteChars.slice(offset, offset + 512);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) byteNumbers[i] = slice.charCodeAt(i);
+      byteArrays.push(new Uint8Array(byteNumbers));
+    }
+    return new Blob(byteArrays, { type: mime });
+  }, []);
+
+  // Download the currently rendered PNG
+  const downloadCurrentView = useCallback(() => {
+    if (!imageSrc) return;
+    const fileName = `vector_${meanMode ? "mean" : `frame_${index}`}_${type}.png`;
+    const link = document.createElement("a");
+    link.href = `data:image/png;base64,${imageSrc}`;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [imageSrc, meanMode, index, type]);
+
+  // Copy the currently rendered PNG to clipboard
+  const copyCurrentView = useCallback(async () => {
+    if (!imageSrc) return;
+    try {
+      const blob = base64ToBlob(imageSrc, "image/png");
+      const ClipboardItemCtor: any = (window as any).ClipboardItem;
+      if (navigator.clipboard && "write" in navigator.clipboard && ClipboardItemCtor) {
+        await navigator.clipboard.write([new ClipboardItemCtor({ "image/png": blob })]);
+      } else {
+        // Fallback: open the image in a new tab if Clipboard API not available
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }
+    } catch (e: any) {
+      setError(`Failed to copy image: ${e?.message ?? "Unknown error"}`);
+    }
+  }, [imageSrc, base64ToBlob]);
 
   return (
     <div className="space-y-6">
@@ -1049,6 +1090,24 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 >
                   {(loading || statsLoading || frameVarsLoading) ? "Loading..." : "Render"}
                 </Button>
+
+                {/* New: Export actions */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={downloadCurrentView}
+                  disabled={!imageSrc || loading || statsLoading}
+                >
+                  Download PNG
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { void copyCurrentView(); }}
+                  disabled={!imageSrc || loading || statsLoading}
+                >
+                  Copy PNG
+                </Button>
               </div>
 
               {statsError && meanMode && (
@@ -1071,6 +1130,70 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <strong>Set Datum Mode Active:</strong> Click on the image to set a new coordinate system origin.
               </div>
             )}
+            
+            {/* Integrated status bar for coordinate information */}
+            {imageSrc && !error && (
+              <div className="mb-4 p-3 bg-gradient-to-r from-gray-50 to-gray-100 border rounded-lg shadow-sm"
+                   style={{ minHeight: 56, height: 56, display: 'flex', alignItems: 'center' }}>
+                <div className="flex items-center justify-between w-full h-full">
+                  <div className="flex items-center gap-6 h-full">
+                    <div className="text-sm font-medium text-gray-700">
+                      Cursor Position:
+                    </div>
+                    {hoverData ? (
+                      isNaN(hoverData.x) || hoverData.i < 0 ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 h-full">
+                          <div className="animate-spin w-3 h-3 border border-gray-400 border-t-soton-blue rounded-full"></div>
+                          <span>Loading...</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-6 h-full">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">X:</span>
+                            <span className="font-mono text-sm font-semibold text-soton-blue bg-white px-2 py-1 rounded border"
+                                  style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
+                              {hoverData.x.toFixed(3)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Y:</span>
+                            <span className="font-mono text-sm font-semibold text-soton-blue bg-white px-2 py-1 rounded border"
+                                  style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
+                              {hoverData.y.toFixed(3)}
+                            </span>
+                          </div>
+                          {(() => {
+                            let varVal: number | null = null;
+                            if (type === "ux" && hoverData.ux != null) varVal = hoverData.ux;
+                            else if (type === "uy" && hoverData.uy != null) varVal = hoverData.uy;
+                            else if (hoverData.value != null) varVal = hoverData.value;
+                            return varVal != null ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                                  {type}:
+                                </span>
+                                <span className="font-mono text-sm font-semibold text-white bg-soton-blue px-2 py-1 rounded border"
+                                      style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
+                                  {varVal.toFixed(3)}
+                                </span>
+                              </div>
+                            ) : null;
+                          })()}
+                        </div>
+                      )
+                    ) : (
+                      <div className="text-sm text-gray-500 italic h-full flex items-center">
+                        Hover over the plot area to see coordinates
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {meanMode ? "Mean Statistics Mode" : `Frame ${index}`}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {imageSrc && !error && (
               <div
                 className="flex flex-col items-center relative"
@@ -1078,39 +1201,16 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   width: '100%',
                   maxWidth: '1100px',
                   margin: '0 auto',
-                  cursor: datumMode ? 'crosshair' : 'default'
+                  cursor: datumMode ? 'crosshair' : magVisible ? 'none' : 'default'
                 }}
                 onMouseMove={e => { onMouseMove(e); handleMagnifierMove(e); }}
                 onMouseLeave={e => { onMouseLeave(); handleMagnifierLeave(); }}
                 onClick={e => { if (datumMode) handleImageClick(e); }}
               >
-                {/* Magnifier toggle - styled button with emoji, like Masking */}
-                <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 70 }}>
-                  <button
-                    type="button"
-                    onClick={() => setMagnifierEnabled(v => !v)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      background: magnifierEnabled ? '#005fa3' : 'rgba(255,255,255,0.92)',
-                      color: magnifierEnabled ? '#fff' : '#222',
-                      border: magnifierEnabled ? '2px solid #005fa3' : '2px solid #bbb',
-                      borderRadius: 8,
-                      padding: '4px 14px 4px 10px',
-                      fontSize: 16,
-                      fontWeight: 500,
-                      boxShadow: magnifierEnabled ? '0 2px 8px rgba(0,95,163,0.10)' : '0 1px 4px rgba(0,0,0,0.07)',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      outline: magnifierEnabled ? '2px solid #005fa3' : 'none',
-                    }}
-                    aria-pressed={magnifierEnabled}
-                  >
-                    <span style={{ fontSize: 20, marginRight: 6 }}>{magnifierEnabled ? '🔎' : '🔍'}</span>
-                    <span style={{ fontSize: 14, fontWeight: 500 }}>{magnifierEnabled ? 'Magnifier On' : 'Magnifier'}</span>
-                  </button>
-                </div>
+                {/* Remove magnifier toggle button */}
+                {/* <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 70 }}>
+                  <button ...> ... </button>
+                </div> */}
                 <img
                   ref={imgRef}
                   src={`data:image/png;base64,${imageSrc}`}
@@ -1147,29 +1247,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 {meta && (
                   <div className="text-xs text-gray-500 mt-2">
                     Run: {meta.run} • Var: {meta.var}{meta.width && meta.height ? ` • ${meta.width}×${meta.height}` : ""}
-                  </div>
-                )}
-                {/* Tooltip (always visible, above magnifier) */}
-                {hoverData && (
-                  <div
-                    className="pointer-events-none fixed px-2 py-1 text-xs rounded bg-black text-white shadow"
-                    style={{ top: hoverData.clientY + 12, left: hoverData.clientX + 12, zIndex: 100 }}
-                  >
-                    {isNaN(hoverData.x) || hoverData.i < 0
-                      ? "Loading..."
-                      : (() => {
-                          let varVal: number | null = null;
-                          if (type === "ux" && hoverData.ux != null) varVal = hoverData.ux;
-                          else if (type === "uy" && hoverData.uy != null) varVal = hoverData.uy;
-                          else if (hoverData.value != null) varVal = hoverData.value;
-                          return (
-                            <>
-                              <div>x: {hoverData.x.toFixed(3)}, y: {hoverData.y.toFixed(3)}</div>
-                              {varVal != null && <div>{type}: {varVal.toFixed(3)}</div>}
-                            </>
-                          );
-                        })()
-                    }
                   </div>
                 )}
               </div>
