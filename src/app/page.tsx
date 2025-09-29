@@ -15,7 +15,7 @@ import VectorViewer from '@/components/viewer/VectorViewer';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
 import VideoMaker from '@/components/viewer/VideoMaker';
 import Masking from '@/components/setup/Masking';
-import Calibration from '@/components/setup/Calibration';
+import { Calibration } from '@/components/setup/Calibration';
 
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
@@ -295,7 +295,7 @@ export default function Home() {
                 </TabsContent>
 
                 <TabsContent value="calibration">
-                  <Calibration />
+                  <Calibration config={config} updateConfig={updateConfig} />
                 </TabsContent>
 
               </Tabs>
