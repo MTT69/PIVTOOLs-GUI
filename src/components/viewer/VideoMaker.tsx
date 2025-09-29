@@ -1,315 +1,61 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useVideoMaker } from "@/hooks/useVideoMaker";
 
 export default function VideoMaker({ backendUrl = '/backend', config }: { backendUrl?: string; config?: any }) {
-  // Directory / base paths
-  const [directory, setDirectory] = useState<string>('');
-  const dirInputRef = useRef<HTMLInputElement | null>(null);
-  const [basePaths, setBasePaths] = useState<string[]>(() => {
-    try {
-      return JSON.parse(typeof window !== 'undefined' ? localStorage.getItem('piv_base_paths') || '[]' : '[]');
-    } catch {
-      return [];
-    }
-  });
-  const [basePathIdx, setBasePathIdx] = useState<number>(0);
-
-  // Camera options derived from config (same logic as VectorViewer)
-  const cameraOptions: string[] = useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
-  }, [config]);
-
-  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : 'Cam1');
-  useEffect(() => {
-    if (cameraOptions.length === 0) return;
-    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions.length, cameraOptions[0]]);
-
-  // Other selection state
-  const [type, setType] = useState<string>('ux');
-  const [cmap, setCmap] = useState<string>('default');
-  const [run, setRun] = useState<number>(1);
-  const [lower, setLower] = useState<string>('');
-  const [upper, setUpper] = useState<string>('');
-  const [merged, setMerged] = useState<boolean>(false);
-  
-  // Resolution settings (updated)
-  const [resolution, setResolution] = useState<string>('1080p');
-  const resolutionOptions = [
-    { label: '1080p (1920x1080)', value: '1080p' },
-    { label: '4K (3840x2160)', value: '4k' }
-  ];
-
-  // Video browser state
-  const [activeTab, setActiveTab] = useState<string>('create');
-  const [availableVideos, setAvailableVideos] = useState<string[]>([]);
-  const [selectedVideo, setSelectedVideo] = useState<string>('');
-  const [loadingVideos, setLoadingVideos] = useState<boolean>(false);
-
-  // Add new state for handling the video creation process
-  const [creating, setCreating] = useState<boolean>(false);
-  const [videoResult, setVideoResult] = useState<{ success?: boolean; message?: string; out_path?: string } | null>(null);
-  const [videoStatus, setVideoStatus] = useState<{ 
-    processing: boolean; 
-    progress: number; 
-    status: string; 
-    message?: string;
-    out_path?: string;
-    computed_limits?: {
-      lower: number;
-      upper: number;
-      actual_min: number;
-      actual_max: number;
-      percentile_based: boolean;
-    };
-  } | null>(null);
-
-  // Add a delay before showing the video after completion
-  const [videoReady, setVideoReady] = useState<boolean>(false);
-  const [videoError, setVideoError] = useState<boolean>(false);
-
-  // Effective directory: prefer selected base path if available
-  const effectiveDir = useMemo(() => {
-    if (basePaths.length > 0 && basePathIdx >= 0 && basePathIdx < basePaths.length) {
-      return basePaths[basePathIdx];
-    }
-    return directory;
-  }, [basePaths, basePathIdx, directory]);
-
-  // Keep local directory text input in sync when basePaths change
-  useEffect(() => {
-    if (effectiveDir) setDirectory(effectiveDir);
-  }, [effectiveDir]);
-
-  // Directory picker (web fallback)
-  const handleBrowse = () => {
-    dirInputRef.current?.click();
-  };
-  const onDirPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const anyFile: any = files[0];
-    const rel: string = anyFile.webkitRelativePath || '';
-    const root = rel.split('/')[0] || '';
-    let folderPath = root;
-    if (anyFile.path && rel) {
-      // In some electron/tauri contexts file.path contains full paths
-      folderPath = anyFile.path.replace(/\\/g, '/').split('/' + rel)[0] || root;
-    }
-    setDirectory(folderPath);
-    e.currentTarget.value = '';
-  };
-
-  // Fetch available videos when tab changes to browse
-  useEffect(() => {
-    if (activeTab === 'browse') {
-      fetchAvailableVideos();
-    }
-  }, [activeTab, effectiveDir]);
-
-  const fetchAvailableVideos = async () => {
-    if (!effectiveDir) return;
-    
-    setLoadingVideos(true);
-    setAvailableVideos([]);
-    setSelectedVideo('');
-    
-    try {
-      console.log(`Fetching videos from: ${effectiveDir}`);
-      const response = await fetch(`${backendUrl}/video/list_videos?base_path=${encodeURIComponent(effectiveDir)}`);
-      
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log(`Found ${data.videos?.length || 0} videos`);
-      
-      if (data.videos?.length) {
-        setAvailableVideos(data.videos);
-        setSelectedVideo(data.videos[0]);
-      } else {
-        setAvailableVideos([]);
-      }
-    } catch (error) {
-      console.error('Error fetching videos:', error);
-      setAvailableVideos([]);
-    } finally {
-      setLoadingVideos(false);
-    }
-  };
-
-  // Assemble params (but do not send anything yet)
-  const buildParams = () => {
-    const params: any = {
-      base_path: effectiveDir,
-      camera: camera.replace(/[^\d]/g, '') || '1',
-      var: type,
-      run: String(run),
-      merged: merged ? '1' : '0',
-      cmap,
-      lower,
-      upper,
-      num_images: config?.images?.num_images || 0,
-      resolution,
-    };
-    return params;
-  };
-
-  // Function to handle video creation
-  const handleCreateVideo = async (isTest: boolean = false) => {
-    setCreating(true);
-    setVideoResult(null);
-    setVideoStatus(null);
-    
-    try {
-      const params = buildParams();
-      if (isTest) {
-        params.test_mode = true;
-        params.test_frames = 50;
-      }
-      const url = `${backendUrl}/video/start_video`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(params),
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to start video creation');
-      }
-      
-      // Start polling status immediately
-      const pollStatus = () => {
-        fetch(`${backendUrl}/video/video_status`)
-          .then(res => res.json())
-          .then(status => {
-            setVideoStatus(status);
-            if (status.processing) {
-              setTimeout(pollStatus, 500); // Poll every 500ms for smoother progress
-            } else {
-              setCreating(false);
-              if (status.error) {
-                setVideoResult({
-                  success: false,
-                  message: status.error
-                });
-              } else {
-                setVideoResult({
-                  success: true,
-                  message: isTest ? 'Test video created successfully!' : 'Video creation completed!',
-                  out_path: status.out_path
-                });
-                // Refresh video list if we're in browse tab
-                if (activeTab === 'browse') {
-                  fetchAvailableVideos();
-                }
-              }
-            }
-          })
-          .catch(err => {
-            console.error('Polling error', err);
-            setCreating(false);
-            setVideoResult({
-              success: false,
-              message: 'Error polling status.'
-            });
-          });
-      };
-      pollStatus();
-    } catch (error: any) {
-      setVideoResult({
-        success: false,
-        message: `Error: ${error.message}`
-      });
-      setCreating(false);
-    }
-  };
-
-  // Function to handle video cancellation
-  const handleCancelVideo = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/video/cancel_video`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      if (!response.ok) {
-        throw new Error('Failed to cancel video');
-      }
-      setVideoStatus({ processing: false, progress: 0, status: 'canceled' });
-      setVideoResult({
-        success: false,
-        message: 'Video creation canceled.'
-      });
-      setCreating(false);
-    } catch (error: any) {
-      console.error('Cancel error', error);
-      setVideoResult({
-        success: false,
-        message: `Error canceling: ${error.message}`
-      });
-    }
-  };
-
-  // Helper to show just the last segment of a path
-  const basename = (p: string) => {
-    if (!p) return "";
-    const parts = p.replace(/\\/g, "/").split("/");
-    return parts.filter(Boolean).pop() || p;
-  };
-
-  // Function to safely create video URLs with proper encoding
-  const createVideoUrl = (path: string) => {
-    if (!path) return '';
-    try {
-      // Double-encode to handle special characters properly
-      const encodedPath = encodeURIComponent(path);
-      return `${backendUrl}/video/download?path=${encodedPath}`;
-    } catch (error) {
-      console.error('Error creating video URL:', error);
-      return '';
-    }
-  };
-
-  useEffect(() => {
-    if (videoResult?.out_path) {
-      setVideoReady(false);
-      setVideoError(false);
-      // Wait 2 seconds before showing video to allow backend to finish writing
-      const timer = setTimeout(() => setVideoReady(true), 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [videoResult?.out_path]);
-
-  const handleVideoError = () => {
-    setVideoError(true);
-  };
-
-  const handleRetryVideo = () => {
-    setVideoError(false);
-    setVideoReady(false);
-    setTimeout(() => setVideoReady(true), 1500); // shorter retry delay
-  };
+  const {
+    directory,
+    setDirectory,
+    dirInputRef,
+    basePaths,
+    basePathIdx,
+    setBasePathIdx,
+    cameraOptions,
+    camera,
+    setCamera,
+    type,
+    setType,
+    cmap,
+    setCmap,
+    run,
+    setRun,
+    lower,
+    setLower,
+    upper,
+    setUpper,
+    merged,
+    setMerged,
+    resolution,
+    setResolution,
+    resolutionOptions,
+    activeTab,
+    setActiveTab,
+    availableVideos,
+    selectedVideo,
+    setSelectedVideo,
+    loadingVideos,
+    creating,
+    videoResult,
+    videoStatus,
+    videoReady,
+    videoError,
+    effectiveDir,
+    handleBrowse,
+    onDirPicked,
+    fetchAvailableVideos,
+    handleCreateVideo,
+    handleCancelVideo,
+    basename,
+    createVideoUrl,
+    handleVideoError,
+    handleRetryVideo,
+  } = useVideoMaker(backendUrl, config);
 
   return (
     <div className="space-y-6">
@@ -326,7 +72,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 <Select value={String(basePathIdx)} onValueChange={v => setBasePathIdx(Number(v))}>
                   <SelectTrigger id="basepath"><SelectValue placeholder="Pick base path" /></SelectTrigger>
                   <SelectContent>
-                    {basePaths.map((p, i) => (
+                    {basePaths.map((p: string, i: number) => (
                       <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
                     ))}
                   </SelectContent>
