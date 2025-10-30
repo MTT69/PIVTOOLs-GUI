@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     MAG_SIZE,
     dpr,
   } = useVectorViewer({ backendUrl, config });
+  
+  // Remember last valid hover values so we don't show a loading spinner
+  // while backend updates arrive. Only update when hoverData contains valid coords.
+  const [lastValidHover, setLastValidHover] = useState<any | null>(null);
+  useEffect(() => {
+    if (hoverData && typeof hoverData.x === "number" && !isNaN(hoverData.x) && hoverData.i >= 0) {
+      setLastValidHover(hoverData);
+    }
+  }, [hoverData]);
 
   return (
     <div className="space-y-6">
@@ -217,56 +226,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </div>
               )}
 
-              <div className={`flex items-center gap-2 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
-                {/* File Index controls - faded/disabled when meanMode is active */}
-                <label htmlFor="index" className="text-sm font-medium">File Index:</label>
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={() => setIndex(i => Math.max(1, i - 1))}
-                  disabled={index <= 1}
-                  className={`transition-opacity ${index <= 1 ? 'opacity-40' : 'opacity-100'}`}
-                >
-                  -
-                </Button>
-                <Input id="index" type="number" min={1} value={index} onChange={e => setIndex(Math.max(1, Number(e.target.value)))} className="w-24" />
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={() => setIndex(i => i + 1)}
-                  disabled={index >= maxFrameCount}
-                  className={`transition-opacity ${index >= maxFrameCount ? 'opacity-40' : 'opacity-100'}`}
-                >
-                  +
-                </Button>
-              </div>
-
-              <div className={`flex items-center gap-4 mb-4 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
-                {/* Frame slider - faded/disabled when meanMode is active */}
-                <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
-                <input
-                  id="frame-slider"
-                  type="range"
-                  min={1}
-                  max={maxFrameCount}
-                  value={index}
-                  onChange={e => setIndex(Number(e.target.value))}
-                  className="w-64"
-                />
-                <span className="text-xs text-gray-500">{index} / {maxFrameCount}</span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant={playing ? "default" : "outline"}
-                    onClick={() => { handlePlayToggle(); }}
-                    className="flex items-center gap-1"
-                  >
-                    {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
-                  </Button>
-                </div>
-              </div>
-  
-              <div className="flex items-center gap-3 flex-wrap">
+              <div className={`flex items-center gap-4 mb-4 flex-wrap transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
+                {/* Type/colormap/run/limits/render/export controls */}
                 <label htmlFor="type" className="text-sm font-medium">Type:</label>
                 <Select value={type} onValueChange={v => setType(v)}>
                   <SelectTrigger id="type"><SelectValue placeholder="Select type" /></SelectTrigger>
@@ -334,33 +295,38 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 >
                   {limitsLoading ? "Getting..." : "Get Limits"}
                 </Button>
-                
-                {/* Render button: uses stats endpoint when meanMode active */}
-                <Button
-                  className="bg-soton-blue"
-                  onClick={() => { void handleRender(); }}
-                  disabled={loading || statsLoading || frameVarsLoading}
-                >
-                  {(loading || statsLoading || frameVarsLoading) ? "Loading..." : "Render"}
-                </Button>
 
-                {/* New: Export actions */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={downloadCurrentView}
-                  disabled={!imageSrc || loading || statsLoading}
-                >
-                  Download PNG
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => { void copyCurrentView(); }}
-                  disabled={!imageSrc || loading || statsLoading}
-                >
-                  Copy PNG
-                </Button>
+                {/* Group render + export buttons so they don't overflow; allow wrapping on small screens */}
+                <div className="flex items-center gap-2 flex-wrap ml-2">
+                  <Button
+                    className="bg-soton-blue flex-shrink-0"
+                    onClick={() => { void handleRender(); }}
+                    disabled={loading || statsLoading || frameVarsLoading}
+                  >
+                    {(loading || statsLoading || frameVarsLoading) ? "Loading..." : "Render"}
+                  </Button>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={downloadCurrentView}
+                      disabled={!imageSrc || loading || statsLoading}
+                      className="flex-shrink-0"
+                    >
+                      Download PNG
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => { void copyCurrentView(); }}
+                      disabled={!imageSrc || loading || statsLoading}
+                      className="flex-shrink-0"
+                    >
+                      Copy PNG
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               {statsError && meanMode && (
@@ -391,52 +357,56 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <div className="text-sm font-medium text-gray-700">
                       Cursor Position:
                     </div>
-                    {hoverData ? (
-                      isNaN(hoverData.x) || hoverData.i < 0 ? (
-                        <div className="flex items-center gap-2 text-sm text-gray-500 h-full">
-                          <div className="animate-spin w-3 h-3 border border-gray-400 border-t-soton-blue rounded-full"></div>
-                          <span>Loading...</span>
-                        </div>
-                      ) : (
+                    {/*
+                      Show the current hover values if valid, otherwise fall back to the
+                      last valid values (lastValidHover). If neither exists, show the hint.
+                    */}
+                    {(() => {
+                      const isHoverValid = hoverData && typeof hoverData.x === "number" && !isNaN(hoverData.x) && hoverData.i >= 0;
+                      const display = isHoverValid ? hoverData : lastValidHover;
+                      if (!display) {
+                        return (
+                          <div className="text-sm text-gray-500 italic h-full flex items-center">
+                            Hover over the plot area to see coordinates
+                          </div>
+                        );
+                      }
+
+                      let varVal: number | null = null;
+                      if (type === "ux" && display.ux != null) varVal = display.ux;
+                      else if (type === "uy" && display.uy != null) varVal = display.uy;
+                      else if (display.value != null) varVal = display.value;
+
+                      return (
                         <div className="flex items-center gap-6 h-full">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">X:</span>
                             <span className="font-mono text-sm font-semibold text-soton-blue bg-white px-2 py-1 rounded border"
                                   style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
-                              {hoverData.x.toFixed(3)}
+                              {display.x.toFixed(3)}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Y:</span>
                             <span className="font-mono text-sm font-semibold text-soton-blue bg-white px-2 py-1 rounded border"
                                   style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
-                              {hoverData.y.toFixed(3)}
+                              {display.y.toFixed(3)}
                             </span>
                           </div>
-                          {(() => {
-                            let varVal: number | null = null;
-                            if (type === "ux" && hoverData.ux != null) varVal = hoverData.ux;
-                            else if (type === "uy" && hoverData.uy != null) varVal = hoverData.uy;
-                            else if (hoverData.value != null) varVal = hoverData.value;
-                            return varVal != null ? (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">
-                                  {type}:
-                                </span>
-                                <span className="font-mono text-sm font-semibold text-white bg-soton-blue px-2 py-1 rounded border"
-                                      style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
-                                  {varVal.toFixed(3)}
-                                </span>
-                              </div>
-                            ) : null;
-                          })()}
+                          {varVal != null ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                                {type}:
+                              </span>
+                              <span className="font-mono text-sm font-semibold text-white bg-soton-blue px-2 py-1 rounded border"
+                                    style={{ minWidth: 70, textAlign: 'center', display: 'inline-block' }}>
+                                {varVal.toFixed(3)}
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
-                      )
-                    ) : (
-                      <div className="text-sm text-gray-500 italic h-full flex items-center">
-                        Hover over the plot area to see coordinates
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                   <div className="text-xs text-gray-500">
                     {meanMode ? "Mean Statistics Mode" : `Frame ${index}`}
@@ -458,6 +428,35 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 onMouseLeave={e => { onMouseLeave(); handleMagnifierLeave(); }}
                 onClick={e => { if (datumMode) handleImageClick(e); }}
               >
+                {/* Left / Right frame increment arrows */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIndex(Math.max(1, index - 1))}
+                  disabled={meanMode || index <= 1}
+                  title="Previous frame"
+                  aria-label="Previous frame"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 z-50 rounded-full p-2 bg-white bg-opacity-90 text-gray-700 border border-gray-200 hover:bg-gray-100"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M12 4L6 10l6 6" />
+                  </svg>
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIndex(Math.min(maxFrameCount, index + 1))}
+                  disabled={meanMode || index >= maxFrameCount}
+                  title="Next frame"
+                  aria-label="Next frame"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 z-50 rounded-full p-2 bg-white bg-opacity-90 text-gray-700 border border-gray-200 hover:bg-gray-100"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M8 4l6 6-6 6" />
+                  </svg>
+                </Button>
+
                 {/* Remove magnifier toggle button */}
                 {/* <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 70 }}>
                   <button ...> ... </button>
@@ -495,13 +494,53 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <span className="text-gray-500">Rendering...</span>
                   </div>
                 )}
-                {meta && (
-                  <div className="text-xs text-gray-500 mt-2">
-                    Run: {meta.run} • Var: {meta.var}{meta.width && meta.height ? ` • ${meta.width}×${meta.height}` : ""}
-                  </div>
-                )}
               </div>
             )}
+
+            {/* Frame slider and play button: keep visible whenever we know maxFrameCount */}
+            {maxFrameCount > 0 && (
+              <div className={`flex flex-col md:flex-row items-center justify-center gap-4 mt-6 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
+                {/* Frame slider + numeric selector */}
+                <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    id="frame-slider"
+                    type="range"
+                    min={1}
+                    max={maxFrameCount}
+                    value={index}
+                    onChange={e => setIndex(Number(e.target.value))}
+                    className="w-64"
+                    disabled={meanMode}
+                  />
+                  {/* Numeric input to directly set current frame */}
+                  <Input
+                    id="frame-input"
+                    type="number"
+                    min={1}
+                    max={maxFrameCount}
+                    value={index}
+                    onChange={e => setIndex(Math.max(1, Math.min(maxFrameCount, Number(e.target.value || 1))))}
+                    className="w-24"
+                    disabled={meanMode}
+                  />
+                  <span className="text-xs text-gray-500">{index} / {maxFrameCount}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={playing ? "default" : "outline"}
+                    onClick={() => { handlePlayToggle(); }}
+                    className="flex items-center gap-1"
+                    disabled={meanMode}
+                  >
+                    {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {(!imageSrc || error) && (
               <div className="w-full h-64 flex items-center justify-center bg-gray-100 border rounded">
                 <span className="text-gray-500">No image loaded</span>
