@@ -95,6 +95,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const MAG_FACTOR = 2.5;
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
+  
+  // Image transformation states
+  const [rotation, setRotation] = useState(0); // 0-3 representing 0°, 90°, 180°, 270°
+  const [flipHorizontal, setFlipHorizontal] = useState(false);
+  const [flipVertical, setFlipVertical] = useState(false);
+  const [transpose, setTranspose] = useState(false);
 
   // Functions
   const fetchImage = useCallback(async () => {
@@ -115,6 +121,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("merged", merged ? "1" : "0");
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+      
+      // Add transformation parameters
+      params.set("rotation", String(rotation));
+      params.set("flip_horizontal", flipHorizontal ? "1" : "0");
+      params.set("flip_vertical", flipVertical ? "1" : "0");
+      params.set("transpose", transpose ? "1" : "0");
+      
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -135,7 +148,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, xOffset, yOffset]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, xOffset, yOffset, rotation, flipHorizontal, flipVertical, transpose]);
 
   const fetchStatVars = useCallback(async () => {
     setStatVarsLoading(true);
@@ -235,6 +248,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
       params.set("camera", camera);
       params.set("merged", merged ? "1" : "0");
+      
+      // Add transformation parameters
+      params.set("rotation", String(rotation));
+      params.set("flip_horizontal", flipHorizontal ? "1" : "0");
+      params.set("flip_vertical", flipVertical ? "1" : "0");
+      params.set("transpose", transpose ? "1" : "0");
+      
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -254,7 +274,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setStatsLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, rotation, flipHorizontal, flipVertical, transpose]);
 
   const handleRender = useCallback(async () => {
     setHasRendered(true);
@@ -430,6 +450,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("merged", merged ? "1" : "0");
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
+    
+    // Add transformation parameters
+    params.set("rotation", String(rotation));
+    params.set("flip_horizontal", flipHorizontal ? "1" : "0");
+    params.set("flip_vertical", flipVertical ? "1" : "0");
+    params.set("transpose", transpose ? "1" : "0");
+    
     const url = `${backendUrl}/plot/${endpoint}?${params.toString()}`;
     fetch(url)
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
@@ -439,7 +466,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, rotation, flipHorizontal, flipVertical, transpose]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -498,6 +525,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       return;
     }
     setMagVisible(true);
+    // Position magnifier so its center is exactly at the cursor position
+    // Account for the fact that CSS transforms the canvas size by DPR
     const left = x - (MAG_SIZE / 2);
     const top = y - (MAG_SIZE / 2);
     setMagPos({ left, top });
@@ -508,12 +537,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     ctx.beginPath();
     ctx.arc((MAG_SIZE * dpr) / 2, (MAG_SIZE * dpr) / 2, (MAG_SIZE * dpr) / 2, 0, Math.PI * 2);
     ctx.clip();
-    const sx = (x * img.naturalWidth / rect.width) - (MAG_SIZE / (2 * MAG_FACTOR));
-    const sy = (y * img.naturalHeight / rect.height) - (MAG_SIZE / (2 * MAG_FACTOR));
+    // Calculate source position - sample from the exact pixel under cursor
+    const srcCenterX = (x / rect.width) * img.naturalWidth;
+    const srcCenterY = (y / rect.height) * img.naturalHeight;
+    const srcSize = MAG_SIZE / MAG_FACTOR;
+    const sx = srcCenterX - (srcSize / 2);
+    const sy = srcCenterY - (srcSize / 2);
     ctx.drawImage(
       img,
       sx, sy,
-      MAG_SIZE / MAG_FACTOR, MAG_SIZE / MAG_FACTOR,
+      srcSize, srcSize,
       0, 0,
       MAG_SIZE * dpr, MAG_SIZE * dpr
     );
@@ -587,6 +620,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     merged,
     basePathIdx,
     meanMode,
+    rotation,          // Added
+    flipHorizontal,    // Added
+    flipVertical,      // Added
+    transpose,         // Added
     fetchImage,
     fetchStatsImage,
   ]);
@@ -719,7 +756,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     handleImageClick,
     updateOffsets,
     fetchCornerCoordinates,
-    fetchLimits,  // Added: This was missing and called in the component
+    fetchLimits,
     onMouseMove,
     onMouseLeave,
     handleMagnifierMove,
@@ -727,5 +764,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     basename,
     downloadCurrentView,
     copyCurrentView,
+    rotation,
+    setRotation,
+    flipHorizontal,
+    setFlipHorizontal,
+    flipVertical,
+    setFlipVertical,
+    transpose,
+    setTranspose,
+    effectiveDir,  // Added: Export for component use
   };
 };
