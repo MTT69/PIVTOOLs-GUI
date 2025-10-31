@@ -142,8 +142,16 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
               {statusImage.src && !statusImage.error && (
                 <img src={`data:image/png;base64,${statusImage.src}`} alt="PIV Status" className="rounded max-w-full"/>
               )}
-              {!statusImage.src && !statusImage.error && (
-                <p className="text-gray-500">{isPolling ? "Waiting for first frame..." : "No image available"}</p>
+              {!statusImage.src && !statusImage.error && isPolling && (
+                <div className="flex flex-col items-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
+                  <p className="text-gray-500">
+                    {progress === 0 ? "Waiting for run to commence..." : "Processing first frame..."}
+                  </p>
+                </div>
+              )}
+              {!statusImage.src && !statusImage.error && !isPolling && (
+                <p className="text-gray-500">No image available</p>
               )}
             </div>
           )}

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 // The polling interval in milliseconds
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 500;
 
 /**
  * Defines the settings the PIV runner needs to operate.
@@ -33,6 +33,7 @@ export function usePivRunner(settings: PivRunnerSettings) {
     src: null as string | null,
     error: null as string | null,
   });
+  const [jobId, setJobId] = useState<string | null>(null);
 
   const nextFrameIndexRef = useRef<number>(1);
   const settingsRef = useRef(settings);
@@ -53,34 +54,46 @@ export function usePivRunner(settings: PivRunnerSettings) {
           basepath_idx: String(currentSettings.sourcePathIdx),
           camera: currentSettings.camera,
           var: currentSettings.varType,
+          is_uncalibrated: '1',
         });
         if (currentSettings.cmap !== 'default') params.set('cmap', currentSettings.cmap);
         
-        // Fetch progress and status image concurrently for efficiency
-        const [statusRes, imageRes] = await Promise.all([
-          fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
-          currentSettings.showStatusImage
-            ? fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}&index=${nextFrameIndexRef.current}`)
-            : Promise.resolve(null),
-        ]);
+        // First fetch progress to get available frames
+        const statusRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
 
         // Process progress response
+        let currentProgress = 0;
+        let availableFrames: number[] = [];
         if (statusRes.ok) {
           const data = await statusRes.json();
-          const newProgress = Math.round(data.percent ?? 0);
-          setProgress(p => Math.max(p, newProgress)); // Avoid progress going backwards
-          if (newProgress >= 100) setIsPolling(false); // Stop polling on completion
+          currentProgress = Math.round(data.percent ?? 0);
+          setProgress(p => Math.max(p, currentProgress)); // Avoid progress going backwards
+          if (currentProgress >= 100) setIsPolling(false); // Stop polling on completion
+          // Parse available files to get frame indices
+          if (data.files && Array.isArray(data.files)) {
+            availableFrames = data.files.map((f: string) => {
+              const match = f.match(/(\d+)\.mat$/);
+              return match ? parseInt(match[1], 10) : null;
+            }).filter((n: number | null) => n !== null) as number[];
+          }
         }
 
-        // Process image response
+        // Now fetch image only if we have available frames
+        let imageRes = null;
+        if (currentSettings.showStatusImage && availableFrames.length > 0) {
+          const firstFrame = Math.min(...availableFrames);
+          nextFrameIndexRef.current = firstFrame;
+          imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}&index=${firstFrame}`);
+        }
+
+        // Process image response - show first available frame
         setStatusImage(prev => ({ ...prev, error: null }));
         if (imageRes?.ok) {
           const data = await imageRes.json();
           if (data.image) {
             setStatusImage(prev => ({ ...prev, src: data.image }));
-            nextFrameIndexRef.current += 1;
           }
-        } else if (imageRes) {
+        } else if (imageRes && currentProgress > 0) {
           setStatusImage(prev => ({ ...prev, src: null, error: `Image Error: ${imageRes.statusText}` }));
         }
       } catch (error) {
@@ -99,6 +112,7 @@ export function usePivRunner(settings: PivRunnerSettings) {
     setStatusImage({ src: null, error: null });
     setProgress(0);
     nextFrameIndexRef.current = 1;
+    setJobId(null);
 
     try {
       const response = await fetch('/backend/run_piv', {
@@ -110,6 +124,8 @@ export function usePivRunner(settings: PivRunnerSettings) {
         }),
       });
       if (!response.ok) throw new Error(`Failed to start PIV: ${response.statusText}`);
+      const data = await response.json();
+      setJobId(data.job_id);
       setIsPolling(true);
     } catch (error: any) {
       alert(error.message || "Error starting PIV");
@@ -121,15 +137,21 @@ export function usePivRunner(settings: PivRunnerSettings) {
   const cancel = useCallback(async () => {
     setIsLoading(true);
     try {
-      await fetch('/backend/cancel_run', { method: 'POST' });
+      const response = await fetch('/backend/cancel_run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+      if (!response.ok) throw new Error(`Failed to cancel PIV: ${response.statusText}`);
       setIsPolling(false);
       setProgress(0);
+      setJobId(null);
     } catch (error: any) {
       alert(error.message || "Error cancelling run");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [jobId]);
 
   return { isLoading, isPolling, progress, statusImage, run, cancel };
 }
