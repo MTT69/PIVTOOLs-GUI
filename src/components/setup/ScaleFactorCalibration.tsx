@@ -9,8 +9,6 @@ import { useScaleFactorCalibration } from "@/hooks/useScaleFactorCalibration";
 interface ScaleFactorCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  setActive: () => void;
-  isActive: boolean;
   cameraOptions: number[];
   sourcePaths: string[];
   imageCount?: number;
@@ -26,8 +24,6 @@ const basename = (p: string) => {
 export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   config,
   updateConfig,
-  setActive,
-  isActive,
   cameraOptions,
   sourcePaths,
   imageCount = 1000,
@@ -35,18 +31,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const {
     dt,
     pxPerMm,
-    xOffsets,
-    yOffsets,
     sourcePathIdx,
-    camera,
     calibrating,
     scaleFactorJobId,
     setDt,
     setPxPerMm,
-    setXOffsets,
-    setYOffsets,
     setSourcePathIdx,
-    setCamera,
     status,
     scaleFactorJobStatus,
     scaleFactorJobDetails,
@@ -99,30 +89,17 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         <CardTitle>Scale Factor Calibration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium">Source Path</label>
-            <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-              <SelectTrigger id="srcpath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
-              <SelectContent>
-                {sourcePaths.map((p, i) => (
-                  <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Camera</label>
-            <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-              <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
-              <SelectContent>
-                {cameraOptions.map((c, i) => (
-                  <SelectItem key={i} value={String(c)}>{`Camera ${c}`}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <div>
+          <label className="block text-xs font-medium">Source Path</label>
+          <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
+            <SelectTrigger id="srcpath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
+            <SelectContent>
+              {sourcePaths.map((p, i) => (
+                <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
         </div>
         <div>
           <label className="block text-xs font-medium">Δt (seconds)</label>
@@ -157,64 +134,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             placeholder="1.0"
           />
         </div>
-        {/* Table/grid for X/Y offsets per camera */}
-        <div>
-          <label className="block text-xs font-medium mb-1">Camera Offsets (px) - Set to 0,0 for auto bottom-left origin</label>
-          <div className="overflow-x-auto">
-            <table className="min-w-[320px] border text-xs">
-              <thead>
-                <tr>
-                  <th className="px-2 py-1 border">Camera</th>
-                  <th className="px-2 py-1 border">X Offset</th>
-                  <th className="px-2 py-1 border">Y Offset</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({length: cameraOptions.length}).map((_,i)=>(
-                  <tr key={i}>
-                    <td className="px-2 py-1 border text-center">{i+1}</td>
-                    <td className="px-2 py-1 border">
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        pattern="[0-9]*\.?[0-9]*"
-                        value={xOffsets[i]||""}
-                        onChange={e=>{
-                          const next = [...xOffsets]; next[i]=e.target.value; setXOffsets(next);
-                        }}
-                        onBlur={e=>{
-                          if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                            const next = [...xOffsets]; next[i]=e.target.value; setXOffsets(next);
-                          }
-                        }}
-                        className="w-24"
-                        placeholder="0"
-                      />
-                    </td>
-                    <td className="px-2 py-1 border">
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        pattern="[0-9]*\.?[0-9]*"
-                        value={yOffsets[i]||""}
-                        onChange={e=>{
-                          const next = [...yOffsets]; next[i]=e.target.value; setYOffsets(next);
-                        }}
-                        onBlur={e=>{
-                          if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                            const next = [...yOffsets]; next[i]=e.target.value; setYOffsets(next);
-                          }
-                        }}
-                        className="w-24"
-                        placeholder="0"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+
 
         {/* Status indicator (same as pinhole) */}
         <div className="mb-2">
@@ -236,12 +156,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               Calibration error!
             </div>
           )}
-          {status === "not_started" && (
-            <div className="flex items-center gap-2 text-gray-400 text-sm">
-              <span className="inline-block w-3 h-3 bg-gray-400 rounded-full"></span>
-              Calibration not started.
-            </div>
-          )}
         </div>
 
         <div className="flex gap-2">
@@ -252,12 +166,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           >
             {calibrating ? "Calibrating..." : "Calibrate All Vectors"}
           </Button>
-          {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
-          {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
         </div>
         <div className="text-xs text-gray-500 mt-2">
-          This method calibrates all vectors using scale factor conversion: (pixels - offset) / px_per_mm / dt.<br />
-          Set offsets to 0,0 to automatically place bottom-left corner at origin (0,0).<br />
+          This method calibrates all vectors using scale factor conversion: pixels / px_per_mm / dt.<br />
+          Automatically places bottom-left corner at origin (0,0).<br />
           Updates the calibration.scale_factor block in config.yaml.
         </div>
       </CardContent>

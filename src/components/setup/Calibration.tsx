@@ -66,8 +66,6 @@ export const Calibration: React.FC<CalibrationProps> = ({
                   <Component
                     config={config}
                     updateConfig={updateConfig}
-                    setActive={() => setActiveMethod(method.id as any)}
-                    isActive={activeMethod === method.id}
                     cameraOptions={cameraOptions}
                     sourcePaths={sourcePaths}
                     imageCount={imageCount}

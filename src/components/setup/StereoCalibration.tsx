@@ -10,8 +10,6 @@ import { useStereoCalibration } from '@/hooks/useStereoCalibration';
 interface StereoCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  setActive: () => void;
-  isActive: boolean;
   cameraOptions: number[];
   sourcePaths: string[];
   imageCount?: number;
@@ -29,8 +27,6 @@ const basename = (p: string) => {
 export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   config,
   updateConfig,
-  setActive,
-  isActive,
   cameraOptions,
   sourcePaths,
   imageCount = 1000,
@@ -297,8 +293,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             >
               {vectorStatus === "running" || vectorStatus === "starting" ? 'Calibrating...' : 'Calibrate Vectors'}
             </Button>
-            {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
-            {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
           </div>
 
           <div className="text-xs text-gray-500 mt-2">

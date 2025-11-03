@@ -45,8 +45,19 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
     useImagePair(backendUrl, sourcePathIdx, camera, index);
-  const { filters, addFilter, updateBatchSize, removeFilter, runProcessing, procLoading, procImgA, procImgB, fetchProcessed } = 
+  const { filters, addFilter, updateBatchSize, removeFilter, runProcessing, procLoading, procImgA, procImgB, fetchProcessed, setFilters } = 
     useImageFilters(backendUrl);
+
+  // Initialize filters from config
+  useEffect(() => {
+    if (config?.filters) {
+      const configFilters = config.filters.map((f: any) => ({
+        type: f.type,
+        batch_size: f.batch_size ?? 50, // Ensure default is 50
+      }));
+      setFilters(configFilters);
+    }
+  }, [config?.filters, setFilters]);
 
   useEffect(() => {
     setRawVmin(autoVmin);
@@ -58,13 +69,38 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     fetchProcessed(camera, index, sourcePathIdx);
   }, [camera, index, sourcePathIdx, fetchProcessed]);
 
+  // Save filters to config when they change
+  useEffect(() => {
+    const saveFilters = async () => {
+      const filtersToSave = filters.map(f => ({
+        type: f.type,
+        batch_size: f.batch_size ?? 50,
+      }));
+      
+      try {
+        await fetch(`${backendUrl}/update_config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filters: filtersToSave }),
+        });
+      } catch (e) {
+        console.error('Failed to save filters to backend', e);
+      }
+    };
+
+    // Only save if filters array has been modified (not on initial load)
+    if (filters.length > 0 || config?.filters?.length > 0) {
+      saveFilters();
+    }
+  }, [filters, backendUrl]);
+
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const cameraOptions = useMemo(() => { const n = config?.paths?.camera_numbers?.[0] ?? 1; return Array.from({ length: n }, (_, i) => `Cam${i + 1}`); }, [config]);
   const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
 
-  // Helper for adding filters with batch_size
+  // Helper for adding filters with batch_size (default 50 for time filters)
   const handleAddFilter = (type: "POD" | "time") => {
-    addFilter(type, type === "POD" ? 100 : 50);
+    addFilter(type, 50); // Always default to 50 frames
   };
 
   return (

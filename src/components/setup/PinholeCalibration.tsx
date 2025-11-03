@@ -9,8 +9,6 @@ import { usePinholeCalibration } from "@/hooks/usePinholeCalibration";
 interface PinholeCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  setActive: () => void;
-  isActive: boolean;
   cameraOptions: number[];
   sourcePaths: string[];
   imageCount?: number;
@@ -26,8 +24,6 @@ const basename = (p: string) => {
 export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
   config,
   updateConfig,
-  setActive,
-  isActive,
   cameraOptions,
   sourcePaths,
   imageCount = 1000,
@@ -288,8 +284,6 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                 {vectorStatus === "running" || vectorStatus === "starting" ? 'Calibrating...' : 'Calibrate Vectors'}
               </Button>
               {/* Removed explicit Load Results button (auto handled) */}
-              {!isActive && <Button variant="outline" onClick={setActive}>Set as Active</Button>}
-              {isActive && <span className="text-green-600 text-xs font-semibold ml-2">Active</span>}
             </div>
             <div className="text-xs text-gray-500 mt-2">
               <p><strong>Generate Camera Model:</strong> Process all calibration images to create camera models.</p>

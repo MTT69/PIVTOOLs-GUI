@@ -79,6 +79,7 @@ export function useImageFilters(backendUrl: string) {
 
   return {
     filters,
+    setFilters,
     addFilter,
     updateBatchSize,
     removeFilter,

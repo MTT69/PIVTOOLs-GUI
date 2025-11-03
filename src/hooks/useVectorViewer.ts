@@ -95,12 +95,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const MAG_FACTOR = 2.5;
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
-  
-  // Image transformation states
-  const [rotation, setRotation] = useState(0); // 0-3 representing 0°, 90°, 180°, 270°
-  const [flipHorizontal, setFlipHorizontal] = useState(false);
-  const [flipVertical, setFlipVertical] = useState(false);
-  const [transpose, setTranspose] = useState(false);
+  const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
 
   // Functions
   const fetchImage = useCallback(async () => {
@@ -122,12 +117,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
       
-      // Add transformation parameters
-      params.set("rotation", String(rotation));
-      params.set("flip_horizontal", flipHorizontal ? "1" : "0");
-      params.set("flip_vertical", flipVertical ? "1" : "0");
-      params.set("transpose", transpose ? "1" : "0");
-      
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -148,7 +137,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, xOffset, yOffset, rotation, flipHorizontal, flipVertical, transpose]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, xOffset, yOffset]);
 
   const fetchStatVars = useCallback(async () => {
     setStatVarsLoading(true);
@@ -249,12 +238,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("camera", camera);
       params.set("merged", merged ? "1" : "0");
       
-      // Add transformation parameters
-      params.set("rotation", String(rotation));
-      params.set("flip_horizontal", flipHorizontal ? "1" : "0");
-      params.set("flip_vertical", flipVertical ? "1" : "0");
-      params.set("transpose", transpose ? "1" : "0");
-      
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -274,7 +257,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setStatsLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, rotation, flipHorizontal, flipVertical, transpose]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged]);
 
   const handleRender = useCallback(async () => {
     setHasRendered(true);
@@ -451,12 +434,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
     
-    // Add transformation parameters
-    params.set("rotation", String(rotation));
-    params.set("flip_horizontal", flipHorizontal ? "1" : "0");
-    params.set("flip_vertical", flipVertical ? "1" : "0");
-    params.set("transpose", transpose ? "1" : "0");
-    
     const url = `${backendUrl}/plot/${endpoint}?${params.toString()}`;
     fetch(url)
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
@@ -466,7 +443,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, rotation, flipHorizontal, flipVertical, transpose]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -620,10 +597,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     merged,
     basePathIdx,
     meanMode,
-    rotation,          // Added
-    flipHorizontal,    // Added
-    flipVertical,      // Added
-    transpose,         // Added
     fetchImage,
     fetchStatsImage,
   ]);
@@ -697,6 +670,142 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
   }, [imageSrc, base64ToBlob]);
 
+  const applyTransformation = useCallback(async (transformation: string) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await fetch(`${backendUrl}/plot/transform_frame`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          base_path: effectiveDir,
+          camera: camera.replace(/[^\d]/g, "") || "1",
+          frame: index,
+          transformation,
+          merged: merged,
+          type_name: "instantaneous", // or get from somewhere
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setAppliedTransforms(prev => [...prev, transformation]);
+        // Reload the image
+        await handleRender();
+      } else {
+        setError(result.error || "Transformation failed");
+      }
+    } catch (e: any) {
+      setError(`Transformation failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+
+  const clearTransforms = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await fetch(`${backendUrl}/plot/clear_transform`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          base_path: effectiveDir,
+          camera: camera.replace(/[^\d]/g, "") || "1",
+          frame: index,
+          merged: merged,
+          type_name: "instantaneous",
+        }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setAppliedTransforms([]);
+        // Reload the image
+        await handleRender();
+      } else {
+        setError(result.error || "Clear transforms failed");
+      }
+    } catch (e: any) {
+      setError(`Clear transforms failed: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+
+  const [transformationJob, setTransformationJob] = useState<{
+    job_id: string;
+    status: string;
+    progress: number;
+    processed_frames: number;
+    total_frames: number;
+    elapsed_time?: number;
+    estimated_remaining?: number;
+    error?: string;
+  } | null>(null);
+
+  const applyTransformationToAllFrames = useCallback(async (transformations: string[]) => {
+    try {
+      setLoading(true);
+      setError(null);
+      setTransformationJob(null);
+
+      const response = await fetch(`${backendUrl}/plot/transform_all_frames`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          base_path: effectiveDir,
+          camera: camera.replace(/[^\d]/g, "") || "1",
+          transformations,
+          merged: merged,
+          type_name: "instantaneous",
+          image_count: maxFrameCount,
+        }),
+      });
+      const result = await response.json();
+      if (result.job_id) {
+        setTransformationJob({
+          job_id: result.job_id,
+          status: result.status,
+          progress: 0,
+          processed_frames: 0,
+          total_frames: result.total_frames,
+        });
+        // Start polling for status
+        pollTransformationStatus(result.job_id);
+      } else {
+        setError(result.error || "Failed to start transformation job");
+      }
+    } catch (e: any) {
+      setError(`Failed to start transformation: ${e?.message ?? "Unknown error"}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, merged, maxFrameCount]);
+
+  const pollTransformationStatus = useCallback(async (jobId: string) => {
+    try {
+      const response = await fetch(`${backendUrl}/plot/transform_all_frames/status/${jobId}`);
+      const status = await response.json();
+
+      setTransformationJob(status);
+
+      if (status.status === "running" || status.status === "starting") {
+        // Continue polling
+        setTimeout(() => pollTransformationStatus(jobId), 1000);
+      } else if (status.status === "completed") {
+        // Reload current frame to show changes
+        await handleRender();
+      }
+    } catch (e: any) {
+      setError(`Failed to check transformation status: ${e?.message ?? "Unknown error"}`);
+    }
+  }, [backendUrl, handleRender]);
+
   return {
     basePaths,
     basePathIdx,
@@ -764,14 +873,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     basename,
     downloadCurrentView,
     copyCurrentView,
-    rotation,
-    setRotation,
-    flipHorizontal,
-    setFlipHorizontal,
-    flipVertical,
-    setFlipVertical,
-    transpose,
-    setTranspose,
+    applyTransformation,
+    applyTransformationToAllFrames,
+    transformationJob,
+    appliedTransforms,
+    setAppliedTransforms,
+    clearTransforms,
     effectiveDir,  // Added: Export for component use
   };
 };
