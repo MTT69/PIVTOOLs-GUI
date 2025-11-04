@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
+import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
+import { useVectorMerging } from "@/hooks/useVectorMerging";
 
 export default function VectorViewer({ backendUrl = "/backend", config }: { backendUrl?: string; config?: any }) {
   const {
@@ -89,13 +91,61 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
       setLastValidHover(hoverData);
     }
   }, [hoverData]);
+
+  // Use statistics calculation hook
+  const {
+    selectedCameras,
+    includeMerged,
+    calculating,
+    statisticsJobId,
+    showDialog: showStatisticsDialog,
+    setSelectedCameras,
+    setIncludeMerged,
+    setShowDialog: setShowStatisticsDialog,
+    jobStatus: statisticsStatus,
+    jobDetails: statisticsDetails,
+    calculateStatistics,
+    resetStatistics,
+  } = useStatisticsCalculation(
+    backendUrl,
+    basePathIdx,
+    cameraOptions,
+    maxFrameCount  // Use maxFrameCount from useVectorViewer, which is fetched from backend config
+  );
+
+  // Derived values from job details
+  const statisticsProgress = statisticsDetails?.overall_progress || statisticsDetails?.progress || 0;
+  const statisticsError = statisticsDetails?.error || null;
+
+  // Use vector merging hook
+  const {
+    selectedCameras: selectedMergeCameras,
+    merging,
+    mergingJobId,
+    showDialog: showMergingDialog,
+    setSelectedCameras: setSelectedMergeCameras,
+    setShowDialog: setShowMergingDialog,
+    jobStatus: mergingStatus,
+    jobDetails: mergingDetails,
+    mergeVectors,
+    resetMerging,
+  } = useVectorMerging(
+    backendUrl,
+    basePathIdx,
+    cameraOptions,
+    maxFrameCount
+  );
+
+  // Derived values from merging job details
+  const mergingProgress = mergingDetails?.progress || 0;
+  const mergingError = mergingDetails?.error || null;
 ;
 
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Results</CardTitle>
+          <CardTitle>Results Viewer</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4 mb-4">
@@ -113,93 +163,119 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Select>
               </div>
 
-              {/* Camera and merged controls */}
-              <div className="flex items-center gap-4">
-                <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                <Select value={camera} onValueChange={v => setCamera(v)}>
-                  <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
-                  <SelectContent>
-                    {cameraOptions.map((c, i) => (
-                      <SelectItem key={i} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {/* Camera and data source controls - Improved styling */}
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="camera" className="text-sm font-medium text-gray-700">Camera:</label>
+                    <Select value={camera} onValueChange={v => setCamera(v)}>
+                      <SelectTrigger id="camera" className="w-28">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cameraOptions.map((c, i) => (
+                          <SelectItem key={i} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                {/* Merged Data and Mean Statistics (checkbox) */}
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={merged}
-                    onChange={e => setMerged(e.target.checked)}
-                    className="accent-soton-blue w-4 h-4 rounded border-gray-300"
-                  />
-                  Merged Data
-                </label>
+                  {/* Improved toggle switches */}
+                  <div className="flex items-center gap-4 ml-4">
+                    <label className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={merged}
+                        onChange={e => setMerged(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Use Merged Data</span>
+                    </label>
 
-                {/* Mean statistics checkbox placed beside Merged Data */}
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={meanMode}
-                    onChange={() => { void toggleMeanMode(); }}
-                    className="accent-soton-blue w-4 h-4 rounded border-gray-300"
-                  />
-                  Mean Statistics
-                  {statVarsLoading && <span className="ml-2 text-xs text-gray-500">Loading vars...</span>}
-                  {meanMode && statsLoading && <span className="ml-2 text-xs text-gray-500">Computing...</span>}
-                </label>
+                    <label className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={meanMode}
+                        onChange={() => { void toggleMeanMode(); }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Show Mean Statistics</span>
+                      {statVarsLoading && <span className="text-xs text-gray-500">(loading...)</span>}
+                    </label>
+                  </div>
+                </div>
               </div>
+              
+              {/* Better error message when mean stats don't exist */}
+              {meanMode && statsError && (
+                <div className="p-4 bg-amber-50 border-l-4 border-amber-400 rounded-r-lg">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    <div className="flex-1">
+                      <h4 className="text-sm font-semibold text-amber-800 mb-1">Mean Statistics Not Available</h4>
+                      <p className="text-sm text-amber-700">{statsError}</p>
+                      <p className="text-sm text-amber-600 mt-2">
+                        You need to calculate statistics first. Use the "Statistics Calculation" section below to get started.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-              {/* New: X and Y Offset inputs */}
-              <div className="flex items-center gap-4">
-                <label htmlFor="x-offset" className="text-sm font-medium">X Offset:</label>
-                <Input 
-                  id="x-offset" 
-                  type="number" 
-                  value={xOffset} 
-                  onChange={e => setXOffset(e.target.value)} 
-                  className="w-24"
-                  placeholder="0"
-                />
-                
-                <label htmlFor="y-offset" className="text-sm font-medium">Y Offset:</label>
-                <Input 
-                  id="y-offset" 
-                  type="number" 
-                  value={yOffset} 
-                  onChange={e => setYOffset(e.target.value)} 
-                  className="w-24"
-                  placeholder="0"
-                />
+              {/* X and Y Offset inputs - Hidden in mean mode since they only apply to individual frames */}
+              {!meanMode && (
+                <div className="flex items-center gap-4">
+                  <label htmlFor="x-offset" className="text-sm font-medium">X Offset:</label>
+                  <Input 
+                    id="x-offset" 
+                    type="number" 
+                    value={xOffset} 
+                    onChange={e => setXOffset(e.target.value)} 
+                    className="w-24"
+                    placeholder="0"
+                  />
+                  
+                  <label htmlFor="y-offset" className="text-sm font-medium">Y Offset:</label>
+                  <Input 
+                    id="y-offset" 
+                    type="number" 
+                    value={yOffset} 
+                    onChange={e => setYOffset(e.target.value)} 
+                    className="w-24"
+                    placeholder="0"
+                  />
 
-                {/* Update Offsets Button */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={updateOffsets}
-                >
-                  Update Offsets
-                </Button>
-                
-                {/* New: Set datum button */}
-                <Button
-                  size="sm"
-                  variant={datumMode ? "default" : "outline"}
-                  onClick={() => setDatumMode(!datumMode)}
-                  className={`${datumMode ? "bg-yellow-500 hover:bg-yellow-600" : ""}`}
-                >
-                  {datumMode ? "Cancel Set Datum" : "Set New Datum"}
-                </Button>
-                
-                {/* New: Show corner coordinates button */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => fetchCornerCoordinates()}
-                >
-                  Show Corner Coordinates
-                </Button>
-              </div>
+                  {/* Update Offsets Button */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={updateOffsets}
+                  >
+                    Update Offsets
+                  </Button>
+                  
+                  {/* New: Set datum button */}
+                  <Button
+                    size="sm"
+                    variant={datumMode ? "default" : "outline"}
+                    onClick={() => setDatumMode(!datumMode)}
+                    className={`${datumMode ? "bg-yellow-500 hover:bg-yellow-600" : ""}`}
+                  >
+                    {datumMode ? "Cancel Set Datum" : "Set New Datum"}
+                  </Button>
+                  
+                  {/* New: Show corner coordinates button */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => fetchCornerCoordinates()}
+                  >
+                    Show Corner Coordinates
+                  </Button>
+                </div>
+              )}
 
               {/* Display corner coordinates when available */}
               {showCorners && cornerCoordinates && (
@@ -234,114 +310,417 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </div>
               )}
 
-              <div className={`flex items-center gap-4 mb-4 flex-wrap transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
-                {/* Type/colormap/run/limits/render/export controls */}
-                <label htmlFor="type" className="text-sm font-medium">Type:</label>
-                <Select value={type} onValueChange={v => setType(v)}>
-                  <SelectTrigger id="type"><SelectValue placeholder="Select type" /></SelectTrigger>
-                  <SelectContent>
-                    {meanMode ? (
-                      statVarsLoading ? (
-                        <SelectItem value="loading">Loading...</SelectItem>
-                      ) : statVars && statVars.length > 0 ? (
-                        statVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
-                      ) : (
-                        <SelectItem value="none" disabled>No vars</SelectItem>
-                      )
-                    ) : (
-                      frameVarsLoading ? (
-                        <SelectItem value="loading">Loading...</SelectItem>
-                      ) : frameVars && frameVars.length > 0 ? (
-                        frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
-                      ) : (
-                        <>
-                          <SelectItem value="ux">ux</SelectItem>
-                          <SelectItem value="uy">uy</SelectItem>
-                        </>
-                      )
-                    )}
-                  </SelectContent>
-                </Select>
-                <label htmlFor="cmap" className="text-sm font-medium">Colormap:</label>
-                <Select value={cmap} onValueChange={v => setCmap(v)}>
-                  <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">default</SelectItem>
-                    <SelectItem value="viridis">viridis</SelectItem>
-                    <SelectItem value="plasma">plasma</SelectItem>
-                    <SelectItem value="inferno">inferno</SelectItem>
-                    <SelectItem value="magma">magma</SelectItem>
-                    <SelectItem value="cividis">cividis</SelectItem>
-                    <SelectItem value="jet">jet</SelectItem>
-                    <SelectItem value="gray">gray</SelectItem>
-                    <SelectItem value="bone">bone</SelectItem>
-                    <SelectItem value="copper">copper</SelectItem>
-                    <SelectItem value="pink">pink</SelectItem>
-                    <SelectItem value="spring">spring</SelectItem>
-                    <SelectItem value="summer">summer</SelectItem>
-                    <SelectItem value="autumn">autumn</SelectItem>
-                    <SelectItem value="winter">winter</SelectItem>
-                    <SelectItem value="hot">hot</SelectItem>
-                    <SelectItem value="cool">cool</SelectItem>
-                    <SelectItem value="Wistia">Wistia</SelectItem>
-                    <SelectItem value="twilight">twilight</SelectItem>
-                    <SelectItem value="hsv">hsv</SelectItem>
-                  </SelectContent>
-                </Select>
-                <label htmlFor="run" className="text-sm font-medium">Run:</label>
-                <Input id="run" type="number" min={1} value={run} onChange={e => setRun(Math.max(1, Number(e.target.value)))} className="w-24" />
-                <label className="text-sm font-medium">Lower:</label>
-                <Input type="number" value={lower} onChange={e => setLower(e.target.value)} placeholder="auto" className="w-28" />
-                <label className="text-sm font-medium">Upper:</label>
-                <Input type="number" value={upper} onChange={e => setUpper(e.target.value)} placeholder="auto" className="w-28" />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => { void fetchLimits(); }}
-                  disabled={limitsLoading || meanMode}
-                  className="ml-2"
-                >
-                  {limitsLoading ? "Getting..." : "Get Limits"}
-                </Button>
-
-                {/* Group render + export buttons so they don't overflow; allow wrapping on small screens */}
-                <div className="flex items-center gap-2 flex-wrap ml-2">
-                  <Button
-                    className="bg-soton-blue flex-shrink-0"
-                    onClick={() => { void handleRender(); }}
-                    disabled={loading || statsLoading || frameVarsLoading}
+              {/* Vector Merging Section - Only show if multiple cameras */}
+              {cameraOptions.length > 1 && (
+                <div className="p-3 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg">
+                  <button
+                    onClick={() => setShowMergingDialog(!showMergingDialog)}
+                    className="w-full flex items-center justify-between text-left"
                   >
-                    {(loading || statsLoading || frameVarsLoading) ? "Loading..." : "Render"}
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-semibold text-green-900">Merge Vectors</h4>
+                      <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                        Combine camera views
+                      </span>
+                    </div>
+                    <svg 
+                      className={`w-5 h-5 text-green-700 transition-transform ${showMergingDialog ? 'rotate-180' : ''}`}
+                      fill="none" 
+                      stroke="currentColor" 
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {showMergingDialog && (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-xs text-green-800">
+                        Merge vector fields from multiple cameras into a single combined field.
+                      </p>
+
+                      {!mergingJobId && (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras to Merge:</label>
+                            <div className="flex flex-wrap gap-2">
+                              {cameraOptions.map(cam => (
+                                <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedMergeCameras.includes(cam)}
+                                    onChange={e => {
+                                      if (e.target.checked) {
+                                        setSelectedMergeCameras([...selectedMergeCameras, cam]);
+                                      } else {
+                                        setSelectedMergeCameras(selectedMergeCameras.filter(c => c !== cam));
+                                      }
+                                    }}
+                                    className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                                  />
+                                  <span className="text-xs font-medium">{cam}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+
+                          <Button
+                            onClick={mergeVectors}
+                            disabled={merging || selectedMergeCameras.length < 2}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white text-xs py-2"
+                          >
+                            {merging ? "Starting merge..." : `Merge ${selectedMergeCameras.length} Cameras`}
+                          </Button>
+                        </div>
+                      )}
+
+                      {mergingJobId && (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1">
+                              <div className="text-xs font-medium text-gray-700 mb-1">
+                                {mergingStatus === "completed" ? "Merge Complete!" : 
+                                 mergingStatus === "failed" ? "Merge Failed" :
+                                 mergingStatus === "running" ? "Merging vectors..." : "Starting..."}
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-green-600 h-2 rounded-full transition-all duration-300" 
+                                  style={{ width: `${mergingProgress}%` }}
+                                />
+                              </div>
+                              <div className="text-xs text-gray-600 mt-1">
+                                {mergingDetails?.processed_frames || 0} / {mergingDetails?.total_frames || 0} frames
+                              </div>
+                            </div>
+                          </div>
+
+                          {mergingStatus === "completed" && (
+                            <div className="p-3 bg-green-50 border-l-4 border-green-500 rounded-r">
+                              <div className="flex items-start gap-2">
+                                <svg className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                </svg>
+                                <div>
+                                  <h5 className="text-xs font-semibold text-green-800">Merge Successful</h5>
+                                  <p className="text-xs text-green-700 mt-0.5">
+                                    Vectors merged successfully. Enable "Use Merged Data" to view the results.
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {mergingStatus === "failed" && mergingError && (
+                            <div className="space-y-2">
+                              <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded-r">
+                                <div className="flex items-start gap-2">
+                                  <svg className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                  </svg>
+                                  <div>
+                                    <h5 className="text-xs font-semibold text-red-800">Merge Failed</h5>
+                                    <p className="text-xs text-red-700 mt-0.5">{mergingError}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                onClick={resetMerging}
+                                variant="outline"
+                                className="w-full text-xs"
+                              >
+                                Try Again
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Statistics Calculation Section - Collapsible */}
+              <div className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+                <button
+                  onClick={() => setShowStatisticsDialog(!showStatisticsDialog)}
+                  className="w-full flex items-center justify-between text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-semibold text-blue-900">Statistics Calculation</h4>
+                    <span className="text-xs text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                      Required for mean statistics
+                    </span>
+                  </div>
+                  <svg 
+                    className={`w-5 h-5 text-blue-700 transition-transform ${showStatisticsDialog ? 'rotate-180' : ''}`}
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {showStatisticsDialog && (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs text-blue-800">
+                      Calculate mean velocities and Reynolds stresses across all frames.
+                    </p>
+
+                    {!statisticsJobId && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras:</label>
+                          <div className="flex flex-wrap gap-2">
+                            {cameraOptions.map(cam => (
+                              <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCameras.includes(cam)}
+                                  onChange={e => {
+                                    if (e.target.checked) {
+                                      setSelectedCameras([...selectedCameras, cam]);
+                                    } else {
+                                      setSelectedCameras(selectedCameras.filter(c => c !== cam));
+                                    }
+                                  }}
+                                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                                />
+                                <span className="font-medium">{cam}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
+                          <input
+                            type="checkbox"
+                            checked={includeMerged}
+                            onChange={e => setIncludeMerged(e.target.checked)}
+                            className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                          />
+                          <span className="font-medium">Include Merged Data</span>
+                          <span className="text-xs text-gray-500">(if available)</span>
+                        </label>
+
+                        <Button
+                          onClick={calculateStatistics}
+                          disabled={calculating || (selectedCameras.length === 0 && !includeMerged)}
+                          className="w-full bg-green-600 hover:bg-green-700 text-white"
+                          size="sm"
+                        >
+                          {calculating ? "Starting Calculation..." : "Calculate Statistics"}
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Progress display */}
+                    {statisticsJobId && statisticsStatus !== "completed" && statisticsStatus !== "failed" && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-gray-700">Status:</span>
+                          <span className={`font-medium ${statisticsStatus === "running" ? "text-blue-600" : "text-gray-600"}`}>
+                            {statisticsStatus === "running" ? "Processing..." : statisticsStatus}
+                          </span>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
+                            <div 
+                              className="h-2 bg-gradient-to-r from-blue-500 to-blue-600 transition-all duration-300" 
+                              style={{ width: `${statisticsProgress}%` }}
+                            ></div>
+                          </div>
+                          <p className="text-xs text-gray-600 text-right">
+                            {statisticsProgress.toFixed(1)}% complete
+                          </p>
+                        </div>
+
+                        {statisticsDetails?.camera && (
+                          <p className="text-xs text-gray-600">
+                            Processing: <span className="font-medium">{statisticsDetails.camera}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {statisticsStatus === "completed" && (
+                      <div className="space-y-2">
+                        <div className="p-3 bg-green-50 border-l-4 border-green-500 rounded-r">
+                          <div className="flex items-start gap-2">
+                            <svg className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                            <div>
+                              <h5 className="text-xs font-semibold text-green-800">Statistics Calculated!</h5>
+                              <p className="text-xs text-green-700 mt-0.5">
+                                Enable "Show Mean Statistics" above to view them.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={resetStatistics}
+                          variant="outline"
+                          className="w-full text-xs"
+                        >
+                          Calculate New Statistics
+                        </Button>
+                      </div>
+                    )}
+
+                    {statisticsStatus === "failed" && statisticsError && (
+                      <div className="space-y-2">
+                        <div className="p-3 bg-red-50 border-l-4 border-red-500 rounded-r">
+                          <div className="flex items-start gap-2">
+                            <svg className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                            </svg>
+                            <div>
+                              <h5 className="text-xs font-semibold text-red-800">Calculation Failed</h5>
+                              <p className="text-xs text-red-700 mt-0.5">{statisticsError}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={resetStatistics}
+                          variant="outline"
+                          className="w-full text-xs"
+                        >
+                          Try Again
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Visualization Controls - Now works for both regular and mean statistics */}
+              <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-700 mb-3">Visualization Settings</h4>
+                <div className="flex items-center gap-4 mb-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="type" className="text-sm font-medium text-gray-700">Variable:</label>
+                    <Select value={type} onValueChange={v => setType(v)}>
+                      <SelectTrigger id="type" className="w-32">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {meanMode ? (
+                          statVarsLoading ? (
+                            <SelectItem value="loading">Loading...</SelectItem>
+                          ) : statVars && statVars.length > 0 ? (
+                            statVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
+                          ) : (
+                            <SelectItem value="none" disabled>No variables</SelectItem>
+                          )
+                        ) : (
+                          frameVarsLoading ? (
+                            <SelectItem value="loading">Loading...</SelectItem>
+                          ) : frameVars && frameVars.length > 0 ? (
+                            frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
+                          ) : (
+                            <>
+                              <SelectItem value="ux">ux</SelectItem>
+                              <SelectItem value="uy">uy</SelectItem>
+                            </>
+                          )
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="cmap" className="text-sm font-medium text-gray-700">Colormap:</label>
+                    <Select value={cmap} onValueChange={v => setCmap(v)}>
+                      <SelectTrigger id="cmap" className="w-32">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">default</SelectItem>
+                        <SelectItem value="viridis">viridis</SelectItem>
+                        <SelectItem value="plasma">plasma</SelectItem>
+                        <SelectItem value="inferno">inferno</SelectItem>
+                        <SelectItem value="magma">magma</SelectItem>
+                        <SelectItem value="cividis">cividis</SelectItem>
+                        <SelectItem value="jet">jet</SelectItem>
+                        <SelectItem value="gray">gray</SelectItem>
+                        <SelectItem value="bone">bone</SelectItem>
+                        <SelectItem value="copper">copper</SelectItem>
+                        <SelectItem value="pink">pink</SelectItem>
+                        <SelectItem value="spring">spring</SelectItem>
+                        <SelectItem value="summer">summer</SelectItem>
+                        <SelectItem value="autumn">autumn</SelectItem>
+                        <SelectItem value="winter">winter</SelectItem>
+                        <SelectItem value="hot">hot</SelectItem>
+                        <SelectItem value="cool">cool</SelectItem>
+                        <SelectItem value="Wistia">Wistia</SelectItem>
+                        <SelectItem value="twilight">twilight</SelectItem>
+                        <SelectItem value="hsv">hsv</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="run" className="text-sm font-medium text-gray-700">Run:</label>
+                    <Input id="run" type="number" min={1} value={run} onChange={e => setRun(Math.max(1, Number(e.target.value)))} className="w-20" />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-700">Lower:</label>
+                    <Input type="number" value={lower} onChange={e => setLower(e.target.value)} placeholder="auto" className="w-24" />
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-700">Upper:</label>
+                    <Input type="number" value={upper} onChange={e => setUpper(e.target.value)} placeholder="auto" className="w-24" />
+                  </div>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { void fetchLimits(); }}
+                    disabled={limitsLoading}
+                    className="text-xs"
+                  >
+                    {limitsLoading ? "Getting..." : "Auto-Calculate Limits"}
                   </Button>
 
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="ml-auto flex items-center gap-2 flex-wrap">
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                      onClick={() => { void handleRender(); }}
+                      disabled={loading || statsLoading || frameVarsLoading}
+                    >
+                      {(loading || statsLoading || frameVarsLoading) ? "Loading..." : "Render"}
+                    </Button>
+
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={downloadCurrentView}
                       disabled={!imageSrc || loading || statsLoading}
-                      className="flex-shrink-0"
                     >
                       Download PNG
                     </Button>
+                    
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => { void copyCurrentView(); }}
                       disabled={!imageSrc || loading || statsLoading}
-                      className="flex-shrink-0"
                     >
                       Copy PNG
                     </Button>
                   </div>
                 </div>
               </div>
-
-              {statsError && meanMode && (
-                <div className="w-full p-3 mb-3 rounded border border-red-200 bg-red-50 text-red-700 text-sm">
-                  {statsError}
-                </div>
-              )}
             </div>
           </div>
 
@@ -561,9 +940,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   ref={magnifierRef}
                   style={{
                     display: magVisible ? 'block' : 'none',
-                    position: 'absolute',
+                    position: 'fixed',
                     pointerEvents: 'none',
-                    zIndex: 61,
+                    zIndex: 9999,
                     width: MAG_SIZE,
                     height: MAG_SIZE,
                     left: magPos.left,
@@ -584,9 +963,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Frame slider and play button: keep visible whenever we know maxFrameCount */}
-            {maxFrameCount > 0 && (
-              <div className={`flex flex-col md:flex-row items-center justify-center gap-4 mt-6 transition-opacity duration-200 ${meanMode ? "opacity-40 pointer-events-none" : ""}`}>
+            {/* Frame slider and play button - Hidden in mean mode since it doesn't apply */}
+            {maxFrameCount > 0 && !meanMode && (
+              <div className="flex flex-col md:flex-row items-center justify-center gap-4 mt-6">
                 {/* Frame slider + numeric selector */}
                 <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
                 <div className="flex items-center gap-3">
@@ -598,7 +977,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     value={index}
                     onChange={e => setIndex(Number(e.target.value))}
                     className="w-64"
-                    disabled={meanMode}
                   />
                   {/* Numeric input to directly set current frame */}
                   <Input
@@ -609,7 +987,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     value={index}
                     onChange={e => setIndex(Math.max(1, Math.min(maxFrameCount, Number(e.target.value || 1))))}
                     className="w-24"
-                    disabled={meanMode}
                   />
                   <span className="text-xs text-gray-500">{index} / {maxFrameCount}</span>
                 </div>
@@ -620,7 +997,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     variant={playing ? "default" : "outline"}
                     onClick={() => { handlePlayToggle(); }}
                     className="flex items-center gap-1"
-                    disabled={meanMode}
                   >
                     {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
                   </Button>

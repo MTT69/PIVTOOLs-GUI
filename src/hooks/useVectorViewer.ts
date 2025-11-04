@@ -217,6 +217,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
   }, [effectiveDir, camera, merged, type, backendUrl, setLower, setUpper]);
 
+  const fetchAvailableRuns = useCallback(async () => {
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) return [];
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("camera", camera);
+      params.set("merged", merged ? "1" : "0");
+      const url = `${backendUrl}/plot/check_runs?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) return [];
+      const runs = Array.isArray(json.runs) ? json.runs.map(Number).filter((n: number) => Number.isFinite(n) && n > 0) : [];
+      return runs;
+    } catch (e) {
+      return [];
+    }
+  }, [effectiveDir, camera, merged, backendUrl]);
+
   const handlePlayToggle = () => {
     setPlaying(p => !p);
   };
@@ -502,10 +521,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       return;
     }
     setMagVisible(true);
-    // Position magnifier so its center is exactly at the cursor position
-    // Account for the fact that CSS transforms the canvas size by DPR
-    const left = x - (MAG_SIZE / 2);
-    const top = y - (MAG_SIZE / 2);
+    // Position magnifier so its center is exactly at the cursor position (using clientX/Y for fixed positioning)
+    const left = e.clientX - (MAG_SIZE / 2);
+    const top = e.clientY - (MAG_SIZE / 2);
     setMagPos({ left, top });
     const ctx = mag.getContext('2d');
     if (!ctx) return;
@@ -576,6 +594,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
     fetchConfig();
   }, [backendUrl]);
+
+  useEffect(() => {
+    if (!effectiveDir || meanMode) return;
+    fetchAvailableRuns().then(runs => {
+      if (runs.length > 0) {
+        const maxRun = Math.max(...runs);
+        setRun(maxRun);
+        setHasRendered(true);
+      }
+    }).catch(() => {});
+  }, [effectiveDir, meanMode, fetchAvailableRuns]);
 
   useEffect(() => {
     if (!hasRendered || !(effectiveDir || basePaths.length > 0)) return;

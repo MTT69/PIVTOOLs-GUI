@@ -26,7 +26,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     const paths = config.paths || {};
 
     setNumImages(images.num_images !== undefined ? String(images.num_images) : "");
-    setNumCameras(String(paths.camera_numbers?.[0] || "1"));
+    setNumCameras(String(paths.camera_count || "1"));
     setTimeResolved(!!images.time_resolved);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
@@ -57,7 +57,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
         vector_format: [nextVectorPattern],
       },
       paths: {
-        camera_numbers: [Number(nextNumCameras)],
+        camera_count: Number(nextNumCameras),
       },
     };
     try {
@@ -122,7 +122,7 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
               />
             </div>
             <div>
-              <Label htmlFor="num_cameras">Number of Cameras</Label>
+              <Label htmlFor="num_cameras">Camera Count</Label>
               <Input
                 id="num_cameras"
                 type="number"
@@ -131,6 +131,9 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
                 onChange={e => setNumCameras(e.target.value.replace(/[^0-9]/g, ''))}
                 onBlur={() => saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern)}
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                Total number of cameras in your setup
+              </p>
             </div>
           </div>
           <div className="mt-4 flex items-center gap-2">

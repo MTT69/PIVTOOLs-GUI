@@ -1,9 +1,11 @@
 "use client";
 
-import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card";
+import { useState, useEffect } from "react";
+import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, Plus, ChevronUp, ChevronDown, Save } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { X, Plus, ChevronUp, ChevronDown, Save, Camera } from "lucide-react";
 import { useInstantaneousPivConfig, PivPass } from "@/hooks/useInstantaneousPivConfig"; // Adjust path
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
 import RunPIV from "./RunPIV";
@@ -17,11 +19,106 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
   const { passes, addPass, removePass, movePass, updatePassField, toggleStore } = 
     useInstantaneousPivConfig(config.instantaneous_piv, updateConfig);
 
+  // Camera selection state
+  const cameraCount = config?.paths?.camera_count || 1;
+  const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
+
+  // Helper function to save camera selection to backend
+  const saveCameraSelection = async (cameras: number[]) => {
+    try {
+      const res = await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          paths: { 
+            ...config.paths,
+            camera_numbers: cameras 
+          } 
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.updated?.paths) {
+          updateConfig(['paths'], { ...config.paths, ...json.updated.paths });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to save camera selection:', e);
+    }
+  };
+
+  useEffect(() => {
+    // Initialize selected cameras from config
+    const currentCameras = config?.paths?.camera_numbers || [];
+    if (currentCameras.length > 0) {
+      // Filter out invalid camera numbers (like 0 or out of range)
+      const validCameras = currentCameras.filter((c: number) => c >= 1 && c <= cameraCount);
+      if (validCameras.length > 0) {
+        setSelectedCameras(validCameras);
+      } else {
+        // Default to camera 1 if no valid cameras, and save it
+        const defaultCameras = [1];
+        setSelectedCameras(defaultCameras);
+        saveCameraSelection(defaultCameras);
+      }
+    } else {
+      // Default to camera 1 if none selected, and save it
+      const defaultCameras = [1];
+      setSelectedCameras(defaultCameras);
+      saveCameraSelection(defaultCameras);
+    }
+  }, [config?.paths?.camera_numbers, cameraCount]);
+
+  const toggleCamera = async (cameraNum: number) => {
+    let newSelectedCameras: number[];
+    if (selectedCameras.includes(cameraNum)) {
+      // Don't allow deselecting all cameras
+      if (selectedCameras.length === 1) return;
+      newSelectedCameras = selectedCameras.filter((c: number) => c !== cameraNum);
+    } else {
+      newSelectedCameras = [...selectedCameras, cameraNum].sort((a, b) => a - b);
+    }
+    
+    setSelectedCameras(newSelectedCameras);
+    
+    // Save to backend using the helper function
+    await saveCameraSelection(newSelectedCameras);
+  };
+
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader><CardTitle>Instantaneous PIV</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Instantaneous PIV</CardTitle>
+          <CardDescription>Configure processing passes and select cameras</CardDescription>
+        </CardHeader>
         <CardContent className="space-y-4">
+          {/* Camera Selection */}
+          {cameraCount > 1 && (
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2 mb-3">
+                <Camera className="h-5 w-5 text-soton-blue" />
+                <Label className="text-sm font-semibold">Select Cameras to Process</Label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: cameraCount }, (_, i) => i + 1).map(camNum => (
+                  <Button
+                    key={camNum}
+                    variant={selectedCameras.includes(camNum) ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => toggleCamera(camNum)}
+                    className="min-w-[80px]"
+                  >
+                    Camera {camNum}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Selected cameras: {selectedCameras.join(', ')} (at least one required)
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center gap-4 flex-wrap mb-6">
             <div className="flex items-center gap-3">
               <p className="text-sm text-muted-foreground">Configure passes and toggle which to store (final pass always stored)</p>

@@ -103,7 +103,16 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
     onZoomChange?.(s, o.x, o.y);
   };
 
-  useEffect(fitToView, [raw, imgEl]);
+  // Track if we've done initial fit
+  const hasInitialFit = useRef(false);
+
+  useEffect(() => {
+    // Only auto-fit on initial load, not when image changes
+    if (!hasInitialFit.current && (raw || imgEl)) {
+      fitToView();
+      hasInitialFit.current = true;
+    }
+  }, [raw, imgEl]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = wrapperRef.current?.getBoundingClientRect();

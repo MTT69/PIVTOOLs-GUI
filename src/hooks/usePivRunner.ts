@@ -10,7 +10,6 @@ const POLL_INTERVAL_MS = 500;
  */
 interface PivRunnerSettings {
   sourcePathIdx: number;
-  camera: string;
   varType: string;
   cmap: string;
   run: number;
@@ -37,6 +36,8 @@ export function usePivRunner(settings: PivRunnerSettings) {
 
   const nextFrameIndexRef = useRef<number>(1);
   const settingsRef = useRef(settings);
+  const lastImageUpdateRef = useRef<number>(0);
+  const availableFramesRef = useRef<number[]>([]);
 
   // Keep the settings ref updated to prevent stale closures in intervals
   useEffect(() => {
@@ -52,7 +53,6 @@ export function usePivRunner(settings: PivRunnerSettings) {
       try {
         const params = new URLSearchParams({
           basepath_idx: String(currentSettings.sourcePathIdx),
-          camera: currentSettings.camera,
           var: currentSettings.varType,
           is_uncalibrated: '1',
         });
@@ -67,7 +67,7 @@ export function usePivRunner(settings: PivRunnerSettings) {
         if (statusRes.ok) {
           const data = await statusRes.json();
           currentProgress = Math.round(data.percent ?? 0);
-          setProgress(p => Math.max(p, currentProgress)); // Avoid progress going backwards
+          setProgress((p: number) => Math.max(p, currentProgress)); // Avoid progress going backwards
           if (currentProgress >= 100) setIsPolling(false); // Stop polling on completion
           // Parse available files to get frame indices
           if (data.files && Array.isArray(data.files)) {
@@ -75,30 +75,60 @@ export function usePivRunner(settings: PivRunnerSettings) {
               const match = f.match(/(\d+)\.mat$/);
               return match ? parseInt(match[1], 10) : null;
             }).filter((n: number | null) => n !== null) as number[];
+            availableFrames.sort((a, b) => a - b); // Sort frames in ascending order
+            availableFramesRef.current = availableFrames;
           }
         }
 
-        // Now fetch image only if we have available frames
-        let imageRes = null;
+        // Fetch image if we have available frames and showStatusImage is enabled
+        const now = Date.now();
+        const timeSinceLastUpdate = now - lastImageUpdateRef.current;
+        
         if (currentSettings.showStatusImage && availableFrames.length > 0) {
-          const firstFrame = Math.min(...availableFrames);
-          nextFrameIndexRef.current = firstFrame;
-          imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${params.toString()}&index=${firstFrame}`);
-        }
-
-        // Process image response - show first available frame
-        setStatusImage(prev => ({ ...prev, error: null }));
-        if (imageRes?.ok) {
-          const data = await imageRes.json();
-          if (data.image) {
-            setStatusImage(prev => ({ ...prev, src: data.image }));
+          // Show new image every 2 seconds or immediately if first frame
+          if (lastImageUpdateRef.current === 0 || timeSinceLastUpdate >= 2000) {
+            // Find the frame to display
+            let frameToShow: number;
+            
+            if (lastImageUpdateRef.current === 0) {
+              // First image - show the first available frame
+              frameToShow = availableFrames[0];
+              nextFrameIndexRef.current = 0; // Index in the array, not the frame number
+            } else {
+              // Subsequent images - find next available frame
+              const nextIdx = nextFrameIndexRef.current + 1;
+              if (nextIdx < availableFrames.length) {
+                // Move to next frame
+                frameToShow = availableFrames[nextIdx];
+                nextFrameIndexRef.current = nextIdx;
+              } else {
+                // Stay on last available frame (or loop back if you prefer)
+                frameToShow = availableFrames[availableFrames.length - 1];
+                nextFrameIndexRef.current = availableFrames.length - 1;
+              }
+            }
+            
+            // Fetch the image
+            const imageParams = new URLSearchParams(params);
+            imageParams.set('index', String(frameToShow));
+            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
+            
+            if (imageRes.ok) {
+              const data = await imageRes.json();
+              if (data.image) {
+                setStatusImage({ src: data.image, error: null });
+                lastImageUpdateRef.current = now;
+              }
+            } else {
+              // Don't show error for 404 - just means frame not ready yet
+              if (imageRes.status !== 404) {
+                setStatusImage((prev: any) => ({ ...prev, error: `Image Error: ${imageRes.statusText}` }));
+              }
+            }
           }
-        } else if (imageRes && currentProgress > 0) {
-          setStatusImage(prev => ({ ...prev, src: null, error: `Image Error: ${imageRes.statusText}` }));
         }
       } catch (error) {
-        console.error("Polling error:", error);
-        setStatusImage(prev => ({ ...prev, src: null, error: "Polling failed. Check connection." }));
+        setStatusImage((prev: any) => ({ ...prev, src: null, error: "Polling failed. Check connection." }));
       }
     };
 
@@ -111,7 +141,9 @@ export function usePivRunner(settings: PivRunnerSettings) {
     setIsLoading(true);
     setStatusImage({ src: null, error: null });
     setProgress(0);
-    nextFrameIndexRef.current = 1;
+    nextFrameIndexRef.current = 0; // Start from first frame in array
+    lastImageUpdateRef.current = 0;
+    availableFramesRef.current = [];
     setJobId(null);
 
     try {
@@ -120,7 +152,6 @@ export function usePivRunner(settings: PivRunnerSettings) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourcePathIdx: settingsRef.current.sourcePathIdx,
-          camera: settingsRef.current.camera,
         }),
       });
       if (!response.ok) throw new Error(`Failed to start PIV: ${response.statusText}`);

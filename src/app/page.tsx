@@ -228,14 +228,6 @@ export default function Home() {
                     <div>
                       <InstantaneousPIV config={config} updateConfig={updateConfig} />
                     </div>
-                    {/* RunPIV section with dummy Test button */}
-                    <div className="mt-4">
-                      <div className="flex flex-col gap-4">
-                        <Button className="w-fit bg-soton-gold text-soton-darkblue hover:bg-yellow-400" onClick={() => alert('Test run (dummy): Processing a temporal length of images...')}>
-                          Test (Temporal Length)
-                        </Button>
-                      </div>
-                    </div>
                     {/* Window Size Selection Guidelines below RunPIV */}
                     <div className="mt-4">
                       <div className="bg-white rounded-xl shadow p-6">

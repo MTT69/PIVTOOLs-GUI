@@ -35,8 +35,10 @@ function PolygonMaskEditor({
 	const magRef = useRef<HTMLCanvasElement | null>(null);
 	const [magnifierEnabled, setMagnifierEnabled] = useState<boolean>(false);
 	const [magVisible, setMagVisible] = useState<boolean>(false);
-	const MAG_SIZE = 200; // px diameter
+	const [magPos, setMagPos] = useState({ left: 0, top: 0 });
+	const MAG_SIZE = 180; // px diameter (matches VectorViewer)
 	const MAG_FACTOR = 2.5; // zoom factor
+	const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
 	const [nativeSize, setNativeSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
@@ -97,109 +99,123 @@ function PolygonMaskEditor({
 
 	// Ensure magnifier canvas is configured (DPR-aware)
 	useEffect(() => {
-		const dpr = window.devicePixelRatio || 1;
 		if (magRef.current) {
 			magRef.current.width = Math.round(MAG_SIZE * dpr);
 			magRef.current.height = Math.round(MAG_SIZE * dpr);
-			magRef.current.style.width = `${MAG_SIZE}px`;
-			magRef.current.style.height = `${MAG_SIZE}px`;
 			const ctx = magRef.current.getContext("2d");
 			if (ctx) ctx.imageSmoothingEnabled = true;
 		}
-	}, [MAG_SIZE]);
+	}, [MAG_SIZE, dpr]);
 
-	// Pointer move handler for magnifier
+	// Pointer move handler for magnifier (improved to work in padding areas too)
 	function handlePointerMove(e: React.PointerEvent) {
 		if (!magnifierEnabled || !magRef.current || !viewRef.current || !wrapperRef.current) return;
-		setMagVisible(true);
-		const rect = wrapperRef.current.getBoundingClientRect();
-		// position mag to top-left of cursor
-		let left = e.clientX - rect.left - MAG_SIZE - 12;
-		let top = e.clientY - rect.top - MAG_SIZE - 12;
-		// constrain to wrapper
-		left = Math.max(0, Math.min(left, rect.width - MAG_SIZE));
-		top = Math.max(0, Math.min(top, rect.height - MAG_SIZE));
-		magRef.current.style.left = `${left}px`;
-		magRef.current.style.top = `${top}px`;
-
-		// compute local coords relative to image canvas (viewRef)
+		
 		const canvas = viewRef.current;
-		const canvasRect = canvas.getBoundingClientRect();
-		const localX = e.clientX - canvasRect.left;
-		const localY = e.clientY - canvasRect.top;
-		const srcW = Math.max(1, MAG_SIZE / MAG_FACTOR);
-		const dpr = window.devicePixelRatio || 1;
-		const sx = Math.max(0, Math.min(canvas.width - srcW, localX * (canvas.width / canvasRect.width) - srcW / 2));
-		const sy = Math.max(0, Math.min(canvas.height - srcW, localY * (canvas.height / canvasRect.height) - srcW / 2));
-
+		const wrapper = wrapperRef.current;
+		const wrapperRect = wrapper.getBoundingClientRect();
+		
+		// Check if we're within the wrapper (image + padding area)
+		const wrapperX = e.clientX - wrapperRect.left;
+		const wrapperY = e.clientY - wrapperRect.top;
+		
+		// Only show magnifier if we're within the wrapper bounds
+		if (wrapperX < 0 || wrapperY < 0 || wrapperX > wrapperRect.width || wrapperY > wrapperRect.height) {
+			setMagVisible(false);
+			return;
+		}
+		
+		setMagVisible(true);
+		
+		// Position magnifier centered on cursor using fixed positioning
+		const left = e.clientX - (MAG_SIZE / 2);
+		const top = e.clientY - (MAG_SIZE / 2);
+		setMagPos({ left, top });
+		
 		const mctx = magRef.current.getContext("2d");
 		if (!mctx) return;
-		// clear & draw scaled region to full mag canvas
-		mctx.clearRect(0, 0, magRef.current.width, magRef.current.height);
-
-		// circular clipping for crisp circle
+		
+		// Clear and set up circular clipping
+		mctx.clearRect(0, 0, MAG_SIZE * dpr, MAG_SIZE * dpr);
 		mctx.save();
 		mctx.beginPath();
-		mctx.arc(magRef.current.width / 2, magRef.current.height / 2, magRef.current.width / 2, 0, Math.PI * 2);
+		mctx.arc((MAG_SIZE * dpr) / 2, (MAG_SIZE * dpr) / 2, (MAG_SIZE * dpr) / 2, 0, Math.PI * 2);
 		mctx.clip();
-
+		
+		// Calculate source position - clamp to canvas bounds for edge areas
+		const rect = canvas.getBoundingClientRect();
+		let x = e.clientX - rect.left;
+		let y = e.clientY - rect.top;
+		
+		// Clamp to canvas bounds so we can show edges properly
+		x = Math.max(0, Math.min(rect.width, x));
+		y = Math.max(0, Math.min(rect.height, y));
+		
+		const srcCenterX = (x / rect.width) * canvas.width;
+		const srcCenterY = (y / rect.height) * canvas.height;
+		const srcSize = (MAG_SIZE / MAG_FACTOR);
+		const sx = srcCenterX - (srcSize / 2);
+		const sy = srcCenterY - (srcSize / 2);
+		
 		// Draw base image region
 		mctx.drawImage(
 			canvas,
-			sx,
-			sy,
-			srcW,
-			srcW,
-			0,
-			0,
-			magRef.current.width,
-			magRef.current.height
+			sx, sy,
+			srcSize, srcSize,
+			0, 0,
+			MAG_SIZE * dpr, MAG_SIZE * dpr
 		);
-
-		// Composite overlay (polygons) so they appear in the magnifier as well
+		
+		// Composite overlay (polygons) so they appear in the magnifier
 		if (overlayRef.current) {
 			mctx.drawImage(
 				overlayRef.current,
-				sx,
-				sy,
-				srcW,
-				srcW,
-				0,
-				0,
-				magRef.current.width,
-				magRef.current.height
+				sx, sy,
+				srcSize, srcSize,
+				0, 0,
+				MAG_SIZE * dpr, MAG_SIZE * dpr
 			);
 		}
-		mctx.restore();
-
+		
 		// Draw crosshair at center
-		const cx = magRef.current.width / 2;
-		const cy = magRef.current.height / 2;
-		const lineLen = magRef.current.width * 0.4;
+		const cx = (MAG_SIZE * dpr) / 2;
+		const cy = (MAG_SIZE * dpr) / 2;
+		const lineLen = MAG_SIZE * dpr * 0.3;
+		
+		// Outer (darker) crosshair for contrast
+		mctx.save();
+		mctx.beginPath();
+		mctx.lineWidth = Math.max(2, dpr * 1.5);
+		mctx.strokeStyle = 'rgba(0,0,0,0.8)';
+		mctx.moveTo(cx - lineLen, cy);
+		mctx.lineTo(cx + lineLen, cy);
+		mctx.moveTo(cx, cy - lineLen);
+		mctx.lineTo(cx, cy + lineLen);
+		mctx.stroke();
+		
+		// Inner (lighter) crosshair
 		mctx.beginPath();
 		mctx.lineWidth = Math.max(1, dpr);
-		// subtle outer stroke (for contrast)
-		mctx.strokeStyle = "rgba(0,0,0,0.6)";
+		mctx.strokeStyle = 'rgba(255,255,255,0.95)';
 		mctx.moveTo(cx - lineLen, cy);
 		mctx.lineTo(cx + lineLen, cy);
 		mctx.moveTo(cx, cy - lineLen);
 		mctx.lineTo(cx, cy + lineLen);
 		mctx.stroke();
-		// inner lighter stroke
+		mctx.restore();
+		
+		mctx.restore();
+		
+		// Outer circle border - use orange color if we're in the padding area (will snap)
+		const canvasRect = canvas.getBoundingClientRect();
+		const canvasX = e.clientX - canvasRect.left;
+		const canvasY = e.clientY - canvasRect.top;
+		const isInPadding = canvasX < 0 || canvasY < 0 || canvasX > canvasRect.width || canvasY > canvasRect.height;
+		
 		mctx.beginPath();
-		mctx.lineWidth = Math.max(1, Math.ceil(dpr / 1.5));
-		mctx.strokeStyle = "rgba(255,255,255,0.9)";
-		mctx.moveTo(cx - lineLen, cy);
-		mctx.lineTo(cx + lineLen, cy);
-		mctx.moveTo(cx, cy - lineLen);
-		mctx.lineTo(cx, cy + lineLen);
-		mctx.stroke();
-
-		// outer circle border
-		mctx.beginPath();
-		mctx.arc(cx, cy, magRef.current.width / 2 - Math.max(2, dpr), 0, Math.PI * 2);
-		mctx.lineWidth = Math.max(2, dpr);
-		mctx.strokeStyle = "rgba(0,0,0,0.6)";
+		mctx.arc(cx, cy, (MAG_SIZE * dpr) / 2 - 2 * dpr, 0, Math.PI * 2);
+		mctx.lineWidth = 3 * dpr;
+		mctx.strokeStyle = isInPadding ? '#ff6b35' : '#005fa3';  // Orange when in snap zone
 		mctx.stroke();
 	}
 
@@ -293,11 +309,28 @@ function PolygonMaskEditor({
 			octx.stroke();
 
 			// vertices
-			for (const p of poly.points) {
+			for (let ptIdx = 0; ptIdx < poly.points.length; ptIdx++) {
+				const p = poly.points[ptIdx];
 				const vx = (p.x / w) * W;
 				const vy = (p.y / h) * H;
-				octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
-				octx.beginPath(); octx.arc(vx, vy, 3, 0, Math.PI * 2); octx.fill();
+				
+				// Make the first point larger and use a different color for active, unclosed polygons
+				if (ptIdx === 0 && i === active && !poly.closed && poly.points.length >= 3) {
+					// Draw a larger, pulsing circle for the starting point
+					octx.fillStyle = "#ff3366";
+					octx.beginPath(); 
+					octx.arc(vx, vy, 6, 0, Math.PI * 2); 
+					octx.fill();
+					// Add white border
+					octx.strokeStyle = "#ffffff";
+					octx.lineWidth = 2;
+					octx.stroke();
+				} else {
+					octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
+					octx.beginPath(); 
+					octx.arc(vx, vy, 3, 0, Math.PI * 2); 
+					octx.fill();
+				}
 			}
 		}
 	}
@@ -363,7 +396,7 @@ function PolygonMaskEditor({
 		finishActiveIfOpen();
 		setPolys(prev => {
 			const idx = prev.length;
-			const next = [...prev, { points: [], closed: false, name: `Poly ${idx + 1}` }];
+			const next = [...prev, { points: [], closed: false, name: `Polygon ${idx + 1}` }];
 			setActive(idx);
 			return next;
 		});
@@ -380,7 +413,7 @@ function PolygonMaskEditor({
 			// If no active polygon or out-of-range, create a new one now and use it
 			if (idx < 0 || idx >= list.length) {
 				idx = list.length;
-				list.push({ points: [], closed: false, name: `Poly ${idx + 1}` });
+				list.push({ points: [], closed: false, name: `Polygon ${idx + 1}` });
 				// update active to the newly created polygon
 				if (active !== idx) setActive(idx);
 			}
@@ -390,6 +423,28 @@ function PolygonMaskEditor({
 
 			// Get point with edge snapping applied
 			const pt = toNative(e);
+			
+			// Check if we're close to the first point (auto-close polygon)
+			if (poly.points.length >= 3) {
+				const firstPt = poly.points[0];
+				const distance = Math.sqrt(
+					Math.pow(pt.x - firstPt.x, 2) + 
+					Math.pow(pt.y - firstPt.y, 2)
+				);
+				
+				// If within 4 pixels of the start, close the polygon and start a new one
+				if (distance <= 4) {
+					// Close current polygon
+					list[idx] = { ...poly, closed: true };
+					
+					// Create a new polygon and make it active
+					const newIdx = list.length;
+					list.push({ points: [], closed: false, name: `Polygon ${newIdx + 1}` });
+					setTimeout(() => setActive(newIdx), 0);
+					
+					return list;
+				}
+			}
 			
 			list[idx] = { ...poly, points: [...poly.points, pt] };
 			return list;
@@ -546,7 +601,7 @@ function PolygonMaskEditor({
 					return {
 						points,
 						closed: true, // Loaded polygons are always closed
-						name: poly.name || `Poly ${idx + 1}`
+						name: poly.name || `Polygon ${idx + 1}`
 					};
 				});
 				
@@ -589,6 +644,12 @@ function PolygonMaskEditor({
 				</Button>
 			</div>
 
+			{/* Helpful hint about edge snapping and auto-closing */}
+			<div className="mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-700">
+				<strong>💡 Tips:</strong> Click near image edges to snap to edge pixels (magnifier turns <span className="text-orange-600 font-semibold">orange</span>). 
+				Click within 4 pixels of the starting point (shown as a <span className="text-pink-600 font-semibold">larger red circle</span>) to auto-close and start a new polygon.
+			</div>
+
 			{/* Controls placed just below the mask path input (outside gray area) */}
 			<div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-3">
 				<div className="flex items-center gap-2 justify-start">
@@ -622,7 +683,7 @@ function PolygonMaskEditor({
 
 			<div
 				ref={containerRef}
-				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center"
+				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center cursor-crosshair"
 				onPointerDown={(e) => {
 					// If the click is directly on the container (not a child element)
 					// or if we're in the padding area, add the point
@@ -633,7 +694,7 @@ function PolygonMaskEditor({
 				}}
 			>
 				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
-				<div ref={wrapperRef} className="relative" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
+				<div ref={wrapperRef} className="relative cursor-crosshair" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
  					<canvas ref={viewRef} className="block" />
  					<canvas
  						ref={overlayRef}
@@ -643,18 +704,21 @@ function PolygonMaskEditor({
  						 addPoint(e);
  						}}
  					/>
- 					{/* Magnifier canvas (absolute, pointer-events none so it doesn't block drawing) */}
+ 					{/* Magnifier canvas (fixed positioning, centered on cursor) */}
  					<canvas
  						ref={magRef}
  						style={{
- 							position: "absolute",
- 							left: 0,
- 							top: 0,
- 							pointerEvents: "none",
- 							borderRadius: "50%",
- 							boxShadow: "0 6px 18px rgba(0,0,0,0.3)",
  							display: magVisible && magnifierEnabled ? "block" : "none",
- 							zIndex: 999,
+ 							position: "fixed",
+ 							pointerEvents: "none",
+ 							zIndex: 9999,
+ 							width: MAG_SIZE,
+ 							height: MAG_SIZE,
+ 							left: magPos.left,
+ 							top: magPos.top,
+ 							borderRadius: "50%",
+ 							boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+ 							border: "2px solid #333",
  						}}
  					/>
  				</div>

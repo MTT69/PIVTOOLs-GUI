@@ -16,7 +16,6 @@ const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean
 const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
-  const [camera, setCamera] = useState<string>("Cam1");
   const [varType, setVarType] = useState<string>("ux");
   const [cmap, setCmap] = useState<string>("default");
   const [runNum, setRunNum] = useState<number>(1);
@@ -27,54 +26,62 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
 
   // --- Derived State (memoized for performance) ---
-  const cameraOptions = useMemo(() => {
-    const numCameras = config?.paths?.camera_numbers?.[0] ?? 1;
-    return Array.from({ length: numCameras }, (_, i) => `Cam${i + 1}`);
-  }, [config]);
-
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
 
   // --- PIV Logic from Custom Hook ---
   const { isLoading, isPolling, progress, statusImage, run, cancel } = usePivRunner({
-    sourcePathIdx, camera, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage
+    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage
   });
 
   // --- Effects for UI Sync ---
-  // Only fetch available variables when PIV is running
+  // Only fetch available variables when PIV is running and progress > 0
   useEffect(() => {
-    if (!isPolling) return;
+    if (!isPolling || progress === 0) return;
+    
     const fetchFrameVars = async () => {
       setFrameVarsLoading(true);
       try {
         const params = new URLSearchParams({
           basepath_idx: String(sourcePathIdx),
-          camera: camera,
           frame: '1',
           is_uncalibrated: '1',
         });
         const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
-        if (!res.ok) throw new Error('Failed to fetch variables');
-        const json = await res.json();
-        const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
-        const filtered = (json.vars || []).filter((v: string) => allowed.includes(v));
-        setFrameVars(filtered.length > 0 ? filtered : allowed);
-        if (filtered.length > 0 && !filtered.includes(varType)) {
-          setVarType(filtered[0]);
+        
+        // Only process if the response is OK
+        if (res.ok) {
+          const json = await res.json();
+          const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
+          const filtered = (json.vars || []).filter((v: string) => allowed.includes(v));
+          if (filtered.length > 0) {
+            setFrameVars(filtered);
+            // Only update varType if current one is not in the list
+            setVarType(prevVarType => filtered.includes(prevVarType) ? prevVarType : filtered[0]);
+          } else {
+            setFrameVars(allowed);
+          }
+        } else {
+          // If frame doesn't exist yet, just keep the default vars
+          console.log("Frame not ready yet, using default variables");
         }
       } catch (error) {
-        console.error("Error fetching frame variables:", error);
+        console.log("Waiting for frames to be available...", error);
+        // Don't throw error, just keep the default variables
       } finally {
         setFrameVarsLoading(false);
       }
     };
-    fetchFrameVars();
-  }, [isPolling, sourcePathIdx, camera]);
+    
+    // Add a small delay to allow first frame to be created
+    const timeoutId = setTimeout(fetchFrameVars, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [isPolling, progress, sourcePathIdx]);
 
   return (
     <Card>
       <CardHeader><CardTitle>Run PIV</CardTitle></CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4">
           <div>
             <label className="text-sm font-medium">Source Path</label>
             <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
@@ -83,15 +90,6 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
                 {sourcePaths.length > 0 ? sourcePaths.map((p: string, i: number) => (
                   <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
                 )) : <SelectItem value="0" disabled>No paths</SelectItem>}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-sm font-medium">Camera</label>
-            <Select value={camera} onValueChange={setCamera}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {cameraOptions.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

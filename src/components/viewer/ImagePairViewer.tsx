@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,6 +41,12 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [zoomLevel, setZoomLevel] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
+
+  // Play/Frame navigation state
+  const [playing, setPlaying] = useState(false);
+  const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const maxFrames = useMemo(() => config?.images?.num_images || 100, [config]);
+  const [isImageLoading, setIsImageLoading] = useState(false);
 
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
@@ -103,6 +109,38 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     addFilter(type, 50); // Always default to 50 frames
   };
 
+  // Track when images start/finish loading
+  useEffect(() => {
+    setIsImageLoading(true);
+  }, [index, camera, sourcePathIdx]);
+
+  useEffect(() => {
+    if (!loading) {
+      setIsImageLoading(false);
+    }
+  }, [loading]);
+
+  // Play/Pause functionality with smart loading handling
+  useEffect(() => {
+    if (playing) {
+      const advanceFrame = () => {
+        // Only advance if not currently loading
+        if (!isImageLoading) {
+          setIndex(prev => (prev >= maxFrames ? 1 : prev + 1));
+        }
+      };
+
+      // Start with 1 FPS (1000ms), but the actual rate will be limited by image load time
+      playIntervalRef.current = setInterval(advanceFrame, 1000);
+    } else if (playIntervalRef.current) {
+      clearInterval(playIntervalRef.current);
+      playIntervalRef.current = null;
+    }
+    return () => {
+      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+    };
+  }, [playing, maxFrames, isImageLoading]);
+
   return (
     <Card>
       <CardHeader>
@@ -142,7 +180,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         </div>
 
         {/* --- TOP-LEVEL CONTROLS --- */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           <div>
             <Label>Source Path</Label>
             <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
@@ -157,10 +195,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             </Select>
           </div>
           <div>
-            <Label>Frame Index</Label>
-            <Input type="number" value={index} onChange={e => setIndex(parseInt(e.target.value, 10) || 1)} />
-          </div>
-           <div>
             <Label>Colormap</Label>
             <Select value={colormap} onValueChange={v => setColormap(v as any)}><SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -171,6 +205,62 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           </div>
         </div>
 
+        {/* --- FRAME NAVIGATION CONTROLS --- */}
+        <div className="flex flex-col md:flex-row items-center justify-center gap-4 mt-4">
+          <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIndex(Math.max(1, index - 1))}
+              disabled={index <= 1}
+              className="rounded-full p-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 4L6 10l6 6" />
+              </svg>
+            </Button>
+            <input
+              id="frame-slider"
+              type="range"
+              min={1}
+              max={maxFrames}
+              value={index}
+              onChange={e => setIndex(Number(e.target.value))}
+              className="w-64"
+            />
+            <Input
+              id="frame-input"
+              type="number"
+              min={1}
+              max={maxFrames}
+              value={index}
+              onChange={e => setIndex(Math.max(1, Math.min(maxFrames, Number(e.target.value || 1))))}
+              className="w-24"
+            />
+            <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrames}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIndex(Math.min(maxFrames, index + 1))}
+              disabled={index >= maxFrames}
+              className="rounded-full p-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 4l6 6-6 6" />
+              </svg>
+            </Button>
+          </div>
+          <Button
+            size="sm"
+            variant={playing ? "default" : "outline"}
+            onClick={() => setPlaying(!playing)}
+            className="flex items-center gap-1"
+          >
+            {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
+          </Button>
+        </div>
+
         {/* --- IMAGE VIEWERS --- */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* RAW IMAGE PANEL */}
@@ -179,7 +269,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               <ZoomableCanvas
                 raw={rawToggle === 'A' ? imgARaw : rawToggle === 'B' ? imgBRaw : undefined}
                 src={rawToggle === 'A' ? (imgARaw ? undefined : imgA) : rawToggle === 'B' ? (imgBRaw ? undefined : imgB) : undefined}
-                error={loading ? 'Loading...' : error}
+                error={error}
                 vmin={rawVmin} vmax={rawVmax} colormap={colormap} title={`Raw Image ${rawToggle}`}
                 useGrid={useGrid} gridSize={gridSize}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
