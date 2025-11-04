@@ -11,23 +11,71 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
   const [metadata, setMetadata] = useState<{ bitDepth?: number, dtype?: DType, dims?: { w: number, h: number } } | null>(null);
   const [vmin, setVmin] = useState(0);
   const [vmax, setVmax] = useState(255);
+  
+  // Track if auto-contrast has been applied for this specific image
+  const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
+
+  // Helper function to analyze PNG pixel data for auto-contrast
+  const analyzePngContrast = async (pngDataUrl: string): Promise<{ vmin: number, vmax: number }> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('Canvas context not available');
+          
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          
+          const imageData = ctx.getImageData(0, 0, img.width, img.height);
+          const pixels = imageData.data;
+          const grayscaleValues = [];
+          
+          // Convert RGBA to grayscale using luminance formula
+          for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i];
+            const g = pixels[i + 1];
+            const b = pixels[i + 2];
+            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+            grayscaleValues.push(gray);
+          }
+          
+          // Sort for percentile calculation
+          grayscaleValues.sort((a, b) => a - b);
+          
+          const p1Index = Math.floor(grayscaleValues.length * 0.01);
+          const p99Index = Math.floor(grayscaleValues.length * 0.99);
+          
+          const vmin = grayscaleValues[p1Index];
+          const vmax = grayscaleValues[p99Index];
+          
+          resolve({ vmin, vmax });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.onerror = () => reject(new Error('Failed to load PNG for analysis'));
+      img.src = pngDataUrl;
+    });
+  };
 
   const fetchPair = async () => {
     if (!camera) return;
     setLoading(true);
     setError(null);
     setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
+    
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
       const res = await fetch(url);
       const json = await res.json();
-      // Debug: log backend response
-      if (typeof window !== 'undefined') {
-        // @ts-ignore
-          (window as any)._lastImagePairResponse = json;
-          console.log('[ImagePairViewer] Backend response:', json);
-      }
+      
+      // Create a unique key for this image load
+      const currentKey = `${sourcePathIdx}-${camera}-${index}`;
+      
       if (!res.ok) {
         throw new Error(json.error || `Image pair not found (frame ${index})`);
       }
@@ -57,19 +105,41 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
         }
         setImgARaw(rawA);
         setImgBRaw(rawB);
-        // Auto-set contrast limits from raw data
-        if (rawA && rawA.data) {
+        // Auto-set contrast limits from raw data - always update for new image or when key is reset
+        if ((lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') && rawA && rawA.data) {
           setVmin(Math.floor(percentileFromRaw(rawA.data, 1)));
           setVmax(Math.ceil(percentileFromRaw(rawA.data, 99)));
+          setLastAutoContrastKey(currentKey);
         }
       } else {
         // Fallback to PNGs
         setMetadata({ bitDepth: 8, dtype: 'uint8' });
         setImgA(json.A);
         setImgB(json.B);
-        // Auto-limits from PNG would require canvas logic, best handled in component if needed
-        setVmin(0);
-        setVmax(255);
+        
+        // Auto-contrast from PNG pixel analysis - always update for new image or when key is reset
+        if (lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') {
+          try {
+            if (json.A) {
+              const pngDataUrl = `data:image/png;base64,${json.A}`;
+              const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
+              setVmin(analyzedVmin);
+              setVmax(analyzedVmax);
+            } else {
+              setVmin(0);
+              setVmax(255);
+            }
+          } catch (err) {
+            // Graceful fallback on analysis failure
+            if (typeof window !== 'undefined') {
+              console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
+            }
+            setVmin(0);
+            setVmax(255);
+          }
+          setLastAutoContrastKey(currentKey);
+        }
+        
         // Debug: warn if raw fields missing
         if (typeof window !== 'undefined') {
           console.warn('[ImagePairViewer] No raw image data or meta in backend response.');

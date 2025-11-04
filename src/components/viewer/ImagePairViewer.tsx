@@ -37,6 +37,18 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [procVmin, setProcVmin] = useState(0);
   const [procVmax, setProcVmax] = useState(255);
   
+  // Auto-scale toggles (enabled by default)
+  const [rawAutoScale, setRawAutoScale] = useState(true);
+  const [procAutoScale, setProcAutoScale] = useState(true);
+  
+  // Track if user has manually adjusted sliders for current image
+  const [rawManuallyAdjusted, setRawManuallyAdjusted] = useState(false);
+  const [procManuallyAdjusted, setProcManuallyAdjusted] = useState(false);
+  
+  // Track if auto-contrast has been applied to prevent overriding user adjustments
+  const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
+  const [lastProcAutoContrastKey, setLastProcAutoContrastKey] = useState<string>('');
+
   // Add shared zoom state
   const [zoomLevel, setZoomLevel] = useState(1);
   const [panX, setPanX] = useState(0);
@@ -54,6 +66,19 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const { filters, addFilter, updateBatchSize, removeFilter, runProcessing, procLoading, procImgA, procImgB, fetchProcessed, setFilters } = 
     useImageFilters(backendUrl);
 
+  // Memoize camera options and initialize camera
+  const cameraOptions = useMemo(() => {
+    const cameras = config?.paths?.camera_numbers || [];
+    return cameras.map((num: number) => `Cam${num}`);
+  }, [config?.paths?.camera_numbers]);
+
+  // Initialize camera from first available option when config loads
+  useEffect(() => {
+    if (cameraOptions.length > 0) {
+      setCamera(cameraOptions[0]);
+    }
+  }, [cameraOptions]);
+
   // Initialize filters from config
   useEffect(() => {
     if (config?.filters) {
@@ -65,15 +90,120 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [config?.filters, setFilters]);
 
+  // Auto-fetch processed images when frame/camera/source changes
   useEffect(() => {
-    setRawVmin(autoVmin);
-    setRawVmax(autoVmax);
-  }, [autoVmin, autoVmax]);
+    const fetchProcessedForCurrentFrame = async () => {
+      if (filters.length > 0) {
+        await fetchProcessed(camera, index, sourcePathIdx);
+      } else {
+        // Clear processed images if no filters are applied
+        // This is handled in useImageFilters by setting procImgA and procImgB to null
+      }
+    };
 
-  // Add useEffect to fetch processed on camera/index/sourcePathIdx changes
+    fetchProcessedForCurrentFrame();
+  }, [camera, index, sourcePathIdx, fetchProcessed, filters.length]);
+
+  // Reset manual adjustment flags when auto-scale is re-enabled
   useEffect(() => {
-    fetchProcessed(camera, index, sourcePathIdx);
-  }, [camera, index, sourcePathIdx, fetchProcessed]);
+    if (rawAutoScale) {
+      setRawManuallyAdjusted(false);
+      setLastAutoContrastKey(''); // Force re-calculation
+    }
+  }, [rawAutoScale]);
+
+  useEffect(() => {
+    if (procAutoScale) {
+      setProcManuallyAdjusted(false);
+      setLastProcAutoContrastKey(''); // Force re-calculation
+    }
+  }, [procAutoScale]);
+
+  // Reset manual adjustment flags when image changes
+  useEffect(() => {
+    setRawManuallyAdjusted(false);
+    setProcManuallyAdjusted(false);
+  }, [sourcePathIdx, camera, index]);
+
+  // Only update slider values on first auto-contrast application for this specific image
+  useEffect(() => {
+    const currentKey = `${sourcePathIdx}-${camera}-${index}`;
+    if (rawAutoScale && !rawManuallyAdjusted && lastAutoContrastKey !== currentKey && (autoVmin !== 0 || autoVmax !== 255)) {
+      setRawVmin(autoVmin);
+      setRawVmax(autoVmax);
+      setLastAutoContrastKey(currentKey);
+    }
+  }, [autoVmin, autoVmax, sourcePathIdx, camera, index, lastAutoContrastKey, rawManuallyAdjusted, rawAutoScale]);
+
+  // Auto-contrast for processed images when they load
+  useEffect(() => {
+    const applyProcAutoContrast = async () => {
+      const currentKey = `${sourcePathIdx}-${camera}-${index}-${procToggle}`;
+      if (procAutoScale && !procManuallyAdjusted && (procImgA || procImgB)) {
+        // Always apply auto-contrast if key changed or was reset
+        if (lastProcAutoContrastKey !== currentKey || lastProcAutoContrastKey === '') {
+          try {
+            const activeImg = procToggle === 'A' ? procImgA : procImgB;
+            if (activeImg) {
+              const pngDataUrl = `data:image/png;base64,${activeImg}`;
+              
+              const img = new Image();
+              img.onload = () => {
+                try {
+                  const canvas = document.createElement('canvas');
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                  ctx.drawImage(img, 0, 0);
+                  
+                  const imageData = ctx.getImageData(0, 0, img.width, img.height);
+                  const pixels = imageData.data;
+                  const grayscaleValues = [];
+                  
+                  for (let i = 0; i < pixels.length; i += 4) {
+                    const r = pixels[i];
+                    const g = pixels[i + 1];
+                    const b = pixels[i + 2];
+                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                    grayscaleValues.push(gray);
+                  }
+                  
+                  grayscaleValues.sort((a, b) => a - b);
+                  
+                  const p1Index = Math.floor(grayscaleValues.length * 0.01);
+                  const p99Index = Math.floor(grayscaleValues.length * 0.99);
+                  
+                  const vmin = grayscaleValues[p1Index];
+                  const vmax = grayscaleValues[p99Index];
+                  
+                  setProcVmin(vmin);
+                  setProcVmax(vmax);
+                  setLastProcAutoContrastKey(currentKey);
+                } catch (err) {
+                  console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+                }
+              };
+              img.src = pngDataUrl;
+            } else {
+              // No active image - reset to defaults
+              setProcVmin(0);
+              setProcVmax(255);
+              setLastProcAutoContrastKey(currentKey);
+            }
+          } catch (err) {
+            console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+            setProcVmin(0);
+            setProcVmax(255);
+            setLastProcAutoContrastKey(currentKey);
+          }
+        }
+      }
+    };
+
+    applyProcAutoContrast();
+  }, [procImgA, procImgB, procToggle, sourcePathIdx, camera, index, lastProcAutoContrastKey, procManuallyAdjusted, procAutoScale]);
 
   // Save filters to config when they change
   useEffect(() => {
@@ -101,7 +231,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   }, [filters, backendUrl]);
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
-  const cameraOptions = useMemo(() => { const n = config?.paths?.camera_numbers?.[0] ?? 1; return Array.from({ length: n }, (_, i) => `Cam${i + 1}`); }, [config]);
   const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
 
   // Helper for adding filters with batch_size (default 50 for time filters)
@@ -190,8 +319,15 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           </div>
           <div>
             <Label>Camera</Label>
-            <Select value={camera} onValueChange={setCamera}><SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{cameraOptions.map(cam => <SelectItem key={cam} value={cam}>{cam}</SelectItem>)}</SelectContent>
+            <Select value={camera} onValueChange={setCamera} disabled={cameraOptions.length === 0}>
+              <SelectTrigger><SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : undefined} /></SelectTrigger>
+              <SelectContent>
+                {cameraOptions.length === 0 ? (
+                  <SelectItem value="none" disabled>No cameras available</SelectItem>
+                ) : (
+                  cameraOptions.map((cam: string) => <SelectItem key={cam} value={cam}>{cam}</SelectItem>)
+                )}
+              </SelectContent>
             </Select>
           </div>
           <div>
@@ -281,11 +417,16 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
                 <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
                 <div className="flex items-center gap-2 ml-auto">
-                  <Switch id="use-grid" checked={useGrid} onCheckedChange={setUseGrid} /><Label htmlFor="use-grid">Grid</Label>
+                  <Switch id="raw-auto-scale" checked={rawAutoScale} onCheckedChange={setRawAutoScale} />
+                  <Label htmlFor="raw-auto-scale" className="text-sm">Auto Scale</Label>
+                  <Switch id="use-grid" checked={useGrid} onCheckedChange={setUseGrid} />
+                  <Label htmlFor="use-grid">Grid</Label>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <Input type="number" value={rawVmin} min={0} max={rawVmax} onChange={e => {
+                  setRawManuallyAdjusted(true);
+                  setRawAutoScale(false);
                   const val = Math.min(Number(e.target.value), rawVmax);
                   setRawVmin(val);
                   if (val > rawVmax) setRawVmax(val);
@@ -298,6 +439,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     step={1}
                     value={[rawVmin, rawVmax]}
                     onValueChange={([min, max]) => {
+                      setRawManuallyAdjusted(true);
+                      setRawAutoScale(false);
                       setRawVmin(min);
                       setRawVmax(max);
                     }}
@@ -310,6 +453,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   </Slider.Root>
                 </div>
                 <Input type="number" value={rawVmax} min={rawVmin} max={maxVal} onChange={e => {
+                  setRawManuallyAdjusted(true);
+                  setRawAutoScale(false);
                   const val = Math.max(Number(e.target.value), rawVmin);
                   setRawVmax(val);
                   if (val < rawVmin) setRawVmin(val);
@@ -335,9 +480,15 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <Label>View</Label>
                   <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
                   <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Switch id="proc-auto-scale" checked={procAutoScale} onCheckedChange={setProcAutoScale} />
+                    <Label htmlFor="proc-auto-scale" className="text-sm">Auto Scale</Label>
+                  </div>
                 </div>
               <div className="flex items-center gap-2">
                 <Input type="number" value={procVmin} min={0} max={procVmax} onChange={e => {
+                  setProcManuallyAdjusted(true);
+                  setProcAutoScale(false);
                   const val = Math.min(Number(e.target.value), procVmax);
                   setProcVmin(val);
                   if (val > procVmax) setProcVmax(val);
@@ -350,6 +501,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     step={1}
                     value={[procVmin, procVmax]}
                     onValueChange={([min, max]) => {
+                      setProcManuallyAdjusted(true);
+                      setProcAutoScale(false);
                       setProcVmin(min);
                       setProcVmax(max);
                     }}
@@ -362,6 +515,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   </Slider.Root>
                 </div>
                 <Input type="number" value={procVmax} min={procVmin} max={maxVal} onChange={e => {
+                  setProcManuallyAdjusted(true);
+                  setProcAutoScale(false);
                   const val = Math.max(Number(e.target.value), procVmin);
                   setProcVmax(val);
                   if (val < procVmin) setProcVmin(val);

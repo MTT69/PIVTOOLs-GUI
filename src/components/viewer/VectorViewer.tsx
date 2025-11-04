@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     meta,
     loading,
     error,
-    cameraOptions,
+    cameraOptions: hookCameraOptions,
     camera,
     setCamera,
     merged,
@@ -83,6 +83,19 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     effectiveDir,  // Added: Import effectiveDir from hook
   } = useVectorViewer({ backendUrl, config });
   
+  // Override camera options with config if available
+  const cameraOptions = useMemo(() => {
+    const cameras = config?.paths?.camera_numbers || [];
+    return cameras.length > 0 ? cameras.map((num: number) => `Cam${num}`) : hookCameraOptions;
+  }, [config?.paths?.camera_numbers, hookCameraOptions]);
+
+  // Initialize camera from first available option when config loads
+  useEffect(() => {
+    if (cameraOptions.length > 0 && !camera) {
+      setCamera(cameraOptions[0]);
+    }
+  }, [cameraOptions, camera, setCamera]);
+
   // Remember last valid hover values so we don't show a loading spinner
   // while backend updates arrive. Only update when hoverData contains valid coords.
   const [lastValidHover, setLastValidHover] = useState<any | null>(null);
@@ -168,14 +181,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="flex items-center gap-2">
                     <label htmlFor="camera" className="text-sm font-medium text-gray-700">Camera:</label>
-                    <Select value={camera} onValueChange={v => setCamera(v)}>
+                    <Select value={camera} onValueChange={v => setCamera(v)} disabled={cameraOptions.length === 0}>
                       <SelectTrigger id="camera" className="w-28">
-                        <SelectValue placeholder="Select" />
+                        <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
                       </SelectTrigger>
                       <SelectContent>
-                        {cameraOptions.map((c, i) => (
-                          <SelectItem key={i} value={c}>{c}</SelectItem>
-                        ))}
+                        {cameraOptions.length === 0 ? (
+                          <SelectItem value="none" disabled>No cameras available</SelectItem>
+                        ) : (
+                          cameraOptions.map((c: string, i: number) => (
+                            <SelectItem key={i} value={c}>{c}</SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
@@ -344,7 +361,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           <div>
                             <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras to Merge:</label>
                             <div className="flex flex-wrap gap-2">
-                              {cameraOptions.map(cam => (
+                              {cameraOptions.map((cam: string) => (
                                 <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
                                   <input
                                     type="checkbox"
@@ -474,7 +491,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <div>
                           <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras:</label>
                           <div className="flex flex-wrap gap-2">
-                            {cameraOptions.map(cam => (
+                            {cameraOptions.map((cam: string) => (
                               <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
                                 <input
                                   type="checkbox"

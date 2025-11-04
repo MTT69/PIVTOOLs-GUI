@@ -4,9 +4,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useImagePair } from "@/hooks/useImagePair";
 import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { basename } from "@/lib/utils";
+import * as Slider from '@radix-ui/react-slider';
 
 const Masking: React.FC<{ config?: any }> = ({ config }) => {
   const sourcePaths = config?.paths?.source_paths || [];
@@ -33,9 +35,110 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 	const [index, setIndex] = useState(1);
 	const [frame, setFrame] = useState<"A" | "B">("A");
 
+	// Add contrast control state
+	const [vmin, setVmin] = useState(0);
+	const [vmax, setVmax] = useState(255);
+	const [autoScale, setAutoScale] = useState(true);
+	const [manuallyAdjusted, setManuallyAdjusted] = useState(false);
+	const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
+
 	// Use the centralized hook for fetching images
-	const { loading, error, imgA, imgB, reload } = useImagePair("/backend", basePathIdx, camera, index);
+	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, camera, index);
 	const currentImg = frame === "A" ? imgA : imgB;
+	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
+	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
+
+	// Reset manual adjustment flags when auto-scale is re-enabled
+	useEffect(() => {
+		if (autoScale) {
+			setManuallyAdjusted(false);
+			setLastAutoContrastKey(''); // Force re-calculation
+		}
+	}, [autoScale]);
+
+	// Reset manual adjustment flags when image changes
+	useEffect(() => {
+		setManuallyAdjusted(false);
+	}, [basePathIdx, camera, index, frame]);
+
+	// Auto-contrast when image loads or changes
+	useEffect(() => {
+		const currentKey = `${basePathIdx}-${camera}-${index}-${frame}`;
+		
+		// Only proceed if we have image data
+		if (!currentRaw && !currentImg) {
+			return;
+		}
+		
+		if (autoScale && !manuallyAdjusted) {
+			// Always apply auto-contrast if key changed or was reset
+			if (lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') {
+				if (currentRaw) {
+					// Use raw data auto-contrast from useImagePair
+					if (autoVmin !== undefined && autoVmax !== undefined && (autoVmin !== 0 || autoVmax !== 255)) {
+						setVmin(autoVmin);
+						setVmax(autoVmax);
+						setLastAutoContrastKey(currentKey);
+					}
+				} else if (currentImg) {
+					// Analyze PNG for auto-contrast
+					const analyzePngContrast = async () => {
+						try {
+							const pngDataUrl = `data:image/png;base64,${currentImg}`;
+							const img = new Image();
+							img.onload = () => {
+								try {
+									const canvas = document.createElement('canvas');
+									const ctx = canvas.getContext('2d');
+									if (!ctx) return;
+									
+									canvas.width = img.width;
+									canvas.height = img.height;
+									ctx.drawImage(img, 0, 0);
+									
+									const imageData = ctx.getImageData(0, 0, img.width, img.height);
+									const pixels = imageData.data;
+									const grayscaleValues = [];
+									
+									for (let i = 0; i < pixels.length; i += 4) {
+										const r = pixels[i];
+										const g = pixels[i + 1];
+										const b = pixels[i + 2];
+										const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+										grayscaleValues.push(gray);
+									}
+									
+									grayscaleValues.sort((a, b) => a - b);
+									
+									const p1Index = Math.floor(grayscaleValues.length * 0.01);
+									const p99Index = Math.floor(grayscaleValues.length * 0.99);
+									
+									const vminAnalyzed = grayscaleValues[p1Index];
+									const vmaxAnalyzed = grayscaleValues[p99Index];
+									
+									setVmin(vminAnalyzed);
+									setVmax(vmaxAnalyzed);
+									setLastAutoContrastKey(currentKey);
+								} catch (err) {
+									console.warn('[Masking] PNG auto-contrast analysis failed:', err);
+									setVmin(0);
+									setVmax(255);
+									setLastAutoContrastKey(currentKey);
+								}
+							};
+							img.src = pngDataUrl;
+						} catch (err) {
+							console.warn('[Masking] PNG auto-contrast failed:', err);
+							setVmin(0);
+							setVmax(255);
+							setLastAutoContrastKey(currentKey);
+						}
+					};
+					analyzePngContrast();
+				}
+			}
+		}
+	}, [currentImg, currentRaw, autoVmin, autoVmax, basePathIdx, camera, index, frame, lastAutoContrastKey, manuallyAdjusted, autoScale]);
 
 	return (
 		<div className="space-y-6">
@@ -92,16 +195,81 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 							</Button>
 						</div>
 					</div>
+
+					{/* Contrast Controls */}
+					{currentImg && (
+						<div className="mt-4 space-y-3 p-3 border rounded-md">
+							<div className="flex items-center gap-2">
+								<Label>Contrast Controls</Label>
+								<div className="flex items-center gap-2 ml-auto">
+									<Switch id="auto-scale" checked={autoScale} onCheckedChange={setAutoScale} />
+									<Label htmlFor="auto-scale" className="text-sm">Auto Scale</Label>
+								</div>
+							</div>
+							<div className="flex items-center gap-2">
+								<Input 
+									type="number" 
+									value={vmin} 
+									min={0} 
+									max={vmax} 
+									onChange={e => {
+										setManuallyAdjusted(true);
+										setAutoScale(false);
+										const val = Math.min(Number(e.target.value), vmax);
+										setVmin(val);
+										if (val > vmax) setVmax(val);
+									}} 
+									className="w-20 h-8" 
+								/>
+								<div className="w-full min-w-0">
+									<Slider.Root
+										className="relative flex items-center select-none touch-none w-full h-5"
+										min={0}
+										max={maxVal}
+										step={1}
+										value={[vmin, vmax]}
+										onValueChange={([min, max]) => {
+											setManuallyAdjusted(true);
+											setAutoScale(false);
+											setVmin(min);
+											setVmax(max);
+										}}
+									>
+										<Slider.Track className="bg-gray-200 relative grow rounded-full h-[3px]">
+											<Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
+										</Slider.Track>
+										<Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
+										<Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
+									</Slider.Root>
+								</div>
+								<Input 
+									type="number" 
+									value={vmax} 
+									min={vmin} 
+									max={maxVal} 
+									onChange={e => {
+										setManuallyAdjusted(true);
+										setAutoScale(false);
+										const val = Math.max(Number(e.target.value), vmin);
+										setVmax(val);
+										if (val < vmin) setVmin(val);
+									}} 
+									className="w-20 h-8" 
+								/>
+							</div>
+						</div>
+					)}
 				</CardContent>
 			</Card>
 
 			<div className="flex flex-col items-center mt-6">
 				{currentImg && (
 					<PolygonMaskEditor
-						raw={null}
-						src={currentImg}
-						vmin={0}
-						vmax={255}
+						key={`${basePathIdx}-${camera}-${index}-${frame}`}
+						raw={currentRaw}
+						src={currentRaw ? undefined : currentImg}
+						vmin={vmin}
+						vmax={vmax}
 						title="Polygon Mask Editor"
 						meta={{ basePathIdx, camera, index, frame }}
 						arrayPostUrl="/backend/save_mask_array"

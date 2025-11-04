@@ -86,6 +86,44 @@ function PolygonMaskEditor({
 		return new ImageData(out, width, height);
 	}, [raw, vmin, vmax]);
 
+	// NEW: Process PNG images with contrast adjustment
+	const mappedPng = useMemo(() => {
+		if (raw?.data || !imgRef.current || !nativeSize.w || !nativeSize.h) return null;
+		
+		const { w, h } = nativeSize;
+		const tmpCanvas = document.createElement('canvas');
+		tmpCanvas.width = w;
+		tmpCanvas.height = h;
+		const tmpCtx = tmpCanvas.getContext('2d');
+		if (!tmpCtx) return null;
+		
+		// Draw original image
+		tmpCtx.drawImage(imgRef.current, 0, 0);
+		const imageData = tmpCtx.getImageData(0, 0, w, h);
+		const pixels = imageData.data;
+		
+		// Apply contrast adjustment
+		const rng = Math.max(1e-12, vmax - vmin);
+		for (let i = 0; i < pixels.length; i += 4) {
+			// Convert to grayscale
+			const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+			
+			// Apply contrast stretch
+			let t = (gray - vmin) / rng;
+			if (t < 0) t = 0;
+			if (t > 1) t = 1;
+			const v = Math.round(t * 255);
+			
+			// Set RGB to adjusted value
+			pixels[i] = v;
+			pixels[i + 1] = v;
+			pixels[i + 2] = v;
+			// Alpha unchanged
+		}
+		
+		return imageData;
+	}, [raw, vmin, vmax, nativeSize]);
+
 	// ResizeObserver to keep canvas sized to container
 	useEffect(() => {
 		if (!containerRef.current) return;
@@ -95,7 +133,7 @@ function PolygonMaskEditor({
 	}, []);
 
 	// Redraw on inputs
-	useEffect(() => { redraw(); }, [mappedRaw, nativeSize, polys, active]);
+	useEffect(() => { redraw(); }, [mappedRaw, mappedPng, nativeSize, polys, active]);
 
 	// Ensure magnifier canvas is configured (DPR-aware)
 	useEffect(() => {
@@ -277,15 +315,19 @@ function PolygonMaskEditor({
 		// Draw base image
 		const bctx = base.getContext("2d")!;
 		bctx.clearRect(0, 0, W, H);
-		// Draw base image
+		// Draw base image with contrast applied
 		if (mappedRaw) {
 			const tmp = document.createElement("canvas");
 			tmp.width = w; tmp.height = h;
 			tmp.getContext("2d")!.putImageData(mappedRaw, 0, 0);
 			bctx.imageSmoothingEnabled = true;
 			bctx.drawImage(tmp, 0, 0, w, h, 0, 0, W, H);
-		} else if (imgRef.current) {
-			bctx.drawImage(imgRef.current, 0, 0, w, h, 0, 0, W, H);
+		} else if (mappedPng) {
+			const tmp = document.createElement("canvas");
+			tmp.width = w; tmp.height = h;
+			tmp.getContext("2d")!.putImageData(mappedPng, 0, 0);
+			bctx.imageSmoothingEnabled = true;
+			bctx.drawImage(tmp, 0, 0, w, h, 0, 0, W, H);
 		}
 
 		// Draw a border around the image to help with snapping
@@ -465,8 +507,16 @@ function PolygonMaskEditor({
 
 	function deletePolygon() {
 		if (active < 0 || active >= polys.length) return;
-		setPolys(prev => prev.filter((_, i) => i !== active));
-		setActive(-1);
+		setPolys(prev => {
+			const filtered = prev.filter((_, i) => i !== active);
+			// After filtering, select the last polygon if any remain
+			if (filtered.length > 0) {
+				setActive(filtered.length - 1);
+			} else {
+				setActive(-1);
+			}
+			return filtered;
+		});
 	}
 
 	function clearAll() {

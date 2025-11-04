@@ -74,6 +74,7 @@ export default function Home() {
               base_paths: json.paths?.base_paths || [],
               source_paths: json.paths?.source_paths || [],
               camera_numbers: json.paths?.camera_numbers || [],
+              camera_count: json.paths?.camera_count,
             },
             images: json.images || {},
             batches: json.batches || {},

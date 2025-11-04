@@ -25,8 +25,18 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
     const images = config.images || {};
     const paths = config.paths || {};
 
+    // Debug: Log what we're receiving
+    console.log('ImageConfig received paths:', paths);
+    console.log('Camera count from config:', paths.camera_count);
+
     setNumImages(images.num_images !== undefined ? String(images.num_images) : "");
-    setNumCameras(String(paths.camera_count || "1"));
+    
+    // Derive camera count from camera_count field or camera_numbers array length
+    const cameraCount = paths.camera_count !== undefined 
+      ? paths.camera_count 
+      : (Array.isArray(paths.camera_numbers) ? paths.camera_numbers.length : 1);
+    setNumCameras(String(cameraCount));
+    
     setTimeResolved(!!images.time_resolved);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
@@ -82,19 +92,22 @@ export default function ImageConfig({ config, updateConfig }: ImageConfigProps) 
 
   const handleToggleTimeResolved = (isTimeResolved: boolean) => {
     setTimeResolved(isTimeResolved);
+    let newPatterns: string[];
     if (isTimeResolved) {
       const newPattern = (rawPatterns[0] || "B%05d.tif").replace(/_A\.tif$/i, ".tif");
-      setRawPatterns([newPattern]);
+      newPatterns = [newPattern];
+      setRawPatterns(newPatterns);
     } else {
       if (rawPatterns.length === 1) {
         const base = rawPatterns[0].replace(/\.tif$/i, "");
-        setRawPatterns([`${base}_A.tif`, `${base}_B.tif`]);
+        newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
       } else {
-        setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
+        newPatterns = ['B%05d_A.tif', 'B%05d_B.tif'];
       }
+      setRawPatterns(newPatterns);
     }
-    // Save immediately on toggle
-    saveConfig(numImages, numCameras, isTimeResolved, isTimeResolved ? [rawPatterns[0]] : rawPatterns, vectorPattern);
+    // Save with the new patterns, not stale rawPatterns
+    saveConfig(numImages, numCameras, isTimeResolved, newPatterns, vectorPattern);
   };
 
   return (

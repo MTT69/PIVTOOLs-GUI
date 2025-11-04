@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 export interface ImageFilter {
   type: "POD" | "time";
@@ -63,19 +63,40 @@ export function useImageFilters(backendUrl: string) {
 
   const removeFilter = (idx: number) => setFilters(f => f.filter((_, i) => i !== idx));
   
-  // Add fetchProcessed function if not present
-  const fetchProcessed = async (camera: string, index: number, sourcePathIdx: number) => {
+  // Improved fetchProcessed function
+  const fetchProcessed = useCallback(async (camera: string, index: number, sourcePathIdx: number) => {
     try {
-      const response = await fetch(`${backendUrl}/get_processed_pair?frame=${index}&type=processed&camera=${camera}&source_path_idx=${sourcePathIdx}`);
-      const data = await response.json();
-      setProcImgA(data.A);
-      setProcImgB(data.B);
+      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+      const params = new URLSearchParams({
+        type: "processed",
+        frame: String(index),
+        camera: String(cameraNumber),
+        source_path_idx: String(sourcePathIdx),
+      });
+      
+      const response = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setProcImgA(data.A ?? null);
+        setProcImgB(data.B ?? null);
+      } else {
+        // No processed images available for this frame - clear the display
+        setProcImgA(null);
+        setProcImgB(null);
+      }
     } catch (error) {
-      // Handle error, e.g., set to null if not available
+      // Handle error by clearing processed images
       setProcImgA(null);
       setProcImgB(null);
     }
-  };
+  }, [backendUrl]);
+
+  // Clear processed images when filters change (since they would be invalid)
+  useEffect(() => {
+    setProcImgA(null);
+    setProcImgB(null);
+  }, [filters]);
 
   return {
     filters,
