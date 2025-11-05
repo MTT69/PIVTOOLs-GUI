@@ -9,14 +9,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
   // Camera options derived from config
   const cameraOptions: string[] = useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
-  }, [config]);
+    const cameras = config?.paths?.camera_numbers || [];
+    return cameras.map((num: number) => `Cam${num}`);
+  }, [config?.paths?.camera_numbers]);
 
   const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : 'Cam1');
   useEffect(() => {
@@ -39,6 +34,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     { label: '1080p (1920x1080)', value: '1080p' },
     { label: '4K (3840x2160)', value: '4k' }
   ];
+  const [fps, setFps] = useState<number>(30);
 
   // Video browser state
   const [activeTab, setActiveTab] = useState<string>('create');
@@ -151,6 +147,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       upper,
       num_images: config?.images?.num_images || 0,
       resolution,
+      fps: String(fps),
     };
     return params;
   };
@@ -320,6 +317,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     resolution,
     setResolution,
     resolutionOptions,
+    fps,
+    setFps,
     activeTab,
     setActiveTab,
     availableVideos,

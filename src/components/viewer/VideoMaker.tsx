@@ -34,6 +34,8 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     resolution,
     setResolution,
     resolutionOptions,
+    fps,
+    setFps,
     activeTab,
     setActiveTab,
     availableVideos,
@@ -201,21 +203,32 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                   </div>
                 </div>
 
-                {/* Resolution settings */}
-                <div className="space-y-2 mt-4">
-                  <label className="text-sm font-medium">Resolution</label>
-                  <Select value={resolution} onValueChange={setResolution}>
-                    <SelectTrigger id="resolution">
-                      <SelectValue placeholder="Select resolution" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {resolutionOptions.map(option => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                {/* Resolution and FPS settings */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Resolution</label>
+                    <Select value={resolution} onValueChange={setResolution}>
+                      <SelectTrigger id="resolution">
+                        <SelectValue placeholder="Select resolution" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {resolutionOptions.map(option => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">FPS</label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={fps}
+                      onChange={(e) => setFps(Number(e.target.value || 30))}
+                    />
+                  </div>
                 </div>
 
                 {/* Display result message */}
