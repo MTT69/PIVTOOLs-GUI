@@ -8,14 +8,15 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
 
   // Camera options derived from config
-  const cameraOptions: number[] = useMemo(() => {
-    return config?.paths?.camera_numbers || [];
-  }, [config]);
+  const cameraOptions: string[] = useMemo(() => {
+    const cameras = config?.paths?.camera_numbers || [];
+    return cameras.map((num: number) => `Cam${num}`);
+  }, [config?.paths?.camera_numbers]);
 
-  const [camera, setCamera] = useState<number>(() => cameraOptions.length > 0 ? cameraOptions[0] : 1);
+  const [camera, setCamera] = useState<number>(() => cameraOptions.length > 0 ? parseInt(cameraOptions[0].replace('Cam', '')) : 1);
   useEffect(() => {
     if (cameraOptions.length === 0) return;
-    if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
+    if (!cameraOptions.includes(`Cam${camera}`)) setCamera(parseInt(cameraOptions[0].replace('Cam', '')));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
 
@@ -33,6 +34,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     { label: '1080p (1920x1080)', value: '1080p' },
     { label: '4K (3840x2160)', value: '4k' }
   ];
+  const [fps, setFps] = useState<number>(30);
 
   // Video browser state
   const [activeTab, setActiveTab] = useState<string>('create');
@@ -145,6 +147,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       upper,
       num_images: config?.images?.num_images || 0,
       resolution,
+      fps: String(fps),
     };
     return params;
   };
@@ -314,6 +317,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     resolution,
     setResolution,
     resolutionOptions,
+    fps,
+    setFps,
     activeTab,
     setActiveTab,
     availableVideos,
