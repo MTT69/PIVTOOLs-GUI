@@ -6,25 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useImagePair } from "@/hooks/useImagePair";
+import { useMaskingConfig } from "@/hooks/useMaskingConfig";
 import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { basename } from "@/lib/utils";
 import * as Slider from '@radix-ui/react-slider';
 
-const Masking: React.FC<{ config?: any }> = ({ config }) => {
+const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: any) => void }> = ({ config, updateConfig }) => {
   const sourcePaths = config?.paths?.source_paths || [];
   const [basePathIdx, setBasePathIdx] = useState(0);
-  const [camera, setCamera] = useState("Cam1");
+  const [camera, setCamera] = useState(1);
 	// derive camera options from config if provided
-	const cameraOptions: string[] = (() => {
-		// Prefer paths.camera_numbers (array with first element number of cameras)
-		const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-		const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-		const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-			? (nFromPaths as number)
-			: (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-		const count = Number.isFinite(n) ? n : 1;
-		return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
-	})();
+	const cameraOptions: number[] = config?.paths?.camera_numbers || [];
 
 	// ensure camera state reflects available options
 	useEffect(() => {
@@ -42,8 +34,24 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 	const [manuallyAdjusted, setManuallyAdjusted] = useState(false);
 	const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
 
+	// Use masking config hook
+	const {
+		enabled: maskingEnabled,
+		mode: maskingMode,
+		rectangularTop,
+		rectangularBottom,
+		rectangularLeft,
+		rectangularRight,
+		setRectangularTop,
+		setRectangularBottom,
+		setRectangularLeft,
+		setRectangularRight,
+		updateEnabled,
+		updateMode
+	} = useMaskingConfig(config?.masking, updateConfig!);
+
 	// Use the centralized hook for fetching images
-	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, camera, index);
+	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index);
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
 	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
@@ -145,9 +153,9 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 			<Card>
 				<CardHeader>
 					<CardTitle>Raw Image Viewer</CardTitle>
-					<CardDescription>
-						Load and view raw images. Select source path, camera, image index, and frame. Create mask polygons and export.
-					</CardDescription>
+				<CardDescription>
+					Load and view raw images. Select masking mode and toggle to apply masks for PIV processing.
+				</CardDescription>
 				</CardHeader>
 				<CardContent>
 					<div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
@@ -164,11 +172,11 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 						</div>
 						<div>
 							<Label htmlFor="camera">Camera</Label>
-							<Select value={camera} onValueChange={v => setCamera(v)}>
+							<Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
 								<SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
 								<SelectContent>
 									{cameraOptions.map((c, i) => (
-										<SelectItem key={i} value={c}>{c}</SelectItem>
+										<SelectItem key={i} value={String(c)}>{c}</SelectItem>
 									))}
 								</SelectContent>
 							</Select>
@@ -196,9 +204,93 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 						</div>
 					</div>
 
-					{/* Contrast Controls */}
-					{currentImg && (
-						<div className="mt-4 space-y-3 p-3 border rounded-md">
+					{/* Masking Mode Controls */}
+					<div className="mt-4 space-y-3 p-3 border rounded-md">
+						<div className="flex items-center justify-between">
+							<div className="flex items-center gap-4">
+								<div>
+									<Label htmlFor="masking-mode-select">Masking Mode</Label>
+									<Select 
+										value={maskingMode} 
+										onValueChange={(value: 'polygon' | 'pixel_border') => updateMode(value)}
+									>
+										<SelectTrigger id="masking-mode-select" className="w-40">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="polygon">Polygon</SelectItem>
+											<SelectItem value="pixel_border">Pixel Border</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+								<div className="flex items-center gap-2">
+									<Switch 
+										id="apply-mask-piv" 
+										checked={maskingEnabled} 
+										onCheckedChange={updateEnabled} 
+									/>
+									<Label htmlFor="apply-mask-piv" className="text-sm">Apply Mask for PIV</Label>
+								</div>
+							</div>
+						</div>
+						
+						{maskingMode === 'pixel_border' ? (
+							<div className="grid grid-cols-2 gap-4">
+								<div>
+									<Label htmlFor="rect-top">Top (pixels)</Label>
+									<Input 
+										id="rect-top" 
+										type="number" 
+										value={rectangularTop} 
+										min={0} 
+										onChange={e => setRectangularTop(Math.max(0, Number(e.target.value)))} 
+									/>
+								</div>
+								<div>
+									<Label htmlFor="rect-bottom">Bottom (pixels)</Label>
+									<Input 
+										id="rect-bottom" 
+										type="number" 
+										value={rectangularBottom} 
+										min={0} 
+										onChange={e => setRectangularBottom(Math.max(0, Number(e.target.value)))} 
+									/>
+								</div>
+								<div>
+									<Label htmlFor="rect-left">Left (pixels)</Label>
+									<Input 
+										id="rect-left" 
+										type="number" 
+										value={rectangularLeft} 
+										min={0} 
+										onChange={e => setRectangularLeft(Math.max(0, Number(e.target.value)))} 
+									/>
+								</div>
+								<div>
+									<Label htmlFor="rect-right">Right (pixels)</Label>
+									<Input 
+										id="rect-right" 
+										type="number" 
+										value={rectangularRight} 
+										min={0} 
+										onChange={e => setRectangularRight(Math.max(0, Number(e.target.value)))} 
+									/>
+								</div>
+							</div>
+						) : (
+							<div className="text-sm text-gray-600">
+								Polygon mode: Create custom polygon masks using the editor below
+							</div>
+						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			<div className="flex flex-col items-center mt-6">
+				{currentImg && maskingMode === 'polygon' && (
+					<div className="w-full space-y-4">
+						{/* Contrast Controls for Polygon Viewer */}
+						<div className="space-y-3 p-3 border rounded-md">
 							<div className="flex items-center gap-2">
 								<Label>Contrast Controls</Label>
 								<div className="flex items-center gap-2 ml-auto">
@@ -258,22 +350,23 @@ const Masking: React.FC<{ config?: any }> = ({ config }) => {
 								/>
 							</div>
 						</div>
-					)}
-				</CardContent>
-			</Card>
-
-			<div className="flex flex-col items-center mt-6">
-				{currentImg && (
-					<PolygonMaskEditor
-						key={`${basePathIdx}-${camera}-${index}-${frame}`}
-						raw={currentRaw}
-						src={currentRaw ? undefined : currentImg}
-						vmin={vmin}
-						vmax={vmax}
-						title="Polygon Mask Editor"
-						meta={{ basePathIdx, camera, index, frame }}
-						arrayPostUrl="/backend/save_mask_array"
-					/>
+						
+						<PolygonMaskEditor
+							key={`${basePathIdx}-${camera}-${index}-${frame}`}
+							raw={currentRaw}
+							src={currentRaw ? undefined : currentImg}
+							vmin={vmin}
+							vmax={vmax}
+							title="Polygon Mask Editor"
+							meta={{ basePathIdx, camera: `Cam${camera}`, index, frame }}
+							arrayPostUrl="/backend/save_mask_array"
+						/>
+					</div>
+				)}
+				{maskingMode === 'pixel_border' && (
+					<div className="text-center text-gray-600 p-8 border rounded-md bg-gray-50">
+						Pixel border mode enabled. Rectangular masking will be applied with the specified border values.
+					</div>
 				)}
 				{loading && <div className="text-center text-gray-500">Loading image...</div>}
 				{(!currentImg && !loading) && (

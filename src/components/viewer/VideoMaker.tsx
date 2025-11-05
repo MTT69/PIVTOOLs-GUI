@@ -109,11 +109,11 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 {/* Camera selection and merged checkbox */}
                 <div className="flex items-center gap-4">
                   <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                  <Select value={camera} onValueChange={v => setCamera(v)}>
+                  <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
                     <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
                     <SelectContent>
                       {cameraOptions.map((c, i) => (
-                        <SelectItem key={i} value={c}>{c}</SelectItem>
+                        <SelectItem key={i} value={String(c)}>{c}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

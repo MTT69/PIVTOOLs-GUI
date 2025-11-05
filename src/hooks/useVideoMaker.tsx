@@ -8,17 +8,11 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
 
   // Camera options derived from config
-  const cameraOptions: string[] = useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  const cameraOptions: number[] = useMemo(() => {
+    return config?.paths?.camera_numbers || [];
   }, [config]);
 
-  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : 'Cam1');
+  const [camera, setCamera] = useState<number>(() => cameraOptions.length > 0 ? cameraOptions[0] : 1);
   useEffect(() => {
     if (cameraOptions.length === 0) return;
     if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
@@ -142,7 +136,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const buildParams = () => {
     const params: any = {
       base_path: effectiveDir,
-      camera: camera.replace(/[^\d]/g, '') || '1',
+      camera: camera,
       var: type,
       run: String(run),
       merged: merged ? '1' : '0',

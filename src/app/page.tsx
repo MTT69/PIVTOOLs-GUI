@@ -161,47 +161,28 @@ export default function Home() {
               </p>
               
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="grid grid-cols-12 mb-6">
-                  {/* Environment tab removed */}
+                <TabsList className="grid grid-cols-6 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Setup
-                  </TabsTrigger>
-                  {/* <TabsTrigger value="pipeline" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Pipeline
-                  </TabsTrigger> */}
-                  <TabsTrigger value="instantaneous" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    PIV
-                  </TabsTrigger>
-                  {/* <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Ensemble
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="pod" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    POD
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="filters" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Filters
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="paths" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Paths
-                  </TabsTrigger> */}
-                  {/* <TabsTrigger value="runPIV" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Run PIV
-                  </TabsTrigger> */}
-                  <TabsTrigger value="results" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Results
-                  </TabsTrigger>
-                  <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Viewer
-                  </TabsTrigger>
-                  <TabsTrigger value="video" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Video
                   </TabsTrigger>
                   <TabsTrigger value="masking" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Masking
                   </TabsTrigger>
+                  <TabsTrigger value="instantaneous" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    PIV
+                  </TabsTrigger>
                   <TabsTrigger value="calibration" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Calibration
                   </TabsTrigger>
+                  <TabsTrigger value="results" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    Results
+                  </TabsTrigger>
+                  <TabsTrigger value="video" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    Video
+                  </TabsTrigger>
+                  {/* <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    Viewer
+                  </TabsTrigger> */}
                 </TabsList>
                 
                 {/* Environment tab content removed */}
@@ -216,6 +197,11 @@ export default function Home() {
                       <PathsConfig config={config} updateConfig={updateConfig} />
                     </div>
                   </div>
+                </TabsContent>
+                
+                <TabsContent value="masking">
+                  {/* Masking tab content */}
+                  <Masking config={config} updateConfig={updateConfig} />
                 </TabsContent>
                 {/*
                 <TabsContent value="pipeline">
@@ -262,6 +248,10 @@ export default function Home() {
                   </div>
                 </TabsContent>
                 
+                <TabsContent value="calibration">
+                  <Calibration config={config} updateConfig={updateConfig} />
+                </TabsContent>
+                
                 {/* <TabsContent value="ensemble">
                   <EnsemblePIV config={config} updateConfig={updateConfig} />
                 </TabsContent> */}
@@ -274,21 +264,12 @@ export default function Home() {
                   <VectorViewer config={config} />
                 </TabsContent>
 
-                <TabsContent value="viewer">
+                {/* <TabsContent value="viewer">
                   <ImagePairViewer config={config} />
-                </TabsContent>
+                </TabsContent> */}
 
                 <TabsContent value="video">
                   <VideoMaker config={config} />
-                </TabsContent>
-
-                <TabsContent value="masking">
-                  {/* Masking tab content */}
-                  <Masking config={config} />
-                </TabsContent>
-
-                <TabsContent value="calibration">
-                  <Calibration config={config} updateConfig={updateConfig} />
                 </TabsContent>
 
               </Tabs>

@@ -42,7 +42,9 @@ export function usePinholeCalibration(
   imageCount: number = 1000
 ) {
   // --- State Initialization ---
-  const [sourcePathIdx, setSourcePathIdx] = useState<number>(config.source_path_idx ?? 0);
+  const initialSourcePathIdx = config.source_path_idx ?? 0;
+  const validSourcePathIdx = initialSourcePathIdx < sourcePaths.length ? initialSourcePathIdx : 0;
+  const [sourcePathIdx, setSourcePathIdx] = useState<number>(validSourcePathIdx);
   const [camera, setCamera] = useState<number>(config.camera ?? 1);
   const [imageIndex, setImageIndex] = useState<string>(config.image_index !== undefined ? String(config.image_index) : "0");
   const [filePattern, setFilePattern] = useState<string>(config.file_pattern ?? "calib%05d.tif");
@@ -72,7 +74,9 @@ export function usePinholeCalibration(
 
   // --- Sync UI state with config when config changes ---
   useEffect(() => {
-    setSourcePathIdx(config.source_path_idx ?? 0);
+    const configSourcePathIdx = config.source_path_idx ?? 0;
+    const validIdx = configSourcePathIdx < sourcePaths.length ? configSourcePathIdx : 0;
+    setSourcePathIdx(validIdx);
     setCamera(config.camera ?? 1);
     setImageIndex(config.image_index !== undefined ? String(config.image_index) : "0");
     setFilePattern(config.file_pattern ?? "calib%05d.tif");
@@ -82,7 +86,7 @@ export function usePinholeCalibration(
     setEnhanceDots(config.enhance_dots ?? true);
     setAsymmetric(config.asymmetric ?? false);
     setDt(config.dt !== undefined ? String(config.dt) : "1.0");
-  }, [config]);
+  }, [config, sourcePaths.length]);
 
   // --- Debounced config update ---
   useEffect(() => {
@@ -93,8 +97,9 @@ export function usePinholeCalibration(
       dotSpacingMm !== "" && !isNaN(Number(dotSpacingMm)) &&
       dt !== "" && !isNaN(Number(dt));
 
-    if (valid && debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(async () => {
+      if (!valid) return;
       const newConfig = {
         source_path_idx: sourcePathIdx,
         camera,
@@ -107,7 +112,25 @@ export function usePinholeCalibration(
         asymmetric: asymmetric,
         dt: Number(dt),
       };
-      updateConfig(["calibration", "pinhole"], newConfig);
+      const payload = {
+        calibration: {
+          pinhole: newConfig,
+        },
+      };
+      try {
+        const res = await fetch("/backend/update_config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to save pinhole config");
+        if (json.updated?.calibration?.pinhole) {
+          updateConfig(["calibration", "pinhole"], json.updated.calibration.pinhole);
+        }
+      } catch (err) {
+        console.error("Failed to save pinhole config:", err);
+      }
     }, 500);
 
     return () => {
@@ -128,25 +151,9 @@ export function usePinholeCalibration(
     const [details, setDetails] = useState<any>(null);
 
     useEffect(() => {
-      let active = true;
-      const fetchStatus = async () => {
-        try {
-          const res = await fetch(`/backend/calibration/status?source_path_idx=${sourcePathIdx}&camera=${camera}`);
-          const data = await res.json();
-          if (active) {
-            setStatus(data.status || "not_started");
-            setDetails(data);
-          }
-        } catch {
-          if (active) setStatus("not_started");
-        }
-      };
-      fetchStatus();
-      const interval = setInterval(fetchStatus, 2000);
-      return () => {
-        active = false;
-        clearInterval(interval);
-      };
+      // Don't poll - only check status when explicitly needed
+      // This prevents unnecessary API calls every 2 seconds
+      return () => {}; // No-op cleanup
     }, [sourcePathIdx, camera]);
     return { status, details };
   };
@@ -154,9 +161,19 @@ export function usePinholeCalibration(
   const useVectorCalibrationStatus = (jobId: string | null) => {
     const [status, setStatus] = useState<string>("not_started");
     const [details, setDetails] = useState<any>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
-      if (!jobId) return;
+      if (!jobId) {
+        setStatus("not_started");
+        setDetails(null);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        return;
+      }
+
       let active = true;
       const fetchStatus = async () => {
         try {
@@ -165,16 +182,38 @@ export function usePinholeCalibration(
           if (active) {
             setStatus(data.status || "not_started");
             setDetails(data);
+            
+            // Stop polling if completed or failed
+            if (data.status === "completed" || data.status === "failed" || data.progress >= 100) {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+            } else if ((data.status === "running" || data.status === "starting") && !intervalRef.current) {
+              // Start polling only if running/starting and not already polling
+              intervalRef.current = setInterval(fetchStatus, 500); // Poll every 500ms like PIV runner
+            }
           }
         } catch {
-          if (active) setStatus("not_started");
+          if (active) {
+            setStatus("not_started");
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = null;
+            }
+          }
         }
       };
+      
+      // Initial fetch
       fetchStatus();
-      const interval = setInterval(fetchStatus, 2000);
+      
       return () => {
         active = false;
-        clearInterval(interval);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
       };
     }, [jobId]);
     return { status, details };

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 export interface ScaleFactorConfig {
   dt?: number;
   px_per_mm?: number;
+  source_path_idx?: number;
 }
 
 export interface ScaleFactorCalibrationState {
@@ -31,7 +32,7 @@ export function useScaleFactorCalibration(
   // --- State Initialization ---
   const [dt, setDt] = useState<string>(config.dt !== undefined ? String(config.dt) : "");
   const [pxPerMm, setPxPerMm] = useState<string>(config.px_per_mm !== undefined ? String(config.px_per_mm) : "");
-  const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
+  const [sourcePathIdx, setSourcePathIdx] = useState<number>(config.source_path_idx ?? 0);
   const [calibrating, setCalibrating] = useState<boolean>(false);
   const [scaleFactorJobId, setScaleFactorJobId] = useState<string | null>(null);
 
@@ -42,6 +43,7 @@ export function useScaleFactorCalibration(
   useEffect(() => {
     setDt(config.dt !== undefined ? String(config.dt) : "");
     setPxPerMm(config.px_per_mm !== undefined ? String(config.px_per_mm) : "");
+    setSourcePathIdx(config.source_path_idx ?? 0);
   }, [config]);
 
   // --- Update offsets when camera count changes ---
@@ -57,13 +59,15 @@ export function useScaleFactorCalibration(
       const pxPerMmNum = Number(pxPerMm);
       const valid =
         !isNaN(dtNum) && dt !== "" &&
-        !isNaN(pxPerMmNum) && pxPerMm !== "";
+        !isNaN(pxPerMmNum) && pxPerMm !== "" &&
+        Number.isFinite(sourcePathIdx);
       if (valid) {
         const payload = {
           calibration: {
             scale_factor: {
               dt: dtNum,
               px_per_mm: pxPerMmNum,
+              source_path_idx: sourcePathIdx,
             },
           },
         };
@@ -86,51 +90,16 @@ export function useScaleFactorCalibration(
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [dt, pxPerMm, updateConfig]);
+  }, [dt, pxPerMm, sourcePathIdx, updateConfig]);
 
   // --- Status hook ---
   const useScaleFactorStatus = (sourcePathIdx: number) => {
     const [status, setStatus] = useState<string>("not_started");
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
-      let active = true;
-      const fetchStatus = async () => {
-        try {
-          const res = await fetch(`/backend/calibration/status?source_path_idx=${sourcePathIdx}&type=scale_factor`);
-          const data = await res.json();
-          if (active) {
-            setStatus(data.status || "not_started");
-            // Start polling only if running or starting
-            if (data.status === "running" || data.status === "starting") {
-              if (!intervalRef.current) {
-                intervalRef.current = setInterval(fetchStatus, 2000);
-              }
-            } else {
-              if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-              }
-            }
-          }
-        } catch {
-          if (active) setStatus("not_started");
-          if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-          }
-        }
-      };
-      // Initial fetch
-      fetchStatus();
-      // No initial interval, only start if status indicates running
-      return () => {
-        active = false;
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      };
+      // Don't poll - only check status when explicitly needed
+      // This prevents unnecessary API calls
+      return () => {}; // No-op cleanup
     }, [sourcePathIdx]);
     return status;
   };
@@ -168,7 +137,7 @@ export function useScaleFactorCalibration(
             } else if (data.status === "running" || data.status === "starting") {
               // Start polling if running and not already polling
               if (!intervalRef.current) {
-                intervalRef.current = setInterval(fetchStatus, 2000);
+                intervalRef.current = setInterval(fetchStatus, 500);
               }
             }
           }

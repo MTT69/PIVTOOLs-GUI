@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +31,6 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
   const {
     sourcePathIdx,
     camera,
-    imageIndex,
     filePattern,
     patternCols,
     patternRows,
@@ -53,7 +52,6 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     loadingResults,
     setSourcePathIdx,
     setCamera,
-    setImageIndex,
     setFilePattern,
     setPatternCols,
     setPatternRows,
@@ -74,6 +72,51 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     sourcePaths,
     imageCount
   );
+
+  // Local state for inputs to prevent debouncing issues
+  const [dtInput, setDtInput] = useState(String(dt));
+  const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
+  const [patternColsInput, setPatternColsInput] = useState(String(patternCols));
+  const [patternRowsInput, setPatternRowsInput] = useState(String(patternRows));
+
+  useEffect(() => {
+    setDtInput(String(dt));
+  }, [dt]);
+
+  useEffect(() => {
+    setDotSpacingMmInput(String(dotSpacingMm));
+  }, [dotSpacingMm]);
+
+  useEffect(() => {
+    setPatternColsInput(String(patternCols));
+  }, [patternCols]);
+
+  useEffect(() => {
+    setPatternRowsInput(String(patternRows));
+  }, [patternRows]);
+
+  const setAsActiveMethod = async () => {
+    try {
+      const res = await fetch("/backend/update_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calibration: {
+            active: "pinhole",
+          },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to set active method");
+      if (json.updated?.calibration) {
+        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+      }
+    } catch (err) {
+      console.error("Failed to set active calibration method:", err);
+    }
+  };
+
+  const isActive = config.calibration?.active === "pinhole";
 
   return (
     <div className="space-y-6">
@@ -112,7 +155,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
           <CardTitle>Pinhole Calibration (Planar)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Source Path</label>
               <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
@@ -136,21 +179,6 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <label className="text-sm font-medium">Model Index:</label>
-              <Input
-                type="text"
-                inputMode="numeric"
-                value={imageIndex}
-                onChange={e => setImageIndex(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setImageIndex(e.target.value);
-                  }
-                }}
-                min="0"
-              />
-            </div>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -165,31 +193,23 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Pattern Cols:</label>
               <Input
-                type="text"
-                inputMode="numeric"
-                value={patternCols}
-                onChange={e => setPatternCols(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setPatternCols(e.target.value);
-                  }
-                }}
+                type="number"
+                value={patternColsInput}
+                onChange={e => setPatternColsInput(e.target.value)}
+                onBlur={() => setPatternCols(patternColsInput)}
                 min="1"
+                step="1"
               />
             </div>
             <div>
               <label className="text-sm font-medium">Pattern Rows:</label>
               <Input
-                type="text"
-                inputMode="numeric"
-                value={patternRows}
-                onChange={e => setPatternRows(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setPatternRows(e.target.value);
-                  }
-                }}
+                type="number"
+                value={patternRowsInput}
+                onChange={e => setPatternRowsInput(e.target.value)}
+                onBlur={() => setPatternRows(patternRowsInput)}
                 min="1"
+                step="1"
               />
             </div>
           </div>
@@ -198,31 +218,22 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Dot Spacing (mm):</label>
               <Input
-                type="text"
-                inputMode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
-                value={dotSpacingMm}
-                onChange={e => setDotSpacingMm(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setDotSpacingMm(e.target.value);
-                  }
-                }}
+                type="number"
+                value={dotSpacingMmInput}
+                onChange={e => setDotSpacingMmInput(e.target.value)}
+                onBlur={() => setDotSpacingMm(dotSpacingMmInput)}
+                step="any"
+                min="0"
               />
             </div>
             <div>
               <label className="text-sm font-medium">Δt (seconds):</label>
               <Input
-                type="text"
-                inputMode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
-                value={dt}
-                onChange={e => setDt(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setDt(e.target.value);
-                  }
-                }}
+                type="number"
+                value={dtInput}
+                onChange={e => setDtInput(e.target.value)}
+                onBlur={() => setDt(dtInput)}
+                step="any"
                 min="0.001"
               />
             </div>
@@ -266,7 +277,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             )}
           </div>
 
-          {/* TWO MAIN BUTTONS */}
+          {/* THREE MAIN BUTTONS */}
           <div className="border-t pt-4">
             <div className="flex gap-4 items-center">
               <Button
@@ -283,12 +294,19 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
               >
                 {vectorStatus === "running" || vectorStatus === "starting" ? 'Calibrating...' : 'Calibrate Vectors'}
               </Button>
-              {/* Removed explicit Load Results button (auto handled) */}
+              <Button
+                onClick={setAsActiveMethod}
+                disabled={isActive}
+                className={isActive ? "bg-green-600 hover:bg-green-600 text-white px-6 py-3" : ""}
+                variant={isActive ? "default" : "outline"}
+              >
+                {isActive ? "Active" : "Set as Active Method"}
+              </Button>
             </div>
             <div className="text-xs text-gray-500 mt-2">
               <p><strong>Generate Camera Model:</strong> Process all calibration images to create camera models.</p>
-              <p><strong>Calibrate Vectors:</strong> Use camera model index {imageIndex} to calibrate PIV vectors.</p>
-              <p><strong>Load Results:</strong> Load existing calibration results for the current image index.</p>
+              <p><strong>Calibrate Vectors:</strong> Use camera model to calibrate PIV vectors.</p>
+              <p><strong>Load Results:</strong> Load existing calibration results.</p>
             </div>
           </div>
         </CardContent>
@@ -315,7 +333,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                   style={{ maxWidth: "512px", width: "100%" }}
                 />
                 <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs">
-                  Model {imageIndex} ({totalImages} images found)
+                  Calibration Model ({totalImages} images found)
                 </div>
               </div>
               {gridPoints.length > 0 && (

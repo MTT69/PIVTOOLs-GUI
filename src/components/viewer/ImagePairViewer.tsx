@@ -23,7 +23,7 @@ interface ImagePairViewerProps {
 export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange }: ImagePairViewerProps) {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
-  const [camera, setCamera] = useState("Cam1");
+  const [camera, setCamera] = useState(1);
   const [index, setIndex] = useState(1);
   const [colormap, setColormap] = useState<"gray" | "viridis">("gray");
   
@@ -62,14 +62,13 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
-    useImagePair(backendUrl, sourcePathIdx, camera, index);
+    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index);
   const { filters, addFilter, updateBatchSize, removeFilter, runProcessing, procLoading, procImgA, procImgB, fetchProcessed, setFilters } = 
     useImageFilters(backendUrl);
 
   // Memoize camera options and initialize camera
   const cameraOptions = useMemo(() => {
-    const cameras = config?.paths?.camera_numbers || [];
-    return cameras.map((num: number) => `Cam${num}`);
+    return config?.paths?.camera_numbers || [];
   }, [config?.paths?.camera_numbers]);
 
   // Initialize camera from first available option when config loads
@@ -94,7 +93,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   useEffect(() => {
     const fetchProcessedForCurrentFrame = async () => {
       if (filters.length > 0) {
-        await fetchProcessed(camera, index, sourcePathIdx);
+        await fetchProcessed(`Cam${camera}`, index, sourcePathIdx);
       } else {
         // Clear processed images if no filters are applied
         // This is handled in useImageFilters by setting procImgA and procImgB to null
@@ -303,7 +302,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 </div>
               ))}
             </div>
-            <Button className="w-full" onClick={() => runProcessing(camera, index, sourcePathIdx)} disabled={procLoading || filters.length === 0}>
+            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx)} disabled={procLoading || filters.length === 0}>
               {procLoading ? "Processing..." : "Apply Filters to Frame"}
             </Button>
         </div>
@@ -319,13 +318,13 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           </div>
           <div>
             <Label>Camera</Label>
-            <Select value={camera} onValueChange={setCamera} disabled={cameraOptions.length === 0}>
+            <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
               <SelectTrigger><SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : undefined} /></SelectTrigger>
               <SelectContent>
                 {cameraOptions.length === 0 ? (
                   <SelectItem value="none" disabled>No cameras available</SelectItem>
                 ) : (
-                  cameraOptions.map((cam: string) => <SelectItem key={cam} value={cam}>{cam}</SelectItem>)
+                  cameraOptions.map((cam: number) => <SelectItem key={cam} value={String(cam)}>{cam}</SelectItem>)
                 )}
               </SelectContent>
             </Select>

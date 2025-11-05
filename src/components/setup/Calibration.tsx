@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -28,6 +28,14 @@ export const Calibration: React.FC<CalibrationProps> = ({
   const cameraOptions = getCameraOptions();
   const imageCount = config?.images?.num_images || 1000;
 
+  // Local state for which tab is currently visible (not the active method)
+  const [currentTab, setCurrentTab] = useState<string>(activeMethod);
+
+  // Sync currentTab with activeMethod when it changes (e.g., from clicking "Set as Active Method")
+  useEffect(() => {
+    setCurrentTab(activeMethod);
+  }, [activeMethod]);
+
   const calibrationMethods = [
     { id: 'scale_factor', label: 'Scale Factor', component: ScaleFactorCalibration },
     { id: 'pinhole', label: 'Pinhole', component: PinholeCalibration },
@@ -50,7 +58,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
             <li><strong>Stereo:</strong> Calibrate camera pairs for 3D reconstruction</li>
           </ul>
 
-          <Tabs value={activeMethod} onValueChange={(value) => setActiveMethod(value as any)}>
+          <Tabs value={currentTab} onValueChange={setCurrentTab}>
             <TabsList className="grid w-full grid-cols-3">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>

@@ -49,6 +49,29 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     imageCount
   );
 
+  const setAsActiveMethod = async () => {
+    try {
+      const res = await fetch("/backend/update_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calibration: {
+            active: "scale_factor",
+          },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to set active method");
+      if (json.updated?.calibration) {
+        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+      }
+    } catch (err) {
+      console.error("Failed to set active calibration method:", err);
+    }
+  };
+
+  const isActive = config.calibration?.active === "scale_factor";
+
   return (
     <Card>
       {/* Add progress display if job is running */}
@@ -104,33 +127,22 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         <div>
           <label className="block text-xs font-medium">Δt (seconds)</label>
           <Input
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9]*\.?[0-9]*"
+            type="number"
             value={dt}
             onChange={e => setDt(e.target.value)}
-            onBlur={e => {
-              // Only update config if valid number
-              if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                setDt(e.target.value);
-              }
-            }}
+            step="any"
+            min="0"
             placeholder="1.0"
           />
         </div>
         <div>
           <label className="block text-xs font-medium">Pixels per mm</label>
           <Input
-            type="text"
-            inputMode="decimal"
-            pattern="[0-9]*\.?[0-9]*"
+            type="number"
             value={pxPerMm}
             onChange={e => setPxPerMm(e.target.value)}
-            onBlur={e => {
-              if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                setPxPerMm(e.target.value);
-              }
-            }}
+            step="any"
+            min="0"
             placeholder="1.0"
           />
         </div>
@@ -165,6 +177,14 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             className="bg-green-600 hover:bg-green-700 text-white px-6 py-3"
           >
             {calibrating ? "Calibrating..." : "Calibrate All Vectors"}
+          </Button>
+          <Button
+            onClick={setAsActiveMethod}
+            disabled={isActive}
+            className={isActive ? "bg-green-600 hover:bg-green-600 text-white px-6 py-3" : ""}
+            variant={isActive ? "default" : "outline"}
+          >
+            {isActive ? "Active" : "Set as Active Method"}
           </Button>
         </div>
         <div className="text-xs text-gray-500 mt-2">

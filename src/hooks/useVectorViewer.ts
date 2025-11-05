@@ -39,16 +39,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasRendered, setHasRendered] = useState<boolean>(false);
-  const cameraOptions: string[] = useMemo(() => {
-    const nFromPaths = config?.paths?.camera_numbers?.length ? Number(config.paths.camera_numbers[0]) : undefined;
-    const nFromIm = config?.imProperties?.cameraCount ? Number(config.imProperties.cameraCount) : undefined;
-    const n = (Number.isFinite(nFromPaths as number) && (nFromPaths as number) > 0)
-      ? (nFromPaths as number)
-      : (Number.isFinite(nFromIm as number) && (nFromIm as number) > 0) ? (nFromIm as number) : 1;
-    const count = Number.isFinite(n) ? n : 1;
-    return Array.from({ length: count }, (_, i) => `Cam${i + 1}`);
+  const cameraOptions: number[] = useMemo(() => {
+    return config?.paths?.camera_numbers || [];
   }, [config]);
-  const [camera, setCamera] = useState<string>(() => cameraOptions.length > 0 ? cameraOptions[0] : "Cam1");
+  const [camera, setCamera] = useState<number>(() => cameraOptions.length > 0 ? cameraOptions[0] : 1);
   useEffect(() => {
     if (cameraOptions.length === 0) return;
     if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
@@ -112,7 +106,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
@@ -147,7 +141,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       const url = `${backendUrl}/plot/check_stat_vars?${params.toString()}`;
       const res = await fetch(url);
@@ -173,7 +167,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", String(index));
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       const url = `${backendUrl}/plot/check_vars?${params.toString()}`;
       const res = await fetch(url);
@@ -197,7 +191,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       params.set("var", type);
       const url = `${backendUrl}/plot/check_limits?${params.toString()}`;
@@ -223,7 +217,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) return [];
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       const url = `${backendUrl}/plot/check_runs?${params.toString()}`;
       const res = await fetch(url);
@@ -254,7 +248,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", camera);
+      params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
       
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
@@ -323,7 +317,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       const params = new URLSearchParams();
       params.set("base_path", effectiveDir);
-      params.set("camera", camera.replace(/[^\d]/g, "") || "1");
+      params.set("camera", String(camera));
       params.set("frame", String(index));
       params.set("var", type);
       params.set("run", String(run));
@@ -347,7 +341,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       const body = {
         base_path_idx: basePathIdx,
-        camera: camera.replace(/[^\d]/g, "") || "1",
+        camera: camera,
         run: run,
         x_offset: Number(xOffset) || 0,
         y_offset: Number(yOffset) || 0,
@@ -371,7 +365,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       const body = {
         base_path_idx: basePathIdx,
-        camera: camera.replace(/[^\d]/g, "") || "1",
+        camera: camera,
         run: run,
         x: x,
         y: y,
@@ -402,7 +396,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const fetchCorner = async (xPercent: number, yPercent: number) => {
         const params = new URLSearchParams();
         params.set("base_path", basePath);
-        params.set("camera", camera.replace(/[^\d]/g, "") || "1");
+        params.set("camera", String(camera));
         params.set("frame", String(index));
         params.set("var", type);
         params.set("run", String(run));
@@ -445,7 +439,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     const endpoint = meanMode ? "get_stats_value_at_position" : "get_vector_at_position";
     const params = new URLSearchParams();
     params.set("base_path", effectiveDir);
-    params.set("camera", camera.replace(/[^\d]/g, "") || "1");
+    params.set("camera", String(camera));
     params.set("frame", String(index));
     params.set("var", type);
     params.set("run", String(run));
@@ -710,7 +704,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         },
         body: JSON.stringify({
           base_path: effectiveDir,
-          camera: camera.replace(/[^\d]/g, "") || "1",
+          camera: camera,
           frame: index,
           transformation,
           merged: merged,
@@ -743,7 +737,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         },
         body: JSON.stringify({
           base_path: effectiveDir,
-          camera: camera.replace(/[^\d]/g, "") || "1",
+          camera: camera,
           frame: index,
           merged: merged,
           type_name: "instantaneous",
@@ -788,7 +782,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         },
         body: JSON.stringify({
           base_path: effectiveDir,
-          camera: camera.replace(/[^\d]/g, "") || "1",
+          camera: camera,
           transformations,
           merged: merged,
           type_name: "instantaneous",

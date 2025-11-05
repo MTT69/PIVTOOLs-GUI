@@ -1,12 +1,127 @@
 "use client";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
-import { useVectorMerging } from "@/hooks/useVectorMerging";
+
+// Inline Vector Merging Hook
+const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number) => {
+  const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
+  const [merging, setMerging] = useState(false);
+  const [mergingJobId, setMergingJobId] = useState<string | null>(null);
+  const [showDialog, setShowDialog] = useState(false);
+  const [jobStatus, setJobStatus] = useState<string>("not_started");
+  const [jobDetails, setJobDetails] = useState<any>(null);
+
+  // Initialize selected cameras when options change
+  useEffect(() => {
+    if (cameraOptions.length >= 2 && selectedCameras.length === 0) {
+      setSelectedCameras([cameraOptions[0], cameraOptions[1]]);
+    }
+  }, [cameraOptions, selectedCameras.length]);
+
+  const mergeVectors = useCallback(async (frameIdx?: number) => {
+    if (selectedCameras.length < 2) {
+      alert("Please select at least 2 cameras to merge");
+      return;
+    }
+
+    setMerging(true);
+    setJobStatus("starting");
+
+    try {
+      const endpoint = frameIdx !== undefined ? "/merge_vectors/merge_one" : "/merge_vectors/merge_all";
+      const body: any = {
+        base_path_idx: basePathIdx,
+        cameras: selectedCameras,
+        type_name: "instantaneous",
+        endpoint: "",
+        image_count: maxFrameCount,
+      };
+
+      if (frameIdx !== undefined) {
+        body.frame_idx = frameIdx;
+      }
+
+      const response = await fetch(`${backendUrl}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start merging");
+      }
+
+      if (frameIdx !== undefined) {
+        // Single frame merge - completed immediately
+        setJobStatus("completed");
+        setJobDetails({ progress: 100, message: data.message });
+        setMerging(false);
+      } else {
+        // Batch merge - start polling
+        setMergingJobId(data.job_id);
+        setJobStatus("running");
+      }
+    } catch (error: any) {
+      console.error("Error starting merge:", error);
+      setJobStatus("failed");
+      setJobDetails({ error: error.message });
+      setMerging(false);
+    }
+  }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount]);
+
+  // Poll for job status
+  useEffect(() => {
+    if (!mergingJobId || jobStatus === "completed" || jobStatus === "failed") {
+      return;
+    }
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`${backendUrl}/merge_vectors/status/${mergingJobId}`);
+        const data = await response.json();
+
+        setJobStatus(data.status);
+        setJobDetails(data);
+
+        if (data.status === "completed" || data.status === "failed") {
+          setMerging(false);
+          clearInterval(pollInterval);
+        }
+      } catch (error) {
+        console.error("Error polling merge status:", error);
+      }
+    }, 1000);
+
+    return () => clearInterval(pollInterval);
+  }, [mergingJobId, jobStatus, backendUrl]);
+
+  const resetMerging = useCallback(() => {
+    setMerging(false);
+    setMergingJobId(null);
+    setJobStatus("not_started");
+    setJobDetails(null);
+  }, []);
+
+  return {
+    selectedCameras,
+    setSelectedCameras,
+    merging,
+    mergingJobId,
+    showDialog,
+    setShowDialog,
+    jobStatus,
+    jobDetails,
+    mergeVectors,
+    resetMerging,
+  };
+};
 
 export default function VectorViewer({ backendUrl = "/backend", config }: { backendUrl?: string; config?: any }) {
   const {
@@ -86,7 +201,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   // Override camera options with config if available
   const cameraOptions = useMemo(() => {
     const cameras = config?.paths?.camera_numbers || [];
-    return cameras.length > 0 ? cameras.map((num: number) => `Cam${num}`) : hookCameraOptions;
+    return cameras.length > 0 ? cameras : hookCameraOptions;
   }, [config?.paths?.camera_numbers, hookCameraOptions]);
 
   // Initialize camera from first available option when config loads
@@ -181,7 +296,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="flex items-center gap-2">
                     <label htmlFor="camera" className="text-sm font-medium text-gray-700">Camera:</label>
-                    <Select value={camera} onValueChange={v => setCamera(v)} disabled={cameraOptions.length === 0}>
+                    <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
                       <SelectTrigger id="camera" className="w-28">
                         <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
                       </SelectTrigger>
@@ -189,8 +304,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         {cameraOptions.length === 0 ? (
                           <SelectItem value="none" disabled>No cameras available</SelectItem>
                         ) : (
-                          cameraOptions.map((c: string, i: number) => (
-                            <SelectItem key={i} value={c}>{c}</SelectItem>
+                          cameraOptions.map((c: number, i: number) => (
+                            <SelectItem key={i} value={String(c)}>{c}</SelectItem>
                           ))
                         )}
                       </SelectContent>
@@ -361,7 +476,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           <div>
                             <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras to Merge:</label>
                             <div className="flex flex-wrap gap-2">
-                              {cameraOptions.map((cam: string) => (
+                              {cameraOptions.map((cam: number) => (
                                 <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
                                   <input
                                     type="checkbox"
@@ -375,19 +490,31 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                                     }}
                                     className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500"
                                   />
-                                  <span className="text-xs font-medium">{cam}</span>
+                                  <span className="text-xs font-medium">Cam {cam}</span>
                                 </label>
                               ))}
                             </div>
                           </div>
 
-                          <Button
-                            onClick={mergeVectors}
-                            disabled={merging || selectedMergeCameras.length < 2}
-                            className="w-full bg-green-600 hover:bg-green-700 text-white text-xs py-2"
-                          >
-                            {merging ? "Starting merge..." : `Merge ${selectedMergeCameras.length} Cameras`}
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={() => mergeVectors(index)}
+                              disabled={merging || selectedMergeCameras.length < 2}
+                              className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2"
+                            >
+                              {merging ? "Merging..." : `Merge Frame ${index}`}
+                            </Button>
+                            <Button
+                              onClick={() => mergeVectors()}
+                              disabled={merging || selectedMergeCameras.length < 2}
+                              className="flex-1 bg-green-700 hover:bg-green-800 text-white text-xs py-2"
+                            >
+                              {merging ? "Merging..." : `Merge All (${maxFrameCount})`}
+                            </Button>
+                          </div>
+                          <p className="text-xs text-gray-600 italic">
+                            Use "Merge Frame" to test on current frame, or "Merge All" to process all frames with multiprocessing.
+                          </p>
                         </div>
                       )}
 
@@ -751,8 +878,56 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <strong>Set Datum Mode Active:</strong> Click on the image to set a new coordinate system origin.
               </div>
             )}
+
+            {/* Image Operations Row */}
+            {imageSrc && !error && (
+              <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg mb-4 shadow-sm">
+                <div className="flex flex-col gap-4">
+                  {/* Prominent action buttons */}
+                  <div className="flex items-center gap-3">
+                    <Button
+                      size="default"
+                      onClick={() => applyTransformationToAllFrames(appliedTransforms)}
+                      disabled={loading || appliedTransforms.length === 0}
+                      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 shadow-md"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 14h-5a2 2 0 0 1-2-2V7" />
+                        <path d="M14 2L7 9l7 7" />
+                      </svg>
+                      Apply to All Frames
+                    </Button>
+                    <Button
+                      size="default"
+                      variant="destructive"
+                      onClick={clearTransforms}
+                      disabled={loading}
+                      className="font-semibold px-6 py-2 shadow-md"
+                    >
+                      Clear Transforms
+                    </Button>
+                    {appliedTransforms.length > 0 && (
+                      <span className="text-sm font-medium text-blue-700 bg-blue-100 px-3 py-1 rounded-full">
+                        {appliedTransforms.length} transform{appliedTransforms.length !== 1 ? 's' : ''} applied
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Individual transform buttons */}
+                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-blue-200">
+                    <label className="text-sm font-semibold text-gray-700 mr-2">Apply individually to current frame:</label>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_ccw')}>Rotate Left</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_cw')}>Rotate Right</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_lr')}>Flip Horizontal</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_ud')}>Flip Vertical</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('swap_ux_uy')}>Swap UX/UY</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux_uy')}>Invert UX/UY</Button>
+                  </div>
+                </div>
+              </div>
+            )}
             
-            {/* Integrated status bar for coordinate information */}
+            {/* Cursor position display - now under transforms */}
             {imageSrc && !error && (
               <div className="mb-4 p-3 bg-gradient-to-r from-gray-50 to-gray-100 border rounded-lg shadow-sm"
                    style={{ minHeight: 56, height: 56, display: 'flex', alignItems: 'center' }}>
@@ -814,46 +989,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   </div>
                   <div className="text-xs text-gray-500">
                     {meanMode ? "Mean Statistics Mode" : `Frame ${index}`}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Image Operations Row */}
-            {imageSrc && !error && (
-              <div className="p-3 bg-gray-50 border rounded-md mb-4">
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => applyTransformationToAllFrames(appliedTransforms)}
-                      disabled={loading || appliedTransforms.length === 0}
-                      className="flex items-center gap-2"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 14h-5a2 2 0 0 1-2-2V7" />
-                        <path d="M14 2L7 9l7 7" />
-                      </svg>
-                      Apply to All Frames
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={clearTransforms}
-                      disabled={loading}
-                    >
-                      Clear Transforms
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
-                    <label className="text-sm font-medium mr-2">Apply individually to current frame:</label>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_ccw')}>Rotate Left</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_cw')}>Rotate Right</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_lr')}>Flip Horizontal</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_ud')}>Flip Vertical</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('swap_ux_uy')}>Swap UX/UY</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux_uy')}>Invert UX/UY</Button>
                   </div>
                 </div>
               </div>
@@ -982,10 +1117,29 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
             {/* Frame slider and play button - Hidden in mean mode since it doesn't apply */}
             {maxFrameCount > 0 && !meanMode && (
-              <div className="flex flex-col md:flex-row items-center justify-center gap-4 mt-6">
+              <div className="flex flex-col md:flex-row items-center justify-center gap-6 mt-6 p-4 bg-gray-50 border rounded-lg">
+                {/* Camera selector */}
+                <div className="flex items-center gap-2">
+                  <label htmlFor="frame-camera" className="text-sm font-medium whitespace-nowrap">Camera:</label>
+                  <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
+                    <SelectTrigger id="frame-camera" className="w-28">
+                      <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cameraOptions.length === 0 ? (
+                        <SelectItem value="none" disabled>No cameras available</SelectItem>
+                      ) : (
+                        cameraOptions.map((c: number, i: number) => (
+                          <SelectItem key={i} value={String(c)}>{c}</SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* Frame slider + numeric selector */}
-                <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1">
+                  <label htmlFor="frame-slider" className="text-sm font-medium whitespace-nowrap">Frame:</label>
                   <input
                     id="frame-slider"
                     type="range"
@@ -993,7 +1147,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     max={maxFrameCount}
                     value={index}
                     onChange={e => setIndex(Number(e.target.value))}
-                    className="w-64"
+                    className="flex-1 min-w-[200px]"
                   />
                   {/* Numeric input to directly set current frame */}
                   <Input
@@ -1005,9 +1159,10 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     onChange={e => setIndex(Math.max(1, Math.min(maxFrameCount, Number(e.target.value || 1))))}
                     className="w-24"
                   />
-                  <span className="text-xs text-gray-500">{index} / {maxFrameCount}</span>
+                  <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrameCount}</span>
                 </div>
 
+                {/* Play button */}
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"

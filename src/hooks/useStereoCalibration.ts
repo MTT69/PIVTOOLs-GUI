@@ -100,9 +100,27 @@ export function useStereoCalibration(
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
       // Debounce the update - only send after 500ms of inactivity
-      debounceTimer.current = setTimeout(() => {
+      debounceTimer.current = setTimeout(async () => {
         console.log('Updating stereo config after debounce');
-        updateConfig(["calibration", "stereo"], newConfig);
+        const payload = {
+          calibration: {
+            stereo: newConfig,
+          },
+        };
+        try {
+          const res = await fetch("/backend/update_config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || "Failed to save stereo config");
+          if (json.updated?.calibration?.stereo) {
+            updateConfig(["calibration", "stereo"], json.updated.calibration.stereo);
+          }
+        } catch (err) {
+          console.error("Failed to save stereo config:", err);
+        }
       }, 500);
     }
 
@@ -129,8 +147,19 @@ export function useStereoCalibration(
   const useStereoCalibrationStatus = (jobId: string | null) => {
     const [status, setStatus] = useState<string>("not_started");
     const [details, setDetails] = useState<any>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
     useEffect(() => {
-      if (!jobId) return;
+      if (!jobId) {
+        setStatus("not_started");
+        setDetails(null);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        return;
+      }
+
       let active = true;
       const fetchStatus = async () => {
         try {
@@ -139,14 +168,39 @@ export function useStereoCalibration(
           if (active) {
             setStatus(data.status || "not_started");
             setDetails(data);
+            
+            // Stop polling if completed or failed
+            if (data.status === "completed" || data.status === "failed" || data.progress >= 100) {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+            } else if ((data.status === "running" || data.status === "starting") && !intervalRef.current) {
+              // Start polling only if running/starting and not already polling
+              intervalRef.current = setInterval(fetchStatus, 500);
+            }
           }
         } catch {
-          if (active) setStatus("not_started");
+          if (active) {
+            setStatus("not_started");
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = null;
+            }
+          }
         }
       };
+      
+      // Initial fetch
       fetchStatus();
-      const interval = setInterval(fetchStatus, 2000);
-      return () => { active = false; clearInterval(interval); };
+      
+      return () => {
+        active = false;
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
     }, [jobId]);
     return { status, details };
   };
@@ -154,8 +208,19 @@ export function useStereoCalibration(
   const useStereoVectorStatus = (jobId: string | null) => {
     const [status, setStatus] = useState<string>("not_started");
     const [details, setDetails] = useState<any>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
     useEffect(() => {
-      if (!jobId) return;
+      if (!jobId) {
+        setStatus("not_started");
+        setDetails(null);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        return;
+      }
+
       let active = true;
       const fetchStatus = async () => {
         try {
@@ -164,14 +229,39 @@ export function useStereoCalibration(
           if (active) {
             setStatus(data.status || "not_started");
             setDetails(data);
+            
+            // Stop polling if completed or failed
+            if (data.status === "completed" || data.status === "failed" || data.progress >= 100) {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+            } else if ((data.status === "running" || data.status === "starting") && !intervalRef.current) {
+              // Start polling only if running/starting and not already polling
+              intervalRef.current = setInterval(fetchStatus, 500);
+            }
           }
         } catch {
-          if (active) setStatus("not_started");
+          if (active) {
+            setStatus("not_started");
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = null;
+            }
+          }
         }
       };
+      
+      // Initial fetch
       fetchStatus();
-      const interval = setInterval(fetchStatus, 2000);
-      return () => { active = false; clearInterval(interval); };
+      
+      return () => {
+        active = false;
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
     }, [jobId]);
     return { status, details };
   };

@@ -84,6 +84,29 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     imageCount
   );
 
+  const setAsActiveMethod = async () => {
+    try {
+      const res = await fetch("/backend/update_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calibration: {
+            active: "stereo",
+          },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to set active method");
+      if (json.updated?.calibration) {
+        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+      }
+    } catch (err) {
+      console.error("Failed to set active calibration method:", err);
+    }
+  };
+
+  const isActive = config.calibration?.active === "stereo";
+
   return (
     <div className="space-y-6">
       {/* Vector Calibration Status */}
@@ -158,16 +181,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Δt (seconds)</label>
               <Input
-                type="text"
-                inputMode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
+                type="number"
                 value={dt}
                 onChange={e => setDt(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setDt(e.target.value);
-                  }
-                }}
+                step="any"
+                min="0"
                 placeholder="1.0"
               />
             </div>
@@ -185,31 +203,21 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Pattern Cols</label>
               <Input
-                type="text"
-                inputMode="numeric"
+                type="number"
                 value={patternCols}
                 onChange={e => setPatternCols(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setPatternCols(e.target.value);
-                  }
-                }}
                 min="1"
+                step="1"
               />
             </div>
             <div>
               <label className="text-sm font-medium">Pattern Rows</label>
               <Input
-                type="text"
-                inputMode="numeric"
+                type="number"
                 value={patternRows}
                 onChange={e => setPatternRows(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setPatternRows(e.target.value);
-                  }
-                }}
                 min="1"
+                step="1"
               />
             </div>
           </div>
@@ -218,16 +226,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Dot Spacing (mm)</label>
               <Input
-                type="text"
-                inputMode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
+                type="number"
                 value={dotSpacingMm}
                 onChange={e => setDotSpacingMm(e.target.value)}
-                onBlur={e => {
-                  if (e.target.value !== "" && !isNaN(Number(e.target.value))) {
-                    setDotSpacingMm(e.target.value);
-                  }
-                }}
+                step="any"
+                min="0"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -292,6 +295,14 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               className="bg-green-600 hover:bg-green-700 text-white px-6 py-3"
             >
               {vectorStatus === "running" || vectorStatus === "starting" ? 'Calibrating...' : 'Calibrate Vectors'}
+            </Button>
+            <Button
+              onClick={setAsActiveMethod}
+              disabled={isActive}
+              className={isActive ? "bg-green-600 hover:bg-green-600 text-white px-6 py-3" : ""}
+              variant={isActive ? "default" : "outline"}
+            >
+              {isActive ? "Active" : "Set as Active Method"}
             </Button>
           </div>
 

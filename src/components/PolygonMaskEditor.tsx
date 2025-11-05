@@ -48,10 +48,51 @@ function PolygonMaskEditor({
 	// start with a single empty polygon named "Polygon 1" and select it
 	const [polys, setPolys] = useState<Poly[]>([{ points: [], closed: false, name: "Polygon 1" }]);
 	const [active, setActive] = useState<number>(0);
+	const [isLoadingMask, setIsLoadingMask] = useState<boolean>(false);
 
-	// NEW: state for mask path and loading status
-	const [maskPath, setMaskPath] = useState<string>("");
-	const [loadingMask, setLoadingMask] = useState<boolean>(false);
+	// Load existing mask on mount or when meta changes
+	useEffect(() => {
+		async function loadExistingMask() {
+			if (meta?.basePathIdx === undefined || !meta?.camera) return;
+			
+			setIsLoadingMask(true);
+			try {
+				const params = new URLSearchParams({
+					basepath_idx: meta.basePathIdx.toString(),
+					camera: meta.camera,
+				});
+				
+				const response = await fetch(`/backend/load_mask?${params}`);
+				if (!response.ok) {
+					// No existing mask found - that's fine, start with empty
+					console.log('No existing mask found, starting fresh');
+					return;
+				}
+				
+				const data = await response.json();
+				
+				if (data.polygons && data.polygons.length > 0) {
+					// Convert loaded polygons to the component's polygon format
+					const loadedPolys: Poly[] = data.polygons.map((p: any) => ({
+						name: p.name || `Polygon ${p.index + 1}`,
+						closed: true, // Saved polygons are always closed
+						points: p.points.map((pt: number[]) => ({ x: pt[0], y: pt[1] }))
+					}));
+					
+					setPolys(loadedPolys);
+					setActive(loadedPolys.length > 0 ? 0 : -1);
+					console.log(`Loaded ${loadedPolys.length} polygon(s) from existing mask`);
+				}
+			} catch (error) {
+				console.error('Error loading existing mask:', error);
+				// Continue with empty polygons on error
+			} finally {
+				setIsLoadingMask(false);
+			}
+		}
+		
+		loadExistingMask();
+	}, [meta?.basePathIdx, meta?.camera]);
 
 	// Load PNG if provided and detect native size
 	useEffect(() => {
@@ -616,57 +657,6 @@ function PolygonMaskEditor({
 		});
 	}
 
-	// NEW: function to load mask data from backend
-	async function loadMaskFromPath() {
-		if (!maskPath.trim()) return;
-		
-		setLoadingMask(true);
-		try {
-			// Query params for the backend
-			const params = new URLSearchParams({
-				path: maskPath,
-				// Include current meta data to help backend locate the right mask
-				basepath_idx: String(meta.basePathIdx),
-				camera: meta.camera,
-				index: String(meta.index),
-				frame: meta.frame
-			});
-			
-			const response = await fetch(`http://localhost:3000/backend/load_mask?${params}`);
-			if (!response.ok) {
-				throw new Error(`Failed to load mask: ${response.statusText}`);
-			}
-			
-			const data = await response.json();
-			
-			// Check if we received polygon data
-			if (data.polygons && Array.isArray(data.polygons)) {
-				// Convert the backend format to our Poly format
-				const loadedPolys: Poly[] = data.polygons.map((poly: any, idx: number) => {
-					// Convert array points [x,y] to {x,y} objects
-					const points = Array.isArray(poly.points) 
-						? poly.points.map((p: number[]) => ({ x: p[0], y: p[1] }))
-						: [];
-						
-					return {
-						points,
-						closed: true, // Loaded polygons are always closed
-						name: poly.name || `Polygon ${idx + 1}`
-					};
-				});
-				
-				// Set the polygons and select the first one if available
-				setPolys(loadedPolys);
-				setActive(loadedPolys.length > 0 ? 0 : -1);
-			}
-		} catch (error) {
-			console.error("Error loading mask:", error);
-			// Could add an error state here to show in the UI
-		} finally {
-			setLoadingMask(false);
-		}
-	}
-	
 	return (
 		<div className="w-full">
 			<div className="flex items-center justify-between mb-2">
@@ -676,23 +666,20 @@ function PolygonMaskEditor({
 					<span className="text-xs text-gray-500">Native: {nativeSize.w} × {nativeSize.h} px</span>
 				)}
 			</div>
-			{/* NEW: Add mask path input and load button */}
-			<div className="flex items-center gap-2 mb-3">
-				<Input 
-					placeholder="Enter mask path..." 
-					value={maskPath} 
-					onChange={(e) => setMaskPath(e.target.value)}
-					className="flex-grow"
-				/>
-				<Button 
-					size="sm" 
-					onClick={loadMaskFromPath} 
-					disabled={loadingMask || !maskPath.trim()}
-					className="whitespace-nowrap"
-				>
-					{loadingMask ? "Loading..." : "Load Mask"}
-				</Button>
-			</div>
+
+			{/* Loading indicator */}
+			{isLoadingMask && (
+				<div className="mb-2 px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-md text-xs text-yellow-700">
+					<strong>⏳ Loading existing mask...</strong>
+				</div>
+			)}
+
+			{/* Success indicator when mask is loaded */}
+			{!isLoadingMask && polys.length > 0 && polys[0].points.length > 0 && (
+				<div className="mb-2 px-3 py-2 bg-green-50 border border-green-200 rounded-md text-xs text-green-700">
+					<strong>✅ Loaded {polys.filter(p => p.closed).length} polygon(s) from existing mask</strong> - You can edit, add, or delete polygons.
+				</div>
+			)}
 
 			{/* Helpful hint about edge snapping and auto-closing */}
 			<div className="mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-700">

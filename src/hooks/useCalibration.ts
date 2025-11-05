@@ -12,7 +12,7 @@ export interface CalibrationConfig {
 
 export interface Config {
   images: { num_images?: number };
-  paths: { source_paths?: string[]; camera_numbers?: number[] };
+  paths: { source_paths?: string[]; camera_numbers?: number[]; camera_count?: number };
   calibration?: CalibrationConfig;
   [key: string]: any;
 }
@@ -58,18 +58,20 @@ export function useCalibration(
 
   // --- Get camera options from config ---
   const getCameraOptions = useCallback((): number[] => {
+    // Use camera_numbers array directly if available
     const camNums = config?.paths?.camera_numbers;
-    const imCount = config?.imProperties?.cameraCount;
-    let count = 1;
     if (Array.isArray(camNums) && camNums.length > 0) {
-      const maxCam = Math.max(...camNums.map(Number));
-      count = Math.max(camNums.length, maxCam);
-    } else if (typeof camNums === "number" && camNums > 0) {
-      count = camNums;
-    } else if (typeof imCount === "number" && imCount > 0) {
-      count = imCount;
+      return camNums;
     }
-    return Array.from({ length: count }, (_, i) => i + 1);
+    
+    // Fallback: use camera_count to generate array [1, 2, ..., count]
+    const camCount = config?.paths?.camera_count;
+    if (typeof camCount === "number" && camCount > 0) {
+      return Array.from({ length: camCount }, (_, i) => i + 1);
+    }
+    
+    // Default to single camera
+    return [1];
   }, [config]);
 
   // --- Get source paths from config ---
