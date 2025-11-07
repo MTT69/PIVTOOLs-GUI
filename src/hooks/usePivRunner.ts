@@ -33,6 +33,7 @@ export function usePivRunner(settings: PivRunnerSettings) {
     error: null as string | null,
   });
   const [jobId, setJobId] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string>("");
 
   const nextFrameIndexRef = useRef<number>(1);
   const settingsRef = useRef(settings);
@@ -58,8 +59,11 @@ export function usePivRunner(settings: PivRunnerSettings) {
         });
         if (currentSettings.cmap !== 'default') params.set('cmap', currentSettings.cmap);
         
-        // First fetch progress to get available frames
-        const statusRes = await fetch(`/backend/get_uncalibrated_count?${params.toString()}`);
+        // Fetch progress, image, and logs in parallel
+        const [statusRes, logsRes] = await Promise.all([
+          fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
+          jobId ? fetch(`/backend/piv_logs?job_id=${jobId}`) : Promise.resolve(null),
+        ]);
 
         // Process progress response
         let currentProgress = 0;
@@ -78,6 +82,12 @@ export function usePivRunner(settings: PivRunnerSettings) {
             availableFrames.sort((a, b) => a - b); // Sort frames in ascending order
             availableFramesRef.current = availableFrames;
           }
+        }
+
+        // Process logs response
+        if (logsRes && logsRes.ok) {
+          const logsData = await logsRes.json();
+          setLogs(logsData.logs || "");
         }
 
         // Fetch image if we have available frames and showStatusImage is enabled
@@ -135,12 +145,13 @@ export function usePivRunner(settings: PivRunnerSettings) {
     pollStatus(); // Initial poll
     const intervalId = setInterval(pollStatus, POLL_INTERVAL_MS);
     return () => clearInterval(intervalId); // Cleanup on unmount or when polling stops
-  }, [isPolling]);
+  }, [isPolling, jobId]);
 
   const run = useCallback(async () => {
     setIsLoading(true);
     setStatusImage({ src: null, error: null });
     setProgress(0);
+    setLogs(""); // Clear logs at start
     nextFrameIndexRef.current = 0; // Start from first frame in array
     lastImageUpdateRef.current = 0;
     availableFramesRef.current = [];
@@ -184,5 +195,5 @@ export function usePivRunner(settings: PivRunnerSettings) {
     }
   }, [jobId]);
 
-  return { isLoading, isPolling, progress, statusImage, run, cancel };
+  return { isLoading, isPolling, progress, statusImage, logs, run, cancel };
 }

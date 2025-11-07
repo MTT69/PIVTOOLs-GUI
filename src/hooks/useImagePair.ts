@@ -11,9 +11,6 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
   const [metadata, setMetadata] = useState<{ bitDepth?: number, dtype?: DType, dims?: { w: number, h: number } } | null>(null);
   const [vmin, setVmin] = useState(0);
   const [vmax, setVmax] = useState(255);
-  
-  // Track if auto-contrast has been applied for this specific image
-  const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
 
   // Helper function to analyze PNG pixel data for auto-contrast
   const analyzePngContrast = async (pngDataUrl: string): Promise<{ vmin: number, vmax: number }> => {
@@ -105,11 +102,13 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
         }
         setImgARaw(rawA);
         setImgBRaw(rawB);
-        // Auto-set contrast limits from raw data - always update for new image or when key is reset
-        if ((lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') && rawA && rawA.data) {
-          setVmin(Math.floor(percentileFromRaw(rawA.data, 1)));
-          setVmax(Math.ceil(percentileFromRaw(rawA.data, 99)));
-          setLastAutoContrastKey(currentKey);
+        // Auto-set contrast limits from raw data - always update for new image
+        if (rawA && rawA.data) {
+          const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
+          const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
+          
+          setVmin(newVmin);
+          setVmax(newVmax);
         }
       } else {
         // Fallback to PNGs
@@ -117,27 +116,24 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
         setImgA(json.A);
         setImgB(json.B);
         
-        // Auto-contrast from PNG pixel analysis - always update for new image or when key is reset
-        if (lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') {
-          try {
-            if (json.A) {
-              const pngDataUrl = `data:image/png;base64,${json.A}`;
-              const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
-              setVmin(analyzedVmin);
-              setVmax(analyzedVmax);
-            } else {
-              setVmin(0);
-              setVmax(255);
-            }
-          } catch (err) {
-            // Graceful fallback on analysis failure
-            if (typeof window !== 'undefined') {
-              console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
-            }
+        // Auto-contrast from PNG pixel analysis - always update for new image
+        try {
+          if (json.A) {
+            const pngDataUrl = `data:image/png;base64,${json.A}`;
+            const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
+            setVmin(analyzedVmin);
+            setVmax(analyzedVmax);
+          } else {
             setVmin(0);
             setVmax(255);
           }
-          setLastAutoContrastKey(currentKey);
+        } catch (err) {
+          // Graceful fallback on analysis failure
+          if (typeof window !== 'undefined') {
+            console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
+          }
+          setVmin(0);
+          setVmax(255);
         }
         
         // Debug: warn if raw fields missing

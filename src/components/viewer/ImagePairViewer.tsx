@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { X } from "lucide-react";
 import { useImagePair } from '@/hooks/useImagePair';
 import { useImageFilters } from '@/hooks/useImageFilters';
+import { FilterSelector, FilterEditor } from '@/components/FilterComponents';
 import ZoomableCanvas from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 import { basename } from "@/lib/utils";
@@ -19,6 +18,16 @@ interface ImagePairViewerProps {
   config?: any;
   onFiltersChange?: (filters: any[]) => Promise<void>;
 }
+
+// Loading spinner component
+const LoadingSpinner = ({ className = "" }: { className?: string }) => (
+  <div className={`flex items-center justify-center ${className}`}>
+    <div className="relative">
+      <div className="w-8 h-8 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin"></div>
+      <div className="absolute inset-0 w-8 h-8 border-4 border-transparent border-t-blue-300 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+    </div>
+  </div>
+);
 
 export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange }: ImagePairViewerProps) {
   // --- UI State ---
@@ -44,10 +53,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // Track if user has manually adjusted sliders for current image
   const [rawManuallyAdjusted, setRawManuallyAdjusted] = useState(false);
   const [procManuallyAdjusted, setProcManuallyAdjusted] = useState(false);
-  
-  // Track if auto-contrast has been applied to prevent overriding user adjustments
-  const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
-  const [lastProcAutoContrastKey, setLastProcAutoContrastKey] = useState<string>('');
 
   // Add shared zoom state
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -63,7 +68,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
     useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index);
-  const { filters, addFilter, updateBatchSize, removeFilter, runProcessing, procLoading, procImgA, procImgB, fetchProcessed, setFilters } = 
+  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, fetchProcessed, updateFilter, moveFilter, downloadImage } = 
     useImageFilters(backendUrl);
 
   // Memoize camera options and initialize camera
@@ -81,19 +86,58 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // Initialize filters from config
   useEffect(() => {
     if (config?.filters) {
-      const configFilters = config.filters.map((f: any) => ({
-        type: f.type,
-        batch_size: f.batch_size ?? 50, // Ensure default is 50
-      }));
+      const configFilters = config.filters.map((f: any) => {
+        const filter: any = { type: f.type };
+        
+        // Copy all parameters from config
+        if (f.size !== undefined) filter.size = f.size;
+        if (f.sigma !== undefined) filter.sigma = f.sigma;
+        if (f.threshold !== undefined) filter.threshold = f.threshold;
+        if (f.n !== undefined) filter.n = f.n;
+        if (f.offset !== undefined) filter.offset = f.offset;
+        if (f.white !== undefined) filter.white = f.white;
+        if (f.max_gain !== undefined) filter.max_gain = f.max_gain;
+        if (f.bg !== undefined) filter.bg = f.bg;
+        
+        return filter;
+      });
       setFilters(configFilters);
     }
   }, [config?.filters, setFilters]);
+
+  // Preload first batch of images on mount or when camera/source changes
+  useEffect(() => {
+    const preloadImages = async () => {
+      if (!config || !camera) return;
+      
+      const batchSize = config?.batches?.size || 30;
+      
+      try {
+        console.log(`Preloading ${batchSize} images for camera ${camera}, source ${sourcePathIdx}`);
+        await fetch(`${backendUrl}/preload_images`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            camera,
+            start_idx: 1,
+            count: batchSize,
+            source_path_idx: sourcePathIdx,
+          }),
+        });
+        console.log('Preload request sent');
+      } catch (e) {
+        console.warn('Failed to preload images:', e);
+      }
+    };
+
+    preloadImages();
+  }, [backendUrl, camera, sourcePathIdx, config]);
 
   // Auto-fetch processed images when frame/camera/source changes
   useEffect(() => {
     const fetchProcessedForCurrentFrame = async () => {
       if (filters.length > 0) {
-        await fetchProcessed(`Cam${camera}`, index, sourcePathIdx);
+        await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx);
       } else {
         // Clear processed images if no filters are applied
         // This is handled in useImageFilters by setting procImgA and procImgB to null
@@ -101,20 +145,18 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     };
 
     fetchProcessedForCurrentFrame();
-  }, [camera, index, sourcePathIdx, fetchProcessed, filters.length]);
+  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length]);
 
   // Reset manual adjustment flags when auto-scale is re-enabled
   useEffect(() => {
     if (rawAutoScale) {
       setRawManuallyAdjusted(false);
-      setLastAutoContrastKey(''); // Force re-calculation
     }
   }, [rawAutoScale]);
 
   useEffect(() => {
     if (procAutoScale) {
       setProcManuallyAdjusted(false);
-      setLastProcAutoContrastKey(''); // Force re-calculation
     }
   }, [procAutoScale]);
 
@@ -124,93 +166,96 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     setProcManuallyAdjusted(false);
   }, [sourcePathIdx, camera, index]);
 
-  // Only update slider values on first auto-contrast application for this specific image
+  // Update slider values when auto-contrast values change and autoscale is enabled
   useEffect(() => {
-    const currentKey = `${sourcePathIdx}-${camera}-${index}`;
-    if (rawAutoScale && !rawManuallyAdjusted && lastAutoContrastKey !== currentKey && (autoVmin !== 0 || autoVmax !== 255)) {
+    if (rawAutoScale && !rawManuallyAdjusted && (autoVmin !== 0 || autoVmax !== 255)) {
       setRawVmin(autoVmin);
       setRawVmax(autoVmax);
-      setLastAutoContrastKey(currentKey);
     }
-  }, [autoVmin, autoVmax, sourcePathIdx, camera, index, lastAutoContrastKey, rawManuallyAdjusted, rawAutoScale]);
+  }, [autoVmin, autoVmax, rawAutoScale, rawManuallyAdjusted]);
 
   // Auto-contrast for processed images when they load
   useEffect(() => {
     const applyProcAutoContrast = async () => {
-      const currentKey = `${sourcePathIdx}-${camera}-${index}-${procToggle}`;
       if (procAutoScale && !procManuallyAdjusted && (procImgA || procImgB)) {
-        // Always apply auto-contrast if key changed or was reset
-        if (lastProcAutoContrastKey !== currentKey || lastProcAutoContrastKey === '') {
-          try {
-            const activeImg = procToggle === 'A' ? procImgA : procImgB;
-            if (activeImg) {
-              const pngDataUrl = `data:image/png;base64,${activeImg}`;
-              
-              const img = new Image();
-              img.onload = () => {
-                try {
-                  const canvas = document.createElement('canvas');
-                  const ctx = canvas.getContext('2d');
-                  if (!ctx) return;
-                  
-                  canvas.width = img.width;
-                  canvas.height = img.height;
-                  ctx.drawImage(img, 0, 0);
-                  
-                  const imageData = ctx.getImageData(0, 0, img.width, img.height);
-                  const pixels = imageData.data;
-                  const grayscaleValues = [];
-                  
-                  for (let i = 0; i < pixels.length; i += 4) {
-                    const r = pixels[i];
-                    const g = pixels[i + 1];
-                    const b = pixels[i + 2];
-                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-                    grayscaleValues.push(gray);
-                  }
-                  
-                  grayscaleValues.sort((a, b) => a - b);
-                  
-                  const p1Index = Math.floor(grayscaleValues.length * 0.01);
-                  const p99Index = Math.floor(grayscaleValues.length * 0.99);
-                  
-                  const vmin = grayscaleValues[p1Index];
-                  const vmax = grayscaleValues[p99Index];
-                  
-                  setProcVmin(vmin);
-                  setProcVmax(vmax);
-                  setLastProcAutoContrastKey(currentKey);
-                } catch (err) {
-                  console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+        try {
+          const activeImg = procToggle === 'A' ? procImgA : procImgB;
+          if (activeImg) {
+            const pngDataUrl = `data:image/png;base64,${activeImg}`;
+            
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+                
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                
+                const imageData = ctx.getImageData(0, 0, img.width, img.height);
+                const pixels = imageData.data;
+                const grayscaleValues = [];
+                
+                for (let i = 0; i < pixels.length; i += 4) {
+                  const r = pixels[i];
+                  const g = pixels[i + 1];
+                  const b = pixels[i + 2];
+                  const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                  grayscaleValues.push(gray);
                 }
-              };
-              img.src = pngDataUrl;
-            } else {
-              // No active image - reset to defaults
-              setProcVmin(0);
-              setProcVmax(255);
-              setLastProcAutoContrastKey(currentKey);
-            }
-          } catch (err) {
-            console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+                
+                grayscaleValues.sort((a, b) => a - b);
+                
+                const p1Index = Math.floor(grayscaleValues.length * 0.01);
+                const p99Index = Math.floor(grayscaleValues.length * 0.99);
+                
+                const vmin = grayscaleValues[p1Index];
+                const vmax = grayscaleValues[p99Index];
+                
+                setProcVmin(vmin);
+                setProcVmax(vmax);
+              } catch (err) {
+                console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+              }
+            };
+            img.src = pngDataUrl;
+          } else {
+            // No active image - reset to defaults
             setProcVmin(0);
             setProcVmax(255);
-            setLastProcAutoContrastKey(currentKey);
           }
+        } catch (err) {
+          console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
+          setProcVmin(0);
+          setProcVmax(255);
         }
       }
     };
 
     applyProcAutoContrast();
-  }, [procImgA, procImgB, procToggle, sourcePathIdx, camera, index, lastProcAutoContrastKey, procManuallyAdjusted, procAutoScale]);
+  }, [procImgA, procImgB, procToggle, procAutoScale, procManuallyAdjusted]);
 
   // Save filters to config when they change
   useEffect(() => {
     const saveFilters = async () => {
-      const filtersToSave = filters.map(f => ({
-        type: f.type,
-        batch_size: f.batch_size ?? 50,
-      }));
+      // Prepare filters with all parameters for saving
+      const filtersToSave = filters.map(f => {
+        const filterData: any = { type: f.type };
+        
+        // Include all parameters based on filter type
+        if (f.size !== undefined) filterData.size = f.size;
+        if (f.sigma !== undefined) filterData.sigma = f.sigma;
+        if (f.threshold !== undefined) filterData.threshold = f.threshold;
+        if (f.n !== undefined) filterData.n = f.n;
+        if (f.offset !== undefined) filterData.offset = f.offset;
+        if (f.white !== undefined) filterData.white = f.white;
+        if (f.max_gain !== undefined) filterData.max_gain = f.max_gain;
+        if (f.bg !== undefined) filterData.bg = f.bg;
+        
+        return filterData;
+      });
       
       try {
         await fetch(`${backendUrl}/update_config`, {
@@ -231,11 +276,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
-
-  // Helper for adding filters with batch_size (default 50 for time filters)
-  const handleAddFilter = (type: "POD" | "time") => {
-    addFilter(type, 50); // Always default to 50 frames
-  };
 
   // Track when images start/finish loading
   useEffect(() => {
@@ -281,25 +321,21 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         {/* --- FILTER STACK UI (TOP) --- */}
         <div className="space-y-3 p-4 border rounded-lg">
             <h3 className="text-lg font-semibold">Filter Stack</h3>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => handleAddFilter("time")}>Add Time Filter</Button>
-              <Button size="sm" variant="outline" onClick={() => handleAddFilter("POD")}>Add POD Filter</Button>
-            </div>
+            <FilterSelector onAddFilter={addFilter} />
             <div className="space-y-2 p-2 border rounded-md min-h-[100px] bg-muted/50">
-              {filters.length === 0 && <p className="text-xs text-center text-muted-foreground pt-8">No filters applied.</p>}
+              {filters.length === 0 && <p className="text-sm text-muted-foreground">No filters applied</p>}
               {filters.map((filter, idx) => (
-                <div key={idx} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono p-1 bg-background rounded flex-1">{idx + 1}. {filter.type}</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={filter.batch_size ?? 50}
-                    onChange={e => updateBatchSize(idx, Math.max(1, Number(e.target.value)))}
-                    className="w-16"
-                  />
-                  <span className="text-xs text-muted-foreground">Chunk</span>
-                  <Button size="icon" variant="ghost" onClick={() => removeFilter(idx)}><X className="h-4 w-4"/></Button>
-                </div>
+                <FilterEditor
+                  key={idx}
+                  filter={filter}
+                  index={idx}
+                  onUpdate={updateFilter}
+                  onRemove={removeFilter}
+                  onMoveUp={() => moveFilter(idx, 'up')}
+                  onMoveDown={() => moveFilter(idx, 'down')}
+                  isFirst={idx === 0}
+                  isLast={idx === filters.length - 1}
+                />
               ))}
             </div>
             <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx)} disabled={procLoading || filters.length === 0}>
@@ -400,7 +436,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* RAW IMAGE PANEL */}
           <div className="space-y-4">
-            <div className="h-[480px]">
+            <div className="h-[480px] relative">
               <ZoomableCanvas
                 raw={rawToggle === 'A' ? imgARaw : rawToggle === 'B' ? imgBRaw : undefined}
                 src={rawToggle === 'A' ? (imgARaw ? undefined : imgA) : rawToggle === 'B' ? (imgBRaw ? undefined : imgB) : undefined}
@@ -409,6 +445,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 useGrid={useGrid} gridSize={gridSize}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
+              {loading && (
+                <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
+                  <LoadingSpinner />
+                </div>
+              )}
             </div>
             <div className="space-y-3 p-3 border rounded-md">
               <div className="flex items-center gap-2">
@@ -460,10 +501,18 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 }} className="w-20 h-8" />
               </div>
             </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => downloadImage('raw', 'A', imgA || '', index, camera)} disabled={!imgA && !imgARaw}>
+                Download Raw A
+              </Button>
+              <Button size="sm" onClick={() => downloadImage('raw', 'B', imgB || '', index, camera)} disabled={!imgB && !imgBRaw}>
+                Download Raw B
+              </Button>
+            </div>
           </div>
           {/* PROCESSED IMAGE PANEL */}
           <div className="space-y-4">
-            <div className="h-[480px]">
+            <div className="h-[480px] relative">
               <ZoomableCanvas
                 raw={undefined}
                 src={procToggle === 'A' ? procImgA : procImgB}
@@ -473,6 +522,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 title={`Processed Image ${procToggle}`}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
+              {procLoading && (
+                <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
+                  <LoadingSpinner />
+                </div>
+              )}
             </div>
             <div className="space-y-3 p-3 border rounded-md">
                 <div className="flex items-center gap-2">
@@ -521,6 +575,14 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   if (val < procVmin) setProcVmin(val);
                 }} className="w-20 h-8" />
               </div>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => downloadImage('processed', 'A', procImgA || '', index, camera)} disabled={!procImgA}>
+                Download Processed A
+              </Button>
+              <Button size="sm" onClick={() => downloadImage('processed', 'B', procImgB || '', index, camera)} disabled={!procImgB}>
+                Download Processed B
+              </Button>
             </div>
           </div>
         </div>

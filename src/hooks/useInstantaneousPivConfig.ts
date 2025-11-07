@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 // --- Type Definitions ---
 export interface PivPass {
-  windowX: number;
-  windowY: number;
-  overlap: number;
+  windowX: number | string;
+  windowY: number | string;
+  overlap: number | string;
   store: boolean;
 }
 
@@ -76,8 +76,8 @@ export function useInstantaneousPivConfig(
         .filter((n): n is number => n !== null);
 
       const payloadData: InstantaneousPivConfig = {
-        window_size: passesToSave.map(p => [p.windowX, p.windowY]),
-        overlap: passesToSave.map(p => p.overlap),
+        window_size: passesToSave.map(p => [typeof p.windowX === 'number' ? p.windowX : parseInt(p.windowX as string) || 128, typeof p.windowY === 'number' ? p.windowY : parseInt(p.windowY as string) || 128]),
+        overlap: passesToSave.map(p => typeof p.overlap === 'number' ? p.overlap : parseInt(p.overlap as string) || 50),
         runs: runsArray,
       };
 
@@ -130,10 +130,12 @@ export function useInstantaneousPivConfig(
   // --- State Mutators ---
   const addPass = () => setPasses(p => {
     const last = p[p.length - 1];
+    const lastX = typeof last.windowX === 'number' ? last.windowX : parseInt(last.windowX as string) || 128;
+    const lastY = typeof last.windowY === 'number' ? last.windowY : parseInt(last.windowY as string) || 128;
     const newPasses = p.map((pass, i) => 
       i === p.length - 1 ? { ...pass, store: false } : pass
     );
-    return [...newPasses, { windowX: Math.max(8, Math.floor(last.windowX / 2)), windowY: Math.max(8, Math.floor(last.windowY / 2)), overlap: last.overlap, store: true }];
+    return [...newPasses, { windowX: Math.max(8, Math.floor(lastX / 2)), windowY: Math.max(8, Math.floor(lastY / 2)), overlap: last.overlap, store: true }];
   });
   
   const removePass = (idx: number) => setPasses(p => {
@@ -162,7 +164,7 @@ export function useInstantaneousPivConfig(
     return copy;
   });
 
-  const updatePassField = (i: number, field: keyof PivPass, val: number | boolean) => setPasses(p => {
+  const updatePassField = (i: number, field: keyof PivPass, val: number | string | boolean) => setPasses(p => {
     const copy = [...p];
     copy[i] = { ...copy[i], [field]: val };
     // Ensure last pass is always set to store

@@ -22,6 +22,7 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const [lowerLimit, setLowerLimit] = useState<string>("");
   const [upperLimit, setUpperLimit] = useState<string>("");
   const [showStatusImage, setShowStatusImage] = useState(true);
+  const [showLogs, setShowLogs] = useState(true);
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
 
@@ -29,7 +30,7 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
 
   // --- PIV Logic from Custom Hook ---
-  const { isLoading, isPolling, progress, statusImage, run, cancel } = usePivRunner({
+  const { isLoading, isPolling, progress, statusImage, logs, run, cancel } = usePivRunner({
     sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage
   });
 
@@ -151,6 +152,38 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
               {!statusImage.src && !statusImage.error && !isPolling && (
                 <p className="text-gray-500">No image available</p>
               )}
+            </div>
+          )}
+        </div>
+        <div>
+          <Button variant="outline" size="sm" onClick={() => setShowLogs(!showLogs)}>
+            {showLogs ? "Hide" : "Show"} Console Logs
+          </Button>
+          {showLogs && (
+            <div className="mt-2 border rounded-lg bg-gray-900 text-green-400 font-mono text-xs overflow-hidden">
+              <div className="bg-gray-800 px-3 py-2 border-b border-gray-700 flex items-center justify-between">
+                <span className="text-gray-300 font-semibold">PIV Console Output</span>
+                {isPolling && (
+                  <span className="flex items-center gap-2 text-xs text-gray-400">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    Live
+                  </span>
+                )}
+              </div>
+              <div className="p-3 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
+                {logs ? (
+                  <>
+                    <pre className="whitespace-pre-wrap break-words">{logs}</pre>
+                  </>
+                ) : (
+                  <p className="text-gray-500 italic">
+                    {isPolling ? "Waiting for output..." : "No logs available. Start a PIV run to see output."}
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </div>
