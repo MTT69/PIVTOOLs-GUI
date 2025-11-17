@@ -11,6 +11,204 @@ import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { basename } from "@/lib/utils";
 import * as Slider from '@radix-ui/react-slider';
 
+type RawImage = {
+	data: Uint8Array | Uint16Array;
+	width: number;
+	height: number;
+	bitDepth: number;
+	dtype: "uint8" | "uint16";
+};
+
+// Component to visualize pixel border masking
+const PixelBorderViewer: React.FC<{
+	src: string;
+	raw: RawImage | null;
+	vmin: number;
+	vmax: number;
+	top: number;
+	bottom: number;
+	left: number;
+	right: number;
+}> = ({ src, raw, vmin, vmax, top, bottom, left, right }) => {
+	const canvasRef = React.useRef<HTMLCanvasElement>(null);
+	const overlayRef = React.useRef<HTMLCanvasElement>(null);
+	const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+
+	React.useEffect(() => {
+		if (!src && !raw) return;
+
+		const canvas = canvasRef.current;
+		const overlay = overlayRef.current;
+		if (!canvas || !overlay) return;
+
+		// Load and display the image
+		if (raw?.data) {
+			// Handle raw image data
+			const { width, height, data } = raw;
+			setDimensions({ width, height });
+
+			// Calculate display size (max 800px width)
+			const maxWidth = 800;
+			const scale = Math.min(1, maxWidth / width);
+			const displayWidth = Math.floor(width * scale);
+			const displayHeight = Math.floor(height * scale);
+
+			canvas.width = displayWidth;
+			canvas.height = displayHeight;
+			overlay.width = displayWidth;
+			overlay.height = displayHeight;
+
+			// Convert raw data to displayable image with contrast
+			const imageData = new ImageData(displayWidth, displayHeight);
+			const rng = Math.max(1e-12, vmax - vmin);
+
+			for (let y = 0; y < displayHeight; y++) {
+				for (let x = 0; x < displayWidth; x++) {
+					const srcX = Math.floor(x / scale);
+					const srcY = Math.floor(y / scale);
+					const srcIdx = srcY * width + srcX;
+					const value = Number(data[srcIdx]);
+
+					let t = (value - vmin) / rng;
+					t = Math.max(0, Math.min(1, t));
+					const v = Math.round(t * 255);
+
+					const dstIdx = (y * displayWidth + x) * 4;
+					imageData.data[dstIdx] = v;
+					imageData.data[dstIdx + 1] = v;
+					imageData.data[dstIdx + 2] = v;
+					imageData.data[dstIdx + 3] = 255;
+				}
+			}
+
+			const ctx = canvas.getContext('2d');
+			if (ctx) {
+				ctx.putImageData(imageData, 0, 0);
+			}
+
+			// Draw mask overlay
+			drawMaskOverlay(overlay, displayWidth, displayHeight, top * scale, bottom * scale, left * scale, right * scale);
+		} else {
+			// Handle PNG image
+			const img = new Image();
+			img.onload = () => {
+				const width = img.naturalWidth;
+				const height = img.naturalHeight;
+				setDimensions({ width, height });
+
+				const maxWidth = 800;
+				const scale = Math.min(1, maxWidth / width);
+				const displayWidth = Math.floor(width * scale);
+				const displayHeight = Math.floor(height * scale);
+
+				canvas.width = displayWidth;
+				canvas.height = displayHeight;
+				overlay.width = displayWidth;
+				overlay.height = displayHeight;
+
+				const ctx = canvas.getContext('2d');
+				if (ctx) {
+					ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
+				}
+
+				drawMaskOverlay(overlay, displayWidth, displayHeight, top * scale, bottom * scale, left * scale, right * scale);
+			};
+			img.src = `data:image/png;base64,${src}`;
+		}
+	}, [src, raw, vmin, vmax, top, bottom, left, right]);
+
+	const drawMaskOverlay = (
+		canvas: HTMLCanvasElement,
+		width: number,
+		height: number,
+		topPx: number,
+		bottomPx: number,
+		leftPx: number,
+		rightPx: number
+	) => {
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+
+		ctx.clearRect(0, 0, width, height);
+
+		// Draw semi-transparent red rectangles for masked areas
+		ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+
+		// Top border
+		if (topPx > 0) {
+			ctx.fillRect(0, 0, width, topPx);
+		}
+
+		// Bottom border
+		if (bottomPx > 0) {
+			ctx.fillRect(0, height - bottomPx, width, bottomPx);
+		}
+
+		// Left border
+		if (leftPx > 0) {
+			ctx.fillRect(0, 0, leftPx, height);
+		}
+
+		// Right border
+		if (rightPx > 0) {
+			ctx.fillRect(width - rightPx, 0, rightPx, height);
+		}
+
+		// Draw border lines for clarity
+		ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+		ctx.lineWidth = 2;
+
+		// Top line
+		if (topPx > 0) {
+			ctx.beginPath();
+			ctx.moveTo(0, topPx);
+			ctx.lineTo(width, topPx);
+			ctx.stroke();
+		}
+
+		// Bottom line
+		if (bottomPx > 0) {
+			ctx.beginPath();
+			ctx.moveTo(0, height - bottomPx);
+			ctx.lineTo(width, height - bottomPx);
+			ctx.stroke();
+		}
+
+		// Left line
+		if (leftPx > 0) {
+			ctx.beginPath();
+			ctx.moveTo(leftPx, 0);
+			ctx.lineTo(leftPx, height);
+			ctx.stroke();
+		}
+
+		// Right line
+		if (rightPx > 0) {
+			ctx.beginPath();
+			ctx.moveTo(width - rightPx, 0);
+			ctx.lineTo(width - rightPx, height);
+			ctx.stroke();
+		}
+	};
+
+	return (
+		<div className="flex flex-col items-center space-y-2">
+			<div className="text-sm text-gray-600">
+				Preview: Red overlay shows masked regions (Top: {top}px, Bottom: {bottom}px, Left: {left}px, Right: {right}px)
+			</div>
+			<div className="relative border rounded-md overflow-hidden bg-black">
+				<canvas ref={canvasRef} className="block" />
+				<canvas ref={overlayRef} className="absolute top-0 left-0 pointer-events-none" />
+			</div>
+			{dimensions.width > 0 && (
+				<div className="text-xs text-gray-500">
+					Image size: {dimensions.width} × {dimensions.height} px
+				</div>
+			)}
+		</div>
+	);
+};
+
 const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: any) => void }> = ({ config, updateConfig }) => {
   const sourcePaths = config?.paths?.source_paths || [];
   const [basePathIdx, setBasePathIdx] = useState(0);
@@ -49,6 +247,26 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		updateEnabled,
 		updateMode
 	} = useMaskingConfig(config?.masking, updateConfig!);
+
+	// Local string state for inputs to allow empty values during editing
+	const [topInputValue, setTopInputValue] = useState(String(rectangularTop));
+	const [bottomInputValue, setBottomInputValue] = useState(String(rectangularBottom));
+	const [leftInputValue, setLeftInputValue] = useState(String(rectangularLeft));
+	const [rightInputValue, setRightInputValue] = useState(String(rectangularRight));
+
+	// Sync input values with config changes
+	useEffect(() => {
+		setTopInputValue(String(rectangularTop));
+	}, [rectangularTop]);
+	useEffect(() => {
+		setBottomInputValue(String(rectangularBottom));
+	}, [rectangularBottom]);
+	useEffect(() => {
+		setLeftInputValue(String(rectangularLeft));
+	}, [rectangularLeft]);
+	useEffect(() => {
+		setRightInputValue(String(rectangularRight));
+	}, [rectangularRight]);
 
 	// Use the centralized hook for fetching images
 	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index);
@@ -238,42 +456,98 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							<div className="grid grid-cols-2 gap-4">
 								<div>
 									<Label htmlFor="rect-top">Top (pixels)</Label>
-									<Input 
-										id="rect-top" 
-										type="number" 
-										value={rectangularTop} 
-										min={0} 
-										onChange={e => setRectangularTop(Math.max(0, Number(e.target.value)))} 
+									<Input
+										id="rect-top"
+										type="number"
+										value={topInputValue}
+										min={0}
+										onChange={e => {
+											const val = e.target.value;
+											setTopInputValue(val);
+										}}
+										onBlur={() => {
+											if (topInputValue === '' || isNaN(Number(topInputValue))) {
+												setTopInputValue('0');
+												setRectangularTop(0);
+											} else {
+												const numVal = Math.max(0, Number(topInputValue));
+												setTopInputValue(String(numVal));
+												setRectangularTop(numVal);
+											}
+										}}
+										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-bottom">Bottom (pixels)</Label>
-									<Input 
-										id="rect-bottom" 
-										type="number" 
-										value={rectangularBottom} 
-										min={0} 
-										onChange={e => setRectangularBottom(Math.max(0, Number(e.target.value)))} 
+									<Input
+										id="rect-bottom"
+										type="number"
+										value={bottomInputValue}
+										min={0}
+										onChange={e => {
+											const val = e.target.value;
+											setBottomInputValue(val);
+										}}
+										onBlur={() => {
+											if (bottomInputValue === '' || isNaN(Number(bottomInputValue))) {
+												setBottomInputValue('0');
+												setRectangularBottom(0);
+											} else {
+												const numVal = Math.max(0, Number(bottomInputValue));
+												setBottomInputValue(String(numVal));
+												setRectangularBottom(numVal);
+											}
+										}}
+										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-left">Left (pixels)</Label>
-									<Input 
-										id="rect-left" 
-										type="number" 
-										value={rectangularLeft} 
-										min={0} 
-										onChange={e => setRectangularLeft(Math.max(0, Number(e.target.value)))} 
+									<Input
+										id="rect-left"
+										type="number"
+										value={leftInputValue}
+										min={0}
+										onChange={e => {
+											const val = e.target.value;
+											setLeftInputValue(val);
+										}}
+										onBlur={() => {
+											if (leftInputValue === '' || isNaN(Number(leftInputValue))) {
+												setLeftInputValue('0');
+												setRectangularLeft(0);
+											} else {
+												const numVal = Math.max(0, Number(leftInputValue));
+												setLeftInputValue(String(numVal));
+												setRectangularLeft(numVal);
+											}
+										}}
+										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-right">Right (pixels)</Label>
-									<Input 
-										id="rect-right" 
-										type="number" 
-										value={rectangularRight} 
-										min={0} 
-										onChange={e => setRectangularRight(Math.max(0, Number(e.target.value)))} 
+									<Input
+										id="rect-right"
+										type="number"
+										value={rightInputValue}
+										min={0}
+										onChange={e => {
+											const val = e.target.value;
+											setRightInputValue(val);
+										}}
+										onBlur={() => {
+											if (rightInputValue === '' || isNaN(Number(rightInputValue))) {
+												setRightInputValue('0');
+												setRectangularRight(0);
+											} else {
+												const numVal = Math.max(0, Number(rightInputValue));
+												setRightInputValue(String(numVal));
+												setRectangularRight(numVal);
+											}
+										}}
+										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 									/>
 								</div>
 							</div>
@@ -363,16 +637,28 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 						/>
 					</div>
 				)}
-				{maskingMode === 'pixel_border' && (
+				{maskingMode === 'pixel_border' && currentImg && (
+					<PixelBorderViewer
+						src={currentImg}
+						raw={currentRaw}
+						vmin={vmin}
+						vmax={vmax}
+						top={rectangularTop}
+						bottom={rectangularBottom}
+						left={rectangularLeft}
+						right={rectangularRight}
+					/>
+				)}
+				{maskingMode === 'pixel_border' && !currentImg && !loading && (
 					<div className="text-center text-gray-600 p-8 border rounded-md bg-gray-50">
-						Pixel border mode enabled. Rectangular masking will be applied with the specified border values.
+						Load an image to preview pixel border masking.
 					</div>
 				)}
 				{loading && <div className="text-center text-gray-500">Loading image...</div>}
 				{(!currentImg && !loading) && (
 					<div className="text-center text-gray-400">No image loaded.</div>
 				)}
-				{error && <div className="text-red-600 mt-2">{error}</div>}
+				{error && <div className="text-red-600 mt-2">Image not found. Validate paths on Setup tab.</div>}
 			</div>
 		</div>
 	);

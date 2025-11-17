@@ -401,8 +401,8 @@ function PolygonMaskEditor({
 				if (ptIdx === 0 && i === active && !poly.closed && poly.points.length >= 3) {
 					// Draw a larger, pulsing circle for the starting point
 					octx.fillStyle = "#ff3366";
-					octx.beginPath(); 
-					octx.arc(vx, vy, 8, 0, Math.PI * 2); 
+					octx.beginPath();
+					octx.arc(vx, vy, 12, 0, Math.PI * 2);
 					octx.fill();
 					// Add white border
 					octx.strokeStyle = "#ffffff";
@@ -410,8 +410,8 @@ function PolygonMaskEditor({
 					octx.stroke();
 				} else {
 					octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
-					octx.beginPath(); 
-					octx.arc(vx, vy, 3, 0, Math.PI * 2); 
+					octx.beginPath();
+					octx.arc(vx, vy, 3, 0, Math.PI * 2);
 					octx.fill();
 				}
 			}
@@ -511,12 +511,12 @@ function PolygonMaskEditor({
 			if (poly.points.length >= 3) {
 				const firstPt = poly.points[0];
 				const distance = Math.sqrt(
-					Math.pow(pt.x - firstPt.x, 2) + 
+					Math.pow(pt.x - firstPt.x, 2) +
 					Math.pow(pt.y - firstPt.y, 2)
 				);
-				
-				// If within 8 pixels of the start, close the polygon and start a new one
-				if (distance <= 8) {
+
+				// If within 15 pixels of the start, close the polygon and start a new one
+				if (distance <= 15) {
 					// Close current polygon
 					list[idx] = { ...poly, closed: true };
 					
@@ -683,8 +683,8 @@ function PolygonMaskEditor({
 
 			{/* Helpful hint about edge snapping and auto-closing */}
 			<div className="mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-700">
-				<strong>💡 Tips:</strong> Click near image edges to snap to edge pixels (magnifier turns <span className="text-orange-600 font-semibold">orange</span>). 
-				Click within 8 pixels of the starting point (shown as a <span className="text-pink-600 font-semibold">larger red circle</span>) to auto-close and start a new polygon.
+				<strong>💡 Tips:</strong> Click near image edges to snap to edge pixels (magnifier turns <span className="text-orange-600 font-semibold">orange</span>).
+				Click near the starting point (shown as a <span className="text-pink-600 font-semibold">larger red circle</span>) to auto-close and start a new polygon.
 			</div>
 
 			{/* Controls placed just below the mask path input (outside gray area) */}
@@ -712,9 +712,9 @@ function PolygonMaskEditor({
 					<Button size="sm" variant={magnifierEnabled ? "default" : "outline"} onClick={() => setMagnifierEnabled(v => !v)}>
 						{magnifierEnabled ? "🔎 On" : "🔍"}
 					</Button>
-					<Button size="sm" className="bg-soton-blue text-white" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
-					<Button size="sm" variant="secondary" onClick={sendArray} disabled={nativeSize.w === 0}>Save Mask</Button>
-					<Button size="sm" variant="destructive" onClick={clearAll}>Clear all</Button>
+					<Button size="sm" variant="outline" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
+					<Button size="sm" className="bg-soton-blue hover:bg-soton-darkblue text-white" onClick={sendArray} disabled={nativeSize.w === 0}>💾 Save Mask</Button>
+					<Button size="sm" variant="destructive" onClick={clearAll}>🗑️ Clear Mask</Button>
 				</div>
 			</div>
 
