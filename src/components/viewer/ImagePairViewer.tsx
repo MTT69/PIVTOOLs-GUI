@@ -106,12 +106,21 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   }, [config?.filters, setFilters]);
 
   // Preload first batch of images on mount or when camera/source changes
+  // Use a ref to prevent multiple simultaneous preload requests
+  const preloadRef = useRef<{ camera: number; sourcePathIdx: number } | null>(null);
+
   useEffect(() => {
     const preloadImages = async () => {
       if (!config || !camera) return;
-      
+
+      // Prevent duplicate preload requests for the same camera/source combo
+      if (preloadRef.current?.camera === camera && preloadRef.current?.sourcePathIdx === sourcePathIdx) {
+        return;
+      }
+
+      preloadRef.current = { camera, sourcePathIdx };
       const batchSize = config?.batches?.size || 30;
-      
+
       try {
         console.log(`Preloading ${batchSize} images for camera ${camera}, source ${sourcePathIdx}`);
         await fetch(`${backendUrl}/preload_images`, {
@@ -237,13 +246,14 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     applyProcAutoContrast();
   }, [procImgA, procImgB, procToggle, procAutoScale, procManuallyAdjusted]);
 
-  // Save filters to config when they change
+  // Save filters to config when they change (debounced to avoid excessive updates)
   useEffect(() => {
-    const saveFilters = async () => {
+    // Debounce filter saves to reduce backend calls
+    const timeoutId = setTimeout(async () => {
       // Prepare filters with all parameters for saving
       const filtersToSave = filters.map(f => {
         const filterData: any = { type: f.type };
-        
+
         // Include all parameters based on filter type
         if (f.size !== undefined) filterData.size = f.size;
         if (f.sigma !== undefined) filterData.sigma = f.sigma;
@@ -253,10 +263,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         if (f.white !== undefined) filterData.white = f.white;
         if (f.max_gain !== undefined) filterData.max_gain = f.max_gain;
         if (f.bg !== undefined) filterData.bg = f.bg;
-        
+
         return filterData;
       });
-      
+
       try {
         await fetch(`${backendUrl}/update_config`, {
           method: 'POST',
@@ -266,12 +276,9 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
       } catch (e) {
         console.error('Failed to save filters to backend', e);
       }
-    };
+    }, 500); // 500ms debounce
 
-    // Only save if filters array has been modified (not on initial load)
-    if (filters.length > 0 || config?.filters?.length > 0) {
-      saveFilters();
-    }
+    return () => clearTimeout(timeoutId);
   }, [filters, backendUrl]);
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);

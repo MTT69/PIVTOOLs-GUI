@@ -60,12 +60,16 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
 
   const fetchPair = async () => {
     if (!camera) return;
+
+    // Create unique key for this fetch request
+    const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+    const fetchKey = `${sourcePathIdx}-${cameraNumber}-${index}`;
+
     setLoading(true);
     setError(null);
     setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
-    
+
     try {
-      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -152,9 +156,110 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
     }
   };
 
-  // Auto-fetch when parameters change
+  // Auto-fetch when parameters change with abort controller for cancellation
   useEffect(() => {
-    fetchPair();
+    const abortController = new AbortController();
+    let cancelled = false;
+
+    const fetchPairWithCancel = async () => {
+      if (!camera) return;
+
+      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+      setLoading(true);
+      setError(null);
+      setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
+
+      try {
+        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
+        const res = await fetch(url, { signal: abortController.signal });
+
+        if (cancelled) return; // Don't update state if cancelled
+
+        const json = await res.json();
+
+        if (!res.ok) {
+          throw new Error(json.error || `Image pair not found (frame ${index})`);
+        }
+
+        // Check for raw image fields and meta
+        if (json.meta?.width && (json.A_raw || json.B_raw)) {
+          const meta = json.meta;
+          setMetadata({ bitDepth: meta.bitDepth, dtype: meta.dtype, dims: { w: meta.width, h: meta.height } });
+          let rawA = null, rawB = null;
+          if (json.A_raw) {
+            try {
+              rawA = { ...meta, data: decodeTypedArray(json.A_raw, meta.dtype) };
+            } catch (err) {
+              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+              setError('Failed to decode A_raw: ' + msg);
+              rawA = null;
+            }
+          }
+          if (json.B_raw) {
+            try {
+              rawB = { ...meta, data: decodeTypedArray(json.B_raw, meta.dtype) };
+            } catch (err) {
+              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+              setError('Failed to decode B_raw: ' + msg);
+              rawB = null;
+            }
+          }
+          setImgARaw(rawA);
+          setImgBRaw(rawB);
+          // Auto-set contrast limits from raw data
+          if (rawA && rawA.data) {
+            const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
+            const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
+            setVmin(newVmin);
+            setVmax(newVmax);
+          }
+        } else {
+          // Fallback to PNGs
+          setMetadata({ bitDepth: 8, dtype: 'uint8' });
+          setImgA(json.A);
+          setImgB(json.B);
+
+          // Auto-contrast from PNG pixel analysis
+          try {
+            if (json.A) {
+              const pngDataUrl = `data:image/png;base64,${json.A}`;
+              const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
+              setVmin(analyzedVmin);
+              setVmax(analyzedVmax);
+            } else {
+              setVmin(0);
+              setVmax(255);
+            }
+          } catch (err) {
+            if (typeof window !== 'undefined') {
+              console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
+            }
+            setVmin(0);
+            setVmax(255);
+          }
+        }
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          // Request was cancelled, ignore
+          return;
+        }
+        setError(e.message);
+        if (typeof window !== 'undefined') {
+          console.error('[ImagePairViewer] Error fetching image pair:', e);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchPairWithCancel();
+
+    return () => {
+      cancelled = true;
+      abortController.abort();
+    };
   }, [backendUrl, sourcePathIdx, camera, index]);
 
   return { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin, setVmin, vmax, setVmax, reload: fetchPair };
