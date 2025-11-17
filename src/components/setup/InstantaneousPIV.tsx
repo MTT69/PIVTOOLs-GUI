@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { X, Plus, ChevronUp, ChevronDown, Save, Camera, Settings, ChevronRight, Cpu, HardDrive, Filter, CheckCircle } from "lucide-react";
-import { useInstantaneousPivConfig, PivPass } from "@/hooks/useInstantaneousPivConfig"; // Adjust path
+import { useInstantaneousPivConfig, PivPass } from "@/hooks/useInstantaneousPivConfig";
+import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
 import RunPIV from "./RunPIV";
 
@@ -439,13 +440,15 @@ function InfillingSettings({ config, updateConfigValue }: InfillingSettingsProps
 }
 
 export default function InstantaneousPIV({ config, updateConfig }: InstantaneousPIVProps) {
-  const { passes, addPass, removePass, movePass, updatePassField, toggleStore } = 
+  const { passes, addPass, removePass, movePass, updatePassField, toggleStore } =
     useInstantaneousPivConfig(config.instantaneous_piv, updateConfig);
+
+  const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
   // Camera selection state
   const cameraCount = config?.paths?.camera_count || 1;
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
-  
+
   // Collapsible sections state
   const [performanceOpen, setPerformanceOpen] = useState(false);
   const [outlierOpen, setOutlierOpen] = useState(false);
@@ -458,47 +461,40 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
   // Helper function to save camera selection to backend
   const saveCameraSelection = async (cameras: number[]) => {
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          paths: { 
-            ...config.paths,
-            camera_numbers: cameras 
-          } 
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.updated?.paths) {
-          updateConfig(['paths'], { ...config.paths, ...json.updated.paths });
-        }
+    const payload = {
+      paths: {
+        camera_numbers: cameras
       }
-    } catch (e) {
-      console.error('Failed to save camera selection:', e);
+    };
+
+    const result = await updateConfigBackend(payload);
+
+    if (result.success && result.data?.updated?.paths) {
+      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
+    } else if (result.error) {
+      console.error('Failed to save camera selection:', result.error);
     }
   };
 
   useEffect(() => {
-    // Initialize selected cameras from config
+    // Sync selected cameras state with config
     const currentCameras = config?.paths?.camera_numbers || [];
+    console.log('Syncing camera buttons with config.camera_numbers:', currentCameras);
+
     if (currentCameras.length > 0) {
-      // Filter out invalid camera numbers (like 0 or out of range)
+      // Filter out invalid camera numbers
       const validCameras = currentCameras.filter((c: number) => c >= 1 && c <= cameraCount);
+      console.log('Valid cameras after filtering:', validCameras);
+
       if (validCameras.length > 0) {
         setSelectedCameras(validCameras);
       } else {
-        // Default to camera 1 if no valid cameras, and save it
-        const defaultCameras = [1];
-        setSelectedCameras(defaultCameras);
-        saveCameraSelection(defaultCameras);
+        // If no valid cameras, default to camera 1
+        setSelectedCameras([1]);
       }
     } else {
-      // Default to camera 1 if none selected, and save it
-      const defaultCameras = [1];
-      setSelectedCameras(defaultCameras);
-      saveCameraSelection(defaultCameras);
+      // If camera_numbers is empty, default to camera 1
+      setSelectedCameras([1]);
     }
   }, [config?.paths?.camera_numbers, cameraCount]);
 
@@ -533,29 +529,22 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
   // Helper function to update config
   const updateConfigValue = async (path: string[], value: any) => {
-    try {
-      const pathParts = [...path];
-      const payload: any = {};
-      let current = payload;
-      
-      for (let i = 0; i < pathParts.length - 1; i++) {
-        current[pathParts[i]] = {};
-        current = current[pathParts[i]];
-      }
-      current[pathParts[pathParts.length - 1]] = value;
-      
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      
-      if (res.ok) {
-        const json = await res.json();
-        updateConfig(path, value);
-      }
-    } catch (e) {
-      console.error('Failed to update config:', e);
+    const pathParts = [...path];
+    const payload: any = {};
+    let current = payload;
+
+    for (let i = 0; i < pathParts.length - 1; i++) {
+      current[pathParts[i]] = {};
+      current = current[pathParts[i]];
+    }
+    current[pathParts[pathParts.length - 1]] = value;
+
+    const result = await updateConfigBackend(payload);
+
+    if (result.success) {
+      updateConfig(path, value);
+    } else if (result.error) {
+      console.error('Failed to update config:', result.error);
     }
   };
 

@@ -5,6 +5,16 @@ import Navigation from '@/components/Navigation';
 import Hero from '@/components/Hero';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 // import SetupEnvironment from '@/components/setup/SetupEnvironment';
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
 // import EnsemblePIV from '@/components/setup/EnsemblePIV';
@@ -29,6 +39,13 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [config, setConfig] = useState<any>(emptyConfig);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [pathValidation, setPathValidation] = useState<{
+    valid: boolean;
+    error?: string;
+    checked: boolean;
+  }>({ valid: true, error: undefined, checked: false });
+  const [showValidationWarning, setShowValidationWarning] = useState(false);
+  const [pendingTab, setPendingTab] = useState<string | null>(null);
 
   useEffect(() => {
     // Clear localStorage hero flag if FORCE_RESET_HERO is true
@@ -101,7 +118,33 @@ export default function Home() {
     load();
     return () => { cancelled = true; };
   }, []);
-  const [activeTab, setActiveTab] = useState("environment");
+  const [activeTab, setActiveTab] = useState("setup");
+
+  // Handle tab change with validation check
+  const handleTabChange = useCallback((newTab: string) => {
+    // If leaving setup tab and validation has been checked but failed, show warning
+    if (activeTab === 'setup' && newTab !== 'setup' && pathValidation.checked && !pathValidation.valid) {
+      setPendingTab(newTab);
+      setShowValidationWarning(true);
+    } else {
+      setActiveTab(newTab);
+    }
+  }, [activeTab, pathValidation]);
+
+  // Confirm navigation despite validation errors
+  const confirmNavigationWithErrors = useCallback(() => {
+    if (pendingTab) {
+      setActiveTab(pendingTab);
+      setPendingTab(null);
+    }
+    setShowValidationWarning(false);
+  }, [pendingTab]);
+
+  // Cancel navigation
+  const cancelNavigation = useCallback(() => {
+    setPendingTab(null);
+    setShowValidationWarning(false);
+  }, []);
 
   // Function to update config state (memoized to avoid infinite effect loops in children)
   const updateConfig = useCallback((path: string[], value: any) => {
@@ -160,7 +203,7 @@ export default function Home() {
                 Configure your PIV processing pipeline with this intuitive interface. Changes are applied automatically.
               </p>
               
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+              <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
                 <TabsList className="grid grid-cols-6 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Setup
@@ -188,14 +231,29 @@ export default function Home() {
                 {/* Environment tab content removed */}
                 
                 <TabsContent value="setup">
-                  {/* Combined Setup tab: ImageProperties and PathsConfig merged, batch size removed, image config and dimensions horizontal above paths */}
                   <div className="space-y-6">
-                    <ImageConfig config={config} updateConfig={updateConfig} />
-                    {/* PathsConfig below image config/dimensions, backend logic retained */}
-                    <div>
-                      {/* Inline PathsConfig logic here, backend logic retained */}
-                      <PathsConfig config={config} updateConfig={updateConfig} />
-                    </div>
+                    {/* Core Image Properties */}
+                    <ImageConfig
+                      config={config}
+                      updateConfig={updateConfig}
+                      setPathValidation={setPathValidation}
+                      sectionsToShow={['core']}
+                    />
+
+                    {/* Directories Configuration - shown before patterns */}
+                    <PathsConfig
+                      config={config}
+                      updateConfig={updateConfig}
+                      setPathValidation={setPathValidation}
+                    />
+
+                    {/* Filename Patterns */}
+                    <ImageConfig
+                      config={config}
+                      updateConfig={updateConfig}
+                      setPathValidation={setPathValidation}
+                      sectionsToShow={['patterns']}
+                    />
                   </div>
                 </TabsContent>
                 
@@ -277,6 +335,36 @@ export default function Home() {
           </div>
         )
       )}
+
+      {/* Validation warning dialog */}
+      <AlertDialog open={showValidationWarning} onOpenChange={setShowValidationWarning}>
+        <AlertDialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Image Path Validation Failed</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>The configured image paths and patterns could not be validated.</p>
+              {pathValidation.error && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-md">
+                  <p className="text-sm text-red-800 font-mono break-words">
+                    {pathValidation.error}
+                  </p>
+                </div>
+              )}
+              <p className="text-sm">
+                Do you want to continue anyway? It's recommended to fix the path configuration before proceeding.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel onClick={cancelNavigation} className="m-0">
+              Stay and Fix Configuration
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={confirmNavigationWithErrors}>
+              Continue Anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
