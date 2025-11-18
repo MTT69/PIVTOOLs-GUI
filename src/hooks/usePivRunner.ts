@@ -93,49 +93,48 @@ export function usePivRunner(settings: PivRunnerSettings) {
         // Fetch image if we have available frames and showStatusImage is enabled
         const now = Date.now();
         const timeSinceLastUpdate = now - lastImageUpdateRef.current;
-        
+
         if (currentSettings.showStatusImage && availableFrames.length > 0) {
           // Show new image every 2 seconds or immediately if first frame
           if (lastImageUpdateRef.current === 0 || timeSinceLastUpdate >= 2000) {
             // Find the frame to display
             let frameToShow: number;
-            
+
             if (lastImageUpdateRef.current === 0) {
               // First image - show the first available frame
               frameToShow = availableFrames[0];
               nextFrameIndexRef.current = 0; // Index in the array, not the frame number
             } else {
-              // Subsequent images - find next available frame
-              const nextIdx = nextFrameIndexRef.current + 1;
-              if (nextIdx < availableFrames.length) {
-                // Move to next frame
-                frameToShow = availableFrames[nextIdx];
-                nextFrameIndexRef.current = nextIdx;
-              } else {
-                // Stay on last available frame (or loop back if you prefer)
-                frameToShow = availableFrames[availableFrames.length - 1];
-                nextFrameIndexRef.current = availableFrames.length - 1;
-              }
+              // Subsequent images - cycle through available frames
+              const nextIdx = (nextFrameIndexRef.current + 1) % availableFrames.length;
+              frameToShow = availableFrames[nextIdx];
+              nextFrameIndexRef.current = nextIdx;
             }
-            
-            // Fetch the image
-            const imageParams = new URLSearchParams(params);
-            imageParams.set('index', String(frameToShow));
-            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
-            
-            if (imageRes.ok) {
-              const data = await imageRes.json();
-              if (data.image) {
-                setStatusImage({ src: data.image, error: null });
-                lastImageUpdateRef.current = now;
-              }
-            } else {
-              // Don't show error for 404 - just means frame not ready yet
-              if (imageRes.status !== 404) {
-                setStatusImage((prev: any) => ({ ...prev, error: `Image Error: ${imageRes.statusText}` }));
+
+            // Only fetch if the frame is in our available list
+            if (availableFrames.includes(frameToShow)) {
+              // Fetch the image
+              const imageParams = new URLSearchParams(params);
+              imageParams.set('index', String(frameToShow));
+              const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
+
+              if (imageRes.ok) {
+                const data = await imageRes.json();
+                if (data.image) {
+                  setStatusImage({ src: data.image, error: null });
+                  lastImageUpdateRef.current = now;
+                }
+              } else {
+                // Don't show error for 404 - just means frame not ready yet
+                if (imageRes.status !== 404) {
+                  setStatusImage((prev: any) => ({ ...prev, error: `Image Error: ${imageRes.statusText}` }));
+                }
               }
             }
           }
+        } else if (currentSettings.showStatusImage && availableFrames.length === 0 && isPolling && currentProgress > 0) {
+          // Show waiting message when no frames are available yet but processing has started
+          setStatusImage({ src: null, error: null });
         }
       } catch (error) {
         setStatusImage((prev: any) => ({ ...prev, src: null, error: "Polling failed. Check connection." }));

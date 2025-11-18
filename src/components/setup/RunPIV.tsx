@@ -2,7 +2,7 @@
 
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,9 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
 
+  // Ref for log container to enable auto-scroll
+  const logContainerRef = useRef<HTMLDivElement>(null);
+
   // --- Derived State (memoized for performance) ---
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
 
@@ -35,6 +38,13 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
   });
 
   // --- Effects for UI Sync ---
+  // Auto-scroll logs to bottom when they update
+  useEffect(() => {
+    if (logContainerRef.current && logs) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   // Only fetch available variables when PIV is running and progress > 0
   useEffect(() => {
     if (!isPolling || progress === 0) return;
@@ -173,7 +183,10 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
                   </span>
                 )}
               </div>
-              <div className="p-3 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
+              <div
+                ref={logContainerRef}
+                className="p-3 max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800"
+              >
                 {logs ? (
                   <>
                     <pre className="whitespace-pre-wrap break-words">{logs}</pre>

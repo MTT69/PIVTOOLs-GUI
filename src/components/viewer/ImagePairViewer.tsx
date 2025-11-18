@@ -38,6 +38,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   
   const [useGrid, setUseGrid] = useState(false);
   const [gridSize, setGridSize] = useState(16);
+  const [customGridSize, setCustomGridSize] = useState<string>('16');
   const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
   const [procToggle, setProcToggle] = useState<"A" | "B">("A");
 
@@ -64,6 +65,9 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const maxFrames = useMemo(() => config?.images?.num_images || 100, [config]);
   const [isImageLoading, setIsImageLoading] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 1, 2, 5, 10
+  const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
+  const [batchSize, setBatchSize] = useState<string>('30');
 
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
@@ -88,7 +92,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     if (config?.filters) {
       const configFilters = config.filters.map((f: any) => {
         const filter: any = { type: f.type };
-        
+
         // Copy all parameters from config
         if (f.size !== undefined) filter.size = f.size;
         if (f.sigma !== undefined) filter.sigma = f.sigma;
@@ -98,7 +102,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         if (f.white !== undefined) filter.white = f.white;
         if (f.max_gain !== undefined) filter.max_gain = f.max_gain;
         if (f.bg !== undefined) filter.bg = f.bg;
-        
+
         return filter;
       });
       setFilters(configFilters);
@@ -174,6 +178,42 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     setRawManuallyAdjusted(false);
     setProcManuallyAdjusted(false);
   }, [sourcePathIdx, camera, index]);
+
+  // Sync frame input value with index
+  useEffect(() => {
+    setFrameInputValue(String(index));
+  }, [index]);
+
+  // Initialize batch size from config
+  useEffect(() => {
+    if (config?.batches?.size !== undefined) {
+      setBatchSize(String(config.batches.size));
+    }
+  }, [config?.batches?.size]);
+
+  // Check if any temporal filters are present
+  const hasTemporalFilters = useMemo(() => {
+    return filters.some(f => f.type === 'time' || f.type === 'pod');
+  }, [filters]);
+
+  // Save batch size to backend
+  const saveBatchSize = async (newBatchSize: string) => {
+    const num = parseInt(newBatchSize, 10);
+    if (isNaN(num) || num < 1) return;
+
+    try {
+      await fetch(`${backendUrl}/update_config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batches: { size: num }
+        }),
+      });
+      console.log('Batch size updated to', num);
+    } catch (e) {
+      console.error('Failed to save batch size', e);
+    }
+  };
 
   // Update slider values when auto-contrast values change and autoscale is enabled
   useEffect(() => {
@@ -284,29 +324,30 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
 
-  // Track when images start/finish loading
+  // Track when images start/finish loading (but not during playback)
   useEffect(() => {
-    setIsImageLoading(true);
-  }, [index, camera, sourcePathIdx]);
+    if (!playing) {
+      setIsImageLoading(true);
+    }
+  }, [index, camera, sourcePathIdx, playing]);
 
   useEffect(() => {
-    if (!loading) {
+    if (!loading && !playing) {
       setIsImageLoading(false);
     }
-  }, [loading]);
+  }, [loading, playing]);
 
-  // Play/Pause functionality with smart loading handling
+  // Play/Pause functionality with smart throttling
   useEffect(() => {
     if (playing) {
       const advanceFrame = () => {
-        // Only advance if not currently loading
-        if (!isImageLoading) {
-          setIndex(prev => (prev >= maxFrames ? 1 : prev + 1));
-        }
+        // Always advance - throttling is handled by interval timing
+        setIndex(prev => (prev >= maxFrames ? 1 : prev + 1));
       };
 
-      // Start with 1 FPS (1000ms), but the actual rate will be limited by image load time
-      playIntervalRef.current = setInterval(advanceFrame, 1000);
+      // Calculate interval based on playback speed (FPS)
+      const intervalMs = 1000 / playbackSpeed;
+      playIntervalRef.current = setInterval(advanceFrame, intervalMs);
     } else if (playIntervalRef.current) {
       clearInterval(playIntervalRef.current);
       playIntervalRef.current = null;
@@ -314,7 +355,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     return () => {
       if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
-  }, [playing, maxFrames, isImageLoading]);
+  }, [playing, maxFrames, playbackSpeed]);
 
   return (
     <Card>
@@ -328,7 +369,26 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         {/* --- FILTER STACK UI (TOP) --- */}
         <div className="space-y-3 p-4 border rounded-lg">
             <h3 className="text-lg font-semibold">Filter Stack</h3>
-            <FilterSelector onAddFilter={addFilter} />
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <FilterSelector onAddFilter={addFilter} />
+              </div>
+              {hasTemporalFilters && (
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="batch-size" className="text-xs whitespace-nowrap">Batch Size:</Label>
+                  <Input
+                    id="batch-size"
+                    type="number"
+                    min="1"
+                    value={batchSize}
+                    onChange={(e) => setBatchSize(e.target.value)}
+                    onBlur={() => saveBatchSize(batchSize)}
+                    className="w-20 h-9"
+                    title="Number of images per batch for temporal filters (Time, POD)"
+                  />
+                </div>
+              )}
+            </div>
             <div className="space-y-2 p-2 border rounded-md min-h-[100px] bg-muted/50">
               {filters.length === 0 && <p className="text-sm text-muted-foreground">No filters applied</p>}
               {filters.map((filter, idx) => (
@@ -346,7 +406,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               ))}
             </div>
             <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx)} disabled={procLoading || filters.length === 0}>
-              {procLoading ? "Processing..." : "Apply Filters to Frame"}
+              {procLoading ? "Processing..." : "Test Filters"}
             </Button>
         </div>
 
@@ -412,8 +472,27 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               type="number"
               min={1}
               max={maxFrames}
-              value={index}
-              onChange={e => setIndex(Math.max(1, Math.min(maxFrames, Number(e.target.value || 1))))}
+              value={frameInputValue}
+              onChange={e => {
+                const val = e.target.value;
+                setFrameInputValue(val);
+                // Only update index if value is a valid number
+                if (val && !isNaN(Number(val))) {
+                  const num = Math.max(1, Math.min(maxFrames, Number(val)));
+                  setIndex(num);
+                }
+              }}
+              onBlur={e => {
+                // On blur, ensure we have a valid value
+                const val = e.target.value;
+                if (!val || isNaN(Number(val))) {
+                  setFrameInputValue(String(index));
+                } else {
+                  const num = Math.max(1, Math.min(maxFrames, Number(val)));
+                  setIndex(num);
+                  setFrameInputValue(String(num));
+                }
+              }}
               className="w-24"
             />
             <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrames}</span>
@@ -437,6 +516,25 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           >
             {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
           </Button>
+          <div className="flex items-center gap-2">
+            <Label className="text-xs whitespace-nowrap">Playback Speed:</Label>
+            <Select
+              value={String(playbackSpeed)}
+              onValueChange={(v) => setPlaybackSpeed(Number(v))}
+              disabled={playing}
+            >
+              <SelectTrigger className="w-24 h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0.5">0.5 FPS</SelectItem>
+                <SelectItem value="1">1 FPS</SelectItem>
+                <SelectItem value="2">2 FPS</SelectItem>
+                <SelectItem value="5">5 FPS</SelectItem>
+                <SelectItem value="10">10 FPS</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* --- IMAGE VIEWERS --- */}
@@ -452,7 +550,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 useGrid={useGrid} gridSize={gridSize}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
-              {loading && (
+              {loading && !playing && (
                 <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
                   <LoadingSpinner />
                 </div>
@@ -468,6 +566,50 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <Label htmlFor="raw-auto-scale" className="text-sm">Auto Scale</Label>
                   <Switch id="use-grid" checked={useGrid} onCheckedChange={setUseGrid} />
                   <Label htmlFor="use-grid">Grid</Label>
+                  {useGrid && (
+                    <>
+                      <Select value={String(gridSize)} onValueChange={v => {
+                        const num = Number(v);
+                        setGridSize(num);
+                        if (num !== 0) setCustomGridSize(String(num));
+                      }}>
+                        <SelectTrigger className="w-24 h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="8">8x8</SelectItem>
+                          <SelectItem value="16">16x16</SelectItem>
+                          <SelectItem value="32">32x32</SelectItem>
+                          <SelectItem value="64">64x64</SelectItem>
+                          <SelectItem value="0">Custom</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {gridSize === 0 && (
+                        <Input
+                          type="number"
+                          min={1}
+                          max={512}
+                          value={customGridSize}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setCustomGridSize(val);
+                            if (val && !isNaN(Number(val))) {
+                              setGridSize(Number(val));
+                            }
+                          }}
+                          onBlur={e => {
+                            const val = e.target.value;
+                            if (!val || isNaN(Number(val)) || Number(val) < 1) {
+                              setCustomGridSize('16');
+                              setGridSize(16);
+                            }
+                          }}
+                          className="w-16 h-8"
+                          placeholder="Size"
+                        />
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -529,7 +671,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 title={`Processed Image ${procToggle}`}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
-              {procLoading && (
+              {procLoading && !playing && (
                 <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
                   <LoadingSpinner />
                 </div>

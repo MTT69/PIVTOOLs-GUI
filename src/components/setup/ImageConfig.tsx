@@ -7,34 +7,26 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Plus, Minus, Image as ImageIcon, RefreshCcw, CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
+import { Plus, Minus, Image as ImageIcon, AlertTriangle } from "lucide-react";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { ValidationAlert } from "./ValidationAlert";
 
 interface ImageConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  setPathValidation?: (validation: { valid: boolean; error?: string; checked: boolean }) => void;
+  validation: { valid: boolean; error?: string; checked: boolean };
   sectionsToShow?: ('core' | 'patterns')[];
 }
 
-export default function ImageConfig({ config, updateConfig, setPathValidation, sectionsToShow = ['core', 'patterns'] }: ImageConfigProps) {
+export default function ImageConfig({ config, updateConfig, validation, sectionsToShow = ['core', 'patterns'] }: ImageConfigProps) {
   const [numImages, setNumImages] = useState<string>("");
   const [numCameras, setNumCameras] = useState<string>("1");
   const [timeResolved, setTimeResolved] = useState<boolean>(false);
   const [rawPatterns, setRawPatterns] = useState<string[]>([]);
   const [vectorPattern, setVectorPattern] = useState<string>("");
   const [savingMeta, setSavingMeta] = useState<string>("");
-  const [patternValidation, setPatternValidation] = useState<{
-    status: 'idle' | 'checking' | 'valid' | 'invalid';
-    error?: string;
-  }>({ status: 'idle' });
-  const [initialCheckDone, setInitialCheckDone] = useState(false);
   const [isMacOS, setIsMacOS] = useState(false);
   const [hasUnsupportedFormat, setHasUnsupportedFormat] = useState(false);
-  const [lastValidatedConfig, setLastValidatedConfig] = useState<string>('');
-
-  // Debounce timer refs
-  const validationTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -69,6 +61,13 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
     setHasUnsupportedFormat(unsupported);
   }, [isMacOS, config.images?.image_format]);
 
+  // Log when parent validation state changes (for debugging)
+  useEffect(() => {
+    if (sectionsToShow.includes('patterns')) {
+      console.log('ImageConfig: Parent validation state changed:', validation);
+    }
+  }, [validation, sectionsToShow]);
+
   useEffect(() => {
     const images = config.images || {};
     const paths = config.paths || {};
@@ -99,158 +98,9 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
     }
   }, [config]);
 
-  const validatePatterns = async () => {
-    console.log('validatePatterns called');
+  // Validation is now handled by useAutoValidation hook in parent
 
-    // Clear any pending validation timers
-    if (validationTimerRef.current) {
-      clearTimeout(validationTimerRef.current);
-      validationTimerRef.current = null;
-    }
-
-    // Validate that image files exist using the /backend/get_frame_pair endpoint
-    const sourcePaths = config.paths?.source_paths || [];
-    const cameraNumbers = config.paths?.camera_numbers || [1];
-
-    if (sourcePaths.length === 0) {
-      setPatternValidation({
-        status: 'invalid',
-        error: 'No source paths configured. Please add source directories in Paths Configuration below.',
-      });
-      setPathValidation?.({
-        valid: false,
-        error: 'No source paths configured.',
-        checked: true,
-      });
-      return;
-    }
-
-    // Check for unsupported formats on macOS
-    if (hasUnsupportedFormat) {
-      setPatternValidation({
-        status: 'invalid',
-        error: '.set/.im7/.ims formats are not supported on macOS. Please use .tif or .png formats.',
-      });
-      setPathValidation?.({
-        valid: false,
-        error: 'Unsupported file format on macOS',
-        checked: true,
-      });
-      return;
-    }
-
-    setPatternValidation({ status: 'checking' });
-
-    try {
-      // Use the first camera from camera_numbers (selected cameras for processing)
-      const cameraToTest = cameraNumbers[0] || 1;
-      const res = await fetch(`/backend/get_frame_pair?camera=${cameraToTest}&idx=1&source_path_idx=0`);
-
-      if (res.ok) {
-        console.log('Validation successful - files found');
-        setPatternValidation({ status: 'valid' });
-        setPathValidation?.({
-          valid: true,
-          error: undefined,
-          checked: true,
-        });
-      } else {
-        const json = await res.json();
-        // Construct detailed error message with path information
-        let errorMsg = 'Image files not found';
-
-        if (json.detail) {
-          // Use the detailed message from backend
-          errorMsg = json.detail;
-        } else if (json.source_path && json.patterns) {
-          // Construct message from parts
-          const patterns = Array.isArray(json.patterns)
-            ? json.patterns.join(', ')
-            : json.patterns;
-          errorMsg = `No files found in ${json.source_path} using pattern(s): ${patterns}`;
-        } else if (json.file) {
-          // Backend returned the specific file that couldn't be found
-          errorMsg = `File not found: ${json.file}`;
-        } else if (json.error) {
-          errorMsg = json.error;
-        }
-
-        console.log('Validation failed:', errorMsg);
-        setPatternValidation({
-          status: 'invalid',
-          error: errorMsg,
-        });
-        setPathValidation?.({
-          valid: false,
-          error: errorMsg,
-          checked: true,
-        });
-      }
-    } catch (e: any) {
-      console.error('Validation error:', e);
-      const errorMsg = `Failed to validate: ${e.message}`;
-      setPatternValidation({
-        status: 'invalid',
-        error: errorMsg,
-      });
-      setPathValidation?.({
-        valid: false,
-        error: errorMsg,
-        checked: true,
-      });
-    }
-  };
-
-  // Auto-validation effect - runs when relevant config changes
-  useEffect(() => {
-    // Create a key from all validation-relevant config
-    const validationKey = JSON.stringify({
-      sourcePaths: config.paths?.source_paths || [],
-      imageFormat: config.images?.image_format,
-      cameraNumbers: config.paths?.camera_numbers || [],
-      timeResolved: config.images?.time_resolved,
-    });
-
-    // Only validate if config actually changed
-    if (validationKey !== lastValidatedConfig) {
-      console.log('Validation-relevant config changed, resetting and re-validating...');
-
-      // Reset validation state immediately on config change
-      setPatternValidation({ status: 'idle' });
-      setPathValidation?.({
-        valid: true,
-        error: undefined,
-        checked: false,
-      });
-
-      setLastValidatedConfig(validationKey);
-
-      // Clear any pending validation timers
-      if (validationTimerRef.current) {
-        clearTimeout(validationTimerRef.current);
-      }
-
-      // Debounce validation - always validate to show appropriate errors
-      validationTimerRef.current = setTimeout(() => {
-        console.log('Running debounced validation...');
-        validatePatterns();
-      }, 500); // Reduced debounce time from 800ms to 500ms for more responsive feel
-    }
-
-    return () => {
-      if (validationTimerRef.current) {
-        clearTimeout(validationTimerRef.current);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    config.paths?.source_paths,
-    config.paths?.camera_numbers,
-    config.images?.image_format,
-    config.images?.time_resolved,
-    hasUnsupportedFormat,
-    lastValidatedConfig,
-  ]);
+  // Validation is now handled by useAutoValidation hook in parent - no local validation needed
 
   const saveConfig = async (
     nextNumImages: string,
@@ -310,25 +160,7 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
     saveConfig(numImages, numCameras, isTimeResolved, newPatterns, vectorPattern);
   };
 
-  const handlePatternBlur = () => {
-    // Validate patterns when user finishes editing
-    if (config.paths?.source_paths?.length > 0) {
-      validatePatterns();
-    }
-  };
-
-  const ValidationIcon = () => {
-    if (patternValidation.status === 'checking') {
-      return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
-    }
-    if (patternValidation.status === 'valid') {
-      return <CheckCircle className="h-4 w-4 text-green-500" />;
-    }
-    if (patternValidation.status === 'invalid') {
-      return <XCircle className="h-4 w-4 text-red-500" />;
-    }
-    return null;
-  };
+  // Removed - validation handled by parent hook
 
   const showCore = sectionsToShow.includes('core');
   const showPatterns = sectionsToShow.includes('patterns');
@@ -418,46 +250,23 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <Label className="font-semibold">Raw Image Pattern{timeResolved ? "" : "s"}</Label>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => validatePatterns()}
-                    disabled={patternValidation.status === 'checking'}
-                  >
-                    {patternValidation.status === 'checking' ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Checking...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCcw className="h-4 w-4 mr-2" />
-                        Validate Files
-                      </>
-                    )}
-                  </Button>
                 </div>
                 <div className="space-y-3 mt-2">
                   {rawPatterns.map((p, i) => (
                     <div key={i} className="space-y-1">
                       <div className="flex items-center gap-2">
                         <Input
-                          className={`font-mono ${patternValidation.status === 'invalid' ? 'border-red-500' : patternValidation.status === 'valid' ? 'border-green-500' : ''}`}
+                          className="font-mono"
                           value={p}
                           onChange={e => {
                             const nextPatterns = [...rawPatterns];
                             nextPatterns[i] = e.target.value;
                             setRawPatterns(nextPatterns);
-                            setPatternValidation({ status: 'idle' }); // Reset validation on change
                           }}
                           onBlur={() => {
                             saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern);
-                            handlePatternBlur();
                           }}
                         />
-                        <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center">
-                          <ValidationIcon />
-                        </div>
                         {!timeResolved && rawPatterns.length > 1 && (
                           <Button
                             variant="ghost"
@@ -475,16 +284,8 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
                     </div>
                   ))}
 
-                  {/* Show validation error once, outside the pattern loop */}
-                  {patternValidation.status === 'invalid' && patternValidation.error && (
-                    <Alert variant="destructive" className="mt-2">
-                      <XCircle className="h-4 w-4" />
-                      <AlertTitle>Validation Failed</AlertTitle>
-                      <AlertDescription className="text-sm">
-                        {patternValidation.error}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  {/* Validation Status */}
+                  <ValidationAlert validation={validation} />
                   {!timeResolved && (
                     <Button
                       variant="outline"
@@ -515,8 +316,8 @@ export default function ImageConfig({ config, updateConfig, setPathValidation, s
                   Output filename pattern for processed vector fields
                 </p>
               </div>
-              <div className="text-xs text-muted-foreground flex items-center gap-2">
-                <RefreshCcw className="h-3 w-3" /> {savingMeta || "Changes are saved when you finish editing a box."}
+              <div className="text-xs text-muted-foreground">
+                {savingMeta || "Changes are saved when you finish editing a box."}
               </div>
             </CardContent>
           </Card>

@@ -185,7 +185,7 @@ export function useImageFilters(backendUrl: string) {
       transpose: {},
       gaussian: { sigma: 1.0 },
     };
-    
+
     setFilters(f => [...f, { type, ...defaultParams[type], ...params }]);
   };
 

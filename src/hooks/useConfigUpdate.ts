@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 
 interface ValidationState {
   valid: boolean;
@@ -49,63 +49,91 @@ export function useConfigUpdate() {
   };
 }
 
-export function usePathValidation() {
-  const [validationStatus, setValidationStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
-  const [validationError, setValidationError] = useState<string | undefined>(undefined);
+/**
+ * Simple, automatic path validation hook
+ * Validates when config changes, no manual triggering needed
+ */
+export function useAutoValidation(config: any) {
+  const [validation, setValidation] = useState<ValidationState>({
+    valid: false,
+    checked: false,
+  });
 
-  /**
-   * Validate that image files exist at the configured paths
-   */
-  const validatePaths = useCallback(async (
-    sourcePaths: string[],
-    cameraNumbers: number[]
-  ): Promise<ValidationState> => {
-    if (sourcePaths.length === 0) {
-      const error = 'No source paths configured. Please add at least one source directory.';
-      setValidationStatus('invalid');
-      setValidationError(error);
-      return { valid: false, error, checked: true };
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastValidatedRef = useRef<string>('');
+
+  useEffect(() => {
+    // Create a validation key from critical config
+    const validationKey = JSON.stringify({
+      sourcePaths: config?.paths?.source_paths,
+      imageFormat: config?.images?.image_format,
+      cameraNumbers: config?.paths?.camera_numbers,
+    });
+
+    // Skip if nothing changed
+    if (validationKey === lastValidatedRef.current) {
+      return;
     }
 
-    setValidationStatus('checking');
-    setValidationError(undefined);
+    // Skip if no meaningful config
+    const hasConfig = config?.paths?.source_paths?.length > 0;
+    if (!hasConfig) {
+      setValidation({ valid: false, checked: false, error: 'No configuration loaded' });
+      return;
+    }
 
-    try {
-      // Use the first camera from camera_numbers (which are the selected cameras for processing)
+    lastValidatedRef.current = validationKey;
+
+    // Clear any pending validation
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+    }
+
+    // Set pending state
+    setValidation({ valid: false, checked: false, error: 'Validating...' });
+
+    // Validate after short delay
+    timerRef.current = setTimeout(async () => {
+      console.log('🔍 Auto-validation: Starting...');
+
+      const sourcePaths = config.paths?.source_paths || [];
+      const cameraNumbers = config.paths?.camera_numbers || [1];
       const cameraToTest = cameraNumbers[0] || 1;
-      const res = await fetch(`/backend/get_frame_pair?camera=${cameraToTest}&idx=1&source_path_idx=0`);
 
-      if (res.ok) {
-        setValidationStatus('valid');
-        setValidationError(undefined);
-        return { valid: true, checked: true };
-      } else {
-        const json = await res.json();
-        const errorMsg = json.detail || json.error || 'Image files could not be found with the current configuration.';
-        setValidationStatus('invalid');
-        setValidationError(errorMsg);
-        return { valid: false, error: errorMsg, checked: true };
+      try {
+        const url = `/backend/get_frame_pair?camera=${cameraToTest}&idx=1&source_path_idx=0`;
+        console.log('🔍 Auto-validation: Fetching', url);
+
+        const res = await fetch(url);
+
+        if (res.ok) {
+          console.log('✅ Auto-validation: Success');
+          setValidation({ valid: true, checked: true });
+
+          // Preload images
+          fetch('/backend/preload_images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ camera: cameraToTest, start_idx: 1, count: 10, source_path_idx: 0 }),
+          }).catch(e => console.warn('Failed to preload:', e));
+        } else {
+          const json = await res.json();
+          const errorMsg = json.detail || json.error || 'Image files not found';
+          console.log('❌ Auto-validation: Failed -', errorMsg);
+          setValidation({ valid: false, checked: true, error: errorMsg });
+        }
+      } catch (e: any) {
+        console.log('❌ Auto-validation: Error -', e.message);
+        setValidation({ valid: false, checked: true, error: `Validation failed: ${e.message}` });
       }
-    } catch (e: any) {
-      const errorMsg = `Failed to validate paths: ${e.message}`;
-      setValidationStatus('invalid');
-      setValidationError(errorMsg);
-      return { valid: false, error: errorMsg, checked: true };
-    }
-  }, []);
+    }, 500);
 
-  /**
-   * Reset validation state
-   */
-  const resetValidation = useCallback(() => {
-    setValidationStatus('idle');
-    setValidationError(undefined);
-  }, []);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, [config?.paths?.source_paths, config?.images?.image_format, config?.paths?.camera_numbers]);
 
-  return {
-    validationStatus,
-    validationError,
-    validatePaths,
-    resetValidation,
-  };
+  return validation;
 }

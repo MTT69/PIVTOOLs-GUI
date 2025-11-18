@@ -23,14 +23,14 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   {
     type: 'time',
     name: 'Time Filter',
-    description: 'Subtract local minimum across time for each pixel',
+    description: 'Subtract local minimum across time for each pixel. Uses global batch size (set in Performance settings).',
     category: 'batch',
     parameters: []
   },
   {
     type: 'pod',
     name: 'POD Filter',
-    description: 'Proper Orthogonal Decomposition - removes coherent structures',
+    description: 'Proper Orthogonal Decomposition - removes coherent structures. Uses global batch size (set in Performance settings).',
     category: 'batch',
     parameters: []
   },

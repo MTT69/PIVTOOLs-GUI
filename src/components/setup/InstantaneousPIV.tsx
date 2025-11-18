@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, memo, useCallback } from "react";
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +23,7 @@ interface OutlierDetectionSettingsProps {
   updateConfigValue: (path: string[], value: any) => void;
 }
 
-function OutlierDetectionSettings({ config, updateConfigValue }: OutlierDetectionSettingsProps) {
+const OutlierDetectionSettings = memo(function OutlierDetectionSettings({ config, updateConfigValue }: OutlierDetectionSettingsProps) {
   const outlierConfig = config?.outlier_detection || { enabled: true, methods: [] };
   const methods = outlierConfig.methods || [];
 
@@ -228,7 +228,7 @@ function OutlierDetectionSettings({ config, updateConfigValue }: OutlierDetectio
       )}
     </div>
   );
-}
+});
 
 // Infilling Settings Component
 interface InfillingSettingsProps {
@@ -236,7 +236,7 @@ interface InfillingSettingsProps {
   updateConfigValue: (path: string[], value: any) => void;
 }
 
-function InfillingSettings({ config, updateConfigValue }: InfillingSettingsProps) {
+const InfillingSettings = memo(function InfillingSettings({ config, updateConfigValue }: InfillingSettingsProps) {
   const infillingConfig = config?.infilling || { mid_pass: {}, final_pass: {} };
   
   const updateMidPass = (field: string, value: any) => {
@@ -437,7 +437,7 @@ function InfillingSettings({ config, updateConfigValue }: InfillingSettingsProps
       </div>
     </div>
   );
-}
+});
 
 export default function InstantaneousPIV({ config, updateConfig }: InstantaneousPIVProps) {
   const { passes, addPass, removePass, movePass, updatePassField, toggleStore } =
@@ -527,8 +527,8 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
     await saveCameraSelection(newSelectedCameras);
   };
 
-  // Helper function to update config
-  const updateConfigValue = async (path: string[], value: any) => {
+  // Helper function to update config - memoized to prevent re-renders
+  const updateConfigValue = useCallback(async (path: string[], value: any) => {
     const pathParts = [...path];
     const payload: any = {};
     let current = payload;
@@ -546,7 +546,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
     } else if (result.error) {
       console.error('Failed to update config:', result.error);
     }
-  };
+  }, [updateConfigBackend, updateConfig]);
 
   return (
     <div className="space-y-6">
@@ -657,21 +657,6 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
             {performanceOpen && (
               <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="batch-size">Batch Size</Label>
-                    <Input
-                      id="batch-size"
-                      type="text"
-                      value={config?.batches?.size === '' ? '' : (config?.batches?.size ?? 10)}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const num = parseInt(val, 10);
-                        updateConfigValue(['batches', 'size'], isNaN(num) ? '' : num);
-                      }}
-                    />
-                    <p className="text-xs text-muted-foreground">Number of images processed per batch</p>
-                  </div>
-                  
                   <div className="space-y-2">
                     <Label htmlFor="omp-threads">Threads (OMP)</Label>
                     <Input

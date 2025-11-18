@@ -15,17 +15,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-// import SetupEnvironment from '@/components/setup/SetupEnvironment';
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
-// import EnsemblePIV from '@/components/setup/EnsemblePIV';
 import PathsConfig from '@/components/setup/PathsConfig';
 import POD from '@/components/setup/POD';
 import ImageConfig from '@/components/setup/ImageConfig';
 import VectorViewer from '@/components/viewer/VectorViewer';
-import ImagePairViewer from '@/components/viewer/ImagePairViewer';
 import VideoMaker from '@/components/viewer/VideoMaker';
 import Masking from '@/components/setup/Masking';
 import { Calibration } from '@/components/setup/Calibration';
+import { useAutoValidation } from '@/hooks/useConfigUpdate';
 
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
@@ -39,13 +37,11 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [config, setConfig] = useState<any>(emptyConfig);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [pathValidation, setPathValidation] = useState<{
-    valid: boolean;
-    error?: string;
-    checked: boolean;
-  }>({ valid: true, error: undefined, checked: false });
   const [showValidationWarning, setShowValidationWarning] = useState(false);
   const [pendingTab, setPendingTab] = useState<string | null>(null);
+
+  // Auto-validate when config changes
+  const pathValidation = useAutoValidation(config);
 
   useEffect(() => {
     // Clear localStorage hero flag if FORCE_RESET_HERO is true
@@ -236,7 +232,7 @@ export default function Home() {
                     <ImageConfig
                       config={config}
                       updateConfig={updateConfig}
-                      setPathValidation={setPathValidation}
+                      validation={pathValidation}
                       sectionsToShow={['core']}
                     />
 
@@ -244,14 +240,14 @@ export default function Home() {
                     <PathsConfig
                       config={config}
                       updateConfig={updateConfig}
-                      setPathValidation={setPathValidation}
+                      validation={pathValidation}
                     />
 
                     {/* Filename Patterns */}
                     <ImageConfig
                       config={config}
                       updateConfig={updateConfig}
-                      setPathValidation={setPathValidation}
+                      validation={pathValidation}
                       sectionsToShow={['patterns']}
                     />
                   </div>
@@ -273,36 +269,7 @@ export default function Home() {
                     <div>
                       <InstantaneousPIV config={config} updateConfig={updateConfig} />
                     </div>
-                    {/* Window Size Selection Guidelines below RunPIV */}
-                    <div className="mt-4">
-                      <div className="bg-white rounded-xl shadow p-6">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="inline-block"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-soton-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="7" height="7" strokeWidth="2"/><rect x="14" y="3" width="7" height="7" strokeWidth="2"/><rect x="3" y="14" width="7" height="7" strokeWidth="2"/><rect x="14" y="14" width="7" height="7" strokeWidth="2"/></svg></span>
-                          <span className="text-xl font-semibold">Window Size Selection Guidelines</span>
-                        </div>
-                        <div className="text-gray-600 mb-4">Best practices for configuring correlation windows</div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div>
-                            <h3 className="text-lg font-medium mb-2">Window Size Recommendations</h3>
-                            <ul className="space-y-1 text-sm list-disc pl-5">
-                              <li>Start with larger windows (128x128, 64x64) and progressively refine</li>
-                              <li>For final pass, aim for 16x16 or 32x32 depending on particle density</li>
-                              <li>Window size should contain at least 5-10 particles for good correlation</li>
-                              <li>Keep window sizes as powers of 2 for optimal FFT performance</li>
-                            </ul>
-                          </div>
-                          <div>
-                            <h3 className="text-lg font-medium mb-2">Overlap Settings</h3>
-                            <ul className="space-y-1 text-sm list-disc pl-5">
-                              <li>50% overlap is standard and provides good vector density</li>
-                              <li>Higher overlap (75%) increases spatial resolution but not information content</li>
-                              <li>Lower overlap (25%) reduces computation time but may miss flow features</li>
-                              <li>Consistent overlap between passes maintains stable refinement</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    
                   </div>
                 </TabsContent>
                 
