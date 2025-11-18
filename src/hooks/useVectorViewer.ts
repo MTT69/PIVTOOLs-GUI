@@ -49,6 +49,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
   const [merged, setMerged] = useState<boolean>(false);
+  const [isUncalibrated, setIsUncalibrated] = useState<boolean>(false);
   const [playing, setPlaying] = useState(false);
   const [pendingIndex, setPendingIndex] = useState<number>(index);
   const [pointerDown, setPointerDown] = useState<boolean>(false);
@@ -108,9 +109,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
-      
+
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -131,7 +133,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, xOffset, yOffset]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset]);
 
   const fetchStatVars = useCallback(async () => {
     setStatVarsLoading(true);
@@ -618,6 +620,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     cmap,
     camera,
     merged,
+    isUncalibrated,
     basePathIdx,
     meanMode,
     fetchImage,
@@ -854,6 +857,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setCamera,
     merged,
     setMerged,
+    isUncalibrated,
+    setIsUncalibrated,
     playing,
     setPlaying,
     limitsLoading,
