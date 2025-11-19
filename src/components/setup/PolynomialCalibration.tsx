@@ -34,6 +34,19 @@ const POLYNOMIAL_TERMS = [
   { id: "st2", label: <span><i>s</i><i>t</i><sup>2</sup></span> },
 ];
 
+const TERM_SUFFIX_MAPPING: Record<string, string> = {
+  "o": "const",
+  "s": "s",
+  "s2": "s2",
+  "s3": "s3",
+  "t": "t",
+  "t2": "t2",
+  "t3": "t3",
+  "st": "st",
+  "s2t": "s2t",
+  "st2": "st2"
+};
+
 export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   config,
   updateConfig,
@@ -41,7 +54,8 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   sourcePaths,
   imageCount = 1000,
 }) => {
-  const [coefficients, setCoefficients] = useState<Record<string, Record<string, string>>>({});
+  const [coefficients, setCoefficients] = useState<Record<string, { dx: Record<string, string>, dy: Record<string, string> }>>({});
+  const [cameraParams, setCameraParams] = useState<Record<number, { s_o: number, t_o: number, nx: number, ny: number }>>({});
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [calibrating, setCalibrating] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -55,10 +69,104 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     setSourcePathIdx(polyConfig.source_path_idx ?? 0);
   }, [config]);
 
+  // Fetch XML calibration data
+  useEffect(() => {
+    const fetchXmlData = async () => {
+      try {
+        const response = await fetch('/backend/calibration/polynomial/read_xml', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: sourcePathIdx })
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success' && data.cameras) {
+          const newCoefficients: Record<string, { dx: Record<string, string>, dy: Record<string, string> }> = {};
+          const newCameraParams: Record<number, { s_o: number, t_o: number, nx: number, ny: number }> = {};
+          
+          Object.entries(data.cameras).forEach(([camIdStr, camData]: [string, any]) => {
+             const match = camIdStr.match(/\d+/);
+             if (!match) return;
+             const camNum = parseInt(match[0], 10);
+             
+             if (!cameraOptions.includes(camNum)) return;
+             
+             // Extract params
+             if (camData.origin && camData.normalisation) {
+                 newCameraParams[camNum] = {
+                     s_o: camData.origin.s_o,
+                     t_o: camData.origin.t_o,
+                     nx: camData.normalisation.nx,
+                     ny: camData.normalisation.ny
+                 };
+             }
+             
+             const coeffsA = camData.coefficients_a || {};
+             const coeffsB = camData.coefficients_b || {};
+             
+             const mappedDx: Record<string, string> = {};
+             const mappedDy: Record<string, string> = {};
+             
+             Object.entries(coeffsA).forEach(([key, val]) => {
+                const suffix = key.split('_').slice(1).join('_');
+                const termId = TERM_SUFFIX_MAPPING[suffix];
+                if (termId) mappedDx[termId] = String(val);
+             });
+
+             Object.entries(coeffsB).forEach(([key, val]) => {
+                const suffix = key.split('_').slice(1).join('_');
+                const termId = TERM_SUFFIX_MAPPING[suffix];
+                if (termId) mappedDy[termId] = String(val);
+             });
+             
+             if (Object.keys(mappedDx).length > 0 || Object.keys(mappedDy).length > 0) {
+                 newCoefficients[camNum] = { dx: mappedDx, dy: mappedDy };
+             }
+          });
+          
+          if (Object.keys(newCameraParams).length > 0) {
+              setCameraParams(newCameraParams);
+          }
+          
+          if (Object.keys(newCoefficients).length > 0) {
+              setCoefficients(prev => {
+                  // Check for changes to avoid infinite loops
+                  let hasChanges = false;
+                  for (const [camId, coeffs] of Object.entries(newCoefficients)) {
+                      if (!prev[camId]) {
+                          hasChanges = true;
+                          break;
+                      }
+                      if (JSON.stringify(prev[camId]) !== JSON.stringify(coeffs)) {
+                          hasChanges = true;
+                          break;
+                      }
+                  }
+
+                  if (hasChanges) {
+                      const updated = { ...prev, ...newCoefficients };
+                      updateConfig(["calibration", "polynomial", "coefficients"], updated);
+                      return updated;
+                  }
+                  return prev;
+              });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load polynomial XML:", e);
+      }
+    };
+    
+    fetchXmlData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx, JSON.stringify(cameraOptions)]);
+
   // Handle coefficient change
-  const handleCoefficientChange = (camId: number, termId: string, value: string) => {
-    const camCoeffs = coefficients[camId] || {};
-    const newCamCoeffs = { ...camCoeffs, [termId]: value };
+  const handleCoefficientChange = (camId: number, axis: 'dx' | 'dy', termId: string, value: string) => {
+    const camCoeffs = coefficients[camId] || { dx: {}, dy: {} };
+    const axisCoeffs = camCoeffs[axis] || {};
+    const newAxisCoeffs = { ...axisCoeffs, [termId]: value };
+    const newCamCoeffs = { ...camCoeffs, [axis]: newAxisCoeffs };
     const newCoefficients = { ...coefficients, [camId]: newCamCoeffs };
     setCoefficients(newCoefficients);
     
@@ -70,9 +178,13 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   const allPopulated = cameraOptions.length > 0 && cameraOptions.every(camId => {
     const camCoeffs = coefficients[camId];
     if (!camCoeffs) return false;
-    return POLYNOMIAL_TERMS.every(term => {
-        const val = camCoeffs[term.id];
-        return val && val.trim().length > 0;
+    return ['dx', 'dy'].every(axis => {
+        const axisCoeffs = camCoeffs[axis as 'dx' | 'dy'];
+        if (!axisCoeffs) return false;
+        return POLYNOMIAL_TERMS.every(term => {
+            const val = axisCoeffs[term.id];
+            return val && val.trim().length > 0;
+        });
     });
   });
 
@@ -232,21 +344,99 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
           {cameraOptions.map((camId) => (
             <div key={camId} className="space-y-3 border p-4 rounded-md">
               <Label className="text-base font-semibold">Camera {camId} Coefficients</Label>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                {POLYNOMIAL_TERMS.map((term) => (
-                  <div key={term.id} className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">
-                        {term.label}
-                    </Label>
-                    <Input
-                      placeholder="0.0"
-                      value={(coefficients[camId] || {})[term.id] || ""}
-                      onChange={(e) => handleCoefficientChange(camId, term.id, e.target.value)}
-                      className="h-8 font-mono text-sm"
-                    />
+              
+              {/* Equations Display */}
+              {cameraParams[camId] && (
+                  <div className="bg-slate-50 p-4 rounded border mb-4 font-mono text-sm space-y-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                              <div className="font-semibold text-muted-foreground mb-1">Normalized Coordinates:</div>
+                              <div>s(x&apos;) = 2 · (x&apos; - {cameraParams[camId].s_o.toFixed(4)}) / {cameraParams[camId].nx}</div>
+                              <div>t(y&apos;) = 2 · (y&apos; - {cameraParams[camId].t_o.toFixed(4)}) / {cameraParams[camId].ny}</div>
+                          </div>
+                          <div>
+                              <div className="font-semibold text-muted-foreground mb-1">World Coordinates:</div>
+                              <div>x = x&apos; - dx(s(x&apos;), t(y&apos;))</div>
+                              <div>y = y&apos; - dy(s(x&apos;), t(y&apos;))</div>
+                          </div>
+                      </div>
                   </div>
-                ))}
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* DX Section */}
+                  <div className="space-y-2">
+                     <Label className="text-sm font-medium text-muted-foreground">dx = (Horizontal Displacement)</Label>
+                     <div className="flex flex-col gap-3 pl-2 border-l-2 border-blue-100">
+                        {[
+                          POLYNOMIAL_TERMS.slice(0, 4),
+                          POLYNOMIAL_TERMS.slice(4, 7),
+                          POLYNOMIAL_TERMS.slice(7, 10)
+                        ].map((group, groupIndex) => (
+                          <div key={groupIndex} className="flex flex-wrap items-center gap-2">
+                            {groupIndex > 0 && (
+                                <span className="text-muted-foreground font-bold mr-1">+</span>
+                            )}
+                            {group.map((term, termIndex) => (
+                              <React.Fragment key={term.id}>
+                                <div className="flex items-center gap-1">
+                                    <Input
+                                      placeholder="0.0"
+                                      value={((coefficients[camId] || {}).dx || {})[term.id] || ""}
+                                      onChange={(e) => handleCoefficientChange(camId, 'dx', term.id, e.target.value)}
+                                      className="h-8 w-20 font-mono text-sm text-right"
+                                    />
+                                    <Label className="text-sm">
+                                        {term.label}
+                                    </Label>
+                                </div>
+                                {termIndex < group.length - 1 && (
+                                    <span className="text-muted-foreground font-bold">+</span>
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        ))}
+                     </div>
+                  </div>
+
+                  {/* DY Section */}
+                  <div className="space-y-2">
+                     <Label className="text-sm font-medium text-muted-foreground">dy = (Vertical Displacement)</Label>
+                     <div className="flex flex-col gap-3 pl-2 border-l-2 border-green-100">
+                        {[
+                          POLYNOMIAL_TERMS.slice(0, 4),
+                          POLYNOMIAL_TERMS.slice(4, 7),
+                          POLYNOMIAL_TERMS.slice(7, 10)
+                        ].map((group, groupIndex) => (
+                          <div key={groupIndex} className="flex flex-wrap items-center gap-2">
+                            {groupIndex > 0 && (
+                                <span className="text-muted-foreground font-bold mr-1">+</span>
+                            )}
+                            {group.map((term, termIndex) => (
+                              <React.Fragment key={term.id}>
+                                <div className="flex items-center gap-1">
+                                    <Input
+                                      placeholder="0.0"
+                                      value={((coefficients[camId] || {}).dy || {})[term.id] || ""}
+                                      onChange={(e) => handleCoefficientChange(camId, 'dy', term.id, e.target.value)}
+                                      className="h-8 w-20 font-mono text-sm text-right"
+                                    />
+                                    <Label className="text-sm">
+                                        {term.label}
+                                    </Label>
+                                </div>
+                                {termIndex < group.length - 1 && (
+                                    <span className="text-muted-foreground font-bold">+</span>
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        ))}
+                     </div>
+                  </div>
               </div>
+
             </div>
           ))}
         </div>
