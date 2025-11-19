@@ -201,6 +201,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     MAG_SIZE,
     dpr,
     effectiveDir,
+    prefetchSurrounding,
   } = useVectorViewer({ backendUrl, config });
 
   // Additional UI state for improved controls
@@ -288,14 +289,20 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const mergingProgress = mergingDetails?.progress || 0;
   const mergingError = mergingDetails?.error || null;
 
-  // Improved Play/Pause functionality with smart frame delivery check
+  // Improved Play/Pause functionality with smart prefetching
   useEffect(() => {
     if (playing && !meanMode) {
+      // Prefetch ahead based on playback speed
+      const prefetchCount = Math.max(5, Math.ceil(playbackSpeed * 3));
+      prefetchSurrounding(index, prefetchCount);
+
       const advanceFrame = () => {
-        // Only advance if not currently loading
-        if (!loading) {
-          setIndex(prev => (prev >= maxFrameCount ? 1 : prev + 1));
-        }
+        setIndex(prev => {
+          const next = prev >= maxFrameCount ? 1 : prev + 1;
+          // Prefetch frames ahead while playing
+          prefetchSurrounding(next, prefetchCount);
+          return next;
+        });
       };
 
       // Calculate interval based on playback speed (FPS)
@@ -308,7 +315,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     return () => {
       if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
-  }, [playing, maxFrameCount, playbackSpeed, loading, meanMode]);
+  }, [playing, maxFrameCount, playbackSpeed, meanMode, index, prefetchSurrounding]);
 
   // Stop playing on error
   useEffect(() => {

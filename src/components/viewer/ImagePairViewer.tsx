@@ -46,14 +46,17 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [rawVmax, setRawVmax] = useState(255);
   const [procVmin, setProcVmin] = useState(0);
   const [procVmax, setProcVmax] = useState(255);
-  
+
   // Auto-scale toggles (enabled by default)
   const [rawAutoScale, setRawAutoScale] = useState(true);
   const [procAutoScale, setProcAutoScale] = useState(true);
-  
+
   // Track if user has manually adjusted sliders for current image
   const [rawManuallyAdjusted, setRawManuallyAdjusted] = useState(false);
   const [procManuallyAdjusted, setProcManuallyAdjusted] = useState(false);
+
+  // Image format: jpeg for speed (default), png for precise viewing
+  const [imageFormat, setImageFormat] = useState<'jpeg' | 'png'>('jpeg');
 
   // Add shared zoom state
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -70,9 +73,9 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [batchSize, setBatchSize] = useState<string>('30');
 
   // --- Hooks for Logic ---
-  const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata } = 
-    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index);
-  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, fetchProcessed, updateFilter, moveFilter, downloadImage } = 
+  const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding } =
+    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat);
+  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, fetchProcessed, updateFilter, moveFilter, downloadImage } =
     useImageFilters(backendUrl);
 
   // Memoize camera options and initialize camera
@@ -215,76 +218,23 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   };
 
-  // Update slider values when auto-contrast values change and autoscale is enabled
+  // Update slider values when server-provided auto-contrast values change
   useEffect(() => {
-    if (rawAutoScale && !rawManuallyAdjusted && (autoVmin !== 0 || autoVmax !== 255)) {
+    if (rawAutoScale && !rawManuallyAdjusted) {
       setRawVmin(autoVmin);
       setRawVmax(autoVmax);
     }
   }, [autoVmin, autoVmax, rawAutoScale, rawManuallyAdjusted]);
 
-  // Auto-contrast for processed images when they load
+  // Auto-contrast for processed images - use defaults (server doesn't provide stats for processed)
   useEffect(() => {
-    const applyProcAutoContrast = async () => {
-      if (procAutoScale && !procManuallyAdjusted && (procImgA || procImgB)) {
-        try {
-          const activeImg = procToggle === 'A' ? procImgA : procImgB;
-          if (activeImg) {
-            const pngDataUrl = `data:image/png;base64,${activeImg}`;
-            
-            const img = new Image();
-            img.onload = () => {
-              try {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
-                
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-                
-                const imageData = ctx.getImageData(0, 0, img.width, img.height);
-                const pixels = imageData.data;
-                const grayscaleValues = [];
-                
-                for (let i = 0; i < pixels.length; i += 4) {
-                  const r = pixels[i];
-                  const g = pixels[i + 1];
-                  const b = pixels[i + 2];
-                  const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-                  grayscaleValues.push(gray);
-                }
-                
-                grayscaleValues.sort((a, b) => a - b);
-                
-                const p1Index = Math.floor(grayscaleValues.length * 0.01);
-                const p99Index = Math.floor(grayscaleValues.length * 0.99);
-                
-                const vmin = grayscaleValues[p1Index];
-                const vmax = grayscaleValues[p99Index];
-                
-                setProcVmin(vmin);
-                setProcVmax(vmax);
-              } catch (err) {
-                console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
-              }
-            };
-            img.src = pngDataUrl;
-          } else {
-            // No active image - reset to defaults
-            setProcVmin(0);
-            setProcVmax(255);
-          }
-        } catch (err) {
-          console.warn('[ImagePairViewer] Processed image auto-contrast failed:', err);
-          setProcVmin(0);
-          setProcVmax(255);
-        }
-      }
-    };
-
-    applyProcAutoContrast();
-  }, [procImgA, procImgB, procToggle, procAutoScale, procManuallyAdjusted]);
+    if (procAutoScale && !procManuallyAdjusted && (procImgA || procImgB)) {
+      // For processed images, use sensible defaults
+      // The server stats are for raw images; processed images typically need 0-255
+      setProcVmin(0);
+      setProcVmax(255);
+    }
+  }, [procImgA, procImgB, procAutoScale, procManuallyAdjusted]);
 
   // Save filters to config when they change (debounced to avoid excessive updates)
   useEffect(() => {
@@ -337,12 +287,20 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [loading, playing]);
 
-  // Play/Pause functionality with smart throttling
+  // Play/Pause functionality with smart prefetching
   useEffect(() => {
     if (playing) {
+      // Prefetch ahead based on playback speed
+      const prefetchCount = Math.max(5, Math.ceil(playbackSpeed * 3));
+      prefetchSurrounding(index, prefetchCount);
+
       const advanceFrame = () => {
-        // Always advance - throttling is handled by interval timing
-        setIndex(prev => (prev >= maxFrames ? 1 : prev + 1));
+        setIndex(prev => {
+          const next = prev >= maxFrames ? 1 : prev + 1;
+          // Prefetch frames ahead while playing
+          prefetchSurrounding(next, prefetchCount);
+          return next;
+        });
       };
 
       // Calculate interval based on playback speed (FPS)
@@ -355,7 +313,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     return () => {
       if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
-  }, [playing, maxFrames, playbackSpeed]);
+  }, [playing, maxFrames, playbackSpeed, index, prefetchSurrounding]);
 
   return (
     <Card>
@@ -441,6 +399,32 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        {/* Image Format Toggle */}
+        <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-md">
+          <Label className="text-sm font-medium">Image Format:</Label>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant={imageFormat === 'jpeg' ? 'default' : 'outline'}
+              onClick={() => setImageFormat('jpeg')}
+              title="JPEG: Faster loading, smaller file size (recommended for playback)"
+            >
+              JPEG (Fast)
+            </Button>
+            <Button
+              size="sm"
+              variant={imageFormat === 'png' ? 'default' : 'outline'}
+              onClick={() => setImageFormat('png')}
+              title="PNG: Lossless quality for precise viewing"
+            >
+              PNG (Precise)
+            </Button>
+          </div>
+          <span className="text-xs text-gray-500">
+            {imageFormat === 'jpeg' ? 'Optimized for speed' : 'Lossless quality'}
+          </span>
         </div>
 
         {/* --- FRAME NAVIGATION CONTROLS --- */}

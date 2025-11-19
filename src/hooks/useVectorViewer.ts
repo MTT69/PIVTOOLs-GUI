@@ -92,6 +92,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
 
+  // Prefetch buffer for smooth playback
+  const prefetchBufferRef = useRef<Map<string, { image: string; meta: any }>>(new Map());
+  const prefetchInProgressRef = useRef<Set<string>>(new Set());
+
   // Functions
   const fetchImage = useCallback(async () => {
     setLoading(true);
@@ -134,6 +138,72 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setLoading(false);
     }
   }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset]);
+
+  // Prefetch a single frame for smooth playback
+  const prefetchFrame = useCallback(async (frameIdx: number) => {
+    const cacheKey = `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}`;
+
+    // Skip if already in buffer or being fetched
+    if (prefetchBufferRef.current.has(cacheKey) || prefetchInProgressRef.current.has(cacheKey)) {
+      return;
+    }
+
+    prefetchInProgressRef.current.add(cacheKey);
+
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) return;
+
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("frame", String(frameIdx));
+      params.set("var", type);
+      params.set("cmap", cmap);
+      if (run && run > 0) params.set("run", String(run));
+      if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
+      if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
+      params.set("camera", String(camera));
+      params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      if (xOffset.trim() !== "") params.set("x_offset", xOffset);
+      if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+
+      const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (res.ok && json.image) {
+        prefetchBufferRef.current.set(cacheKey, {
+          image: json.image,
+          meta: json.meta
+        });
+
+        // Limit buffer size
+        if (prefetchBufferRef.current.size > 15) {
+          const keys = Array.from(prefetchBufferRef.current.keys());
+          for (let i = 0; i < keys.length - 10; i++) {
+            prefetchBufferRef.current.delete(keys[i]);
+          }
+        }
+      }
+    } catch (e) {
+      // Silent fail for prefetch
+    } finally {
+      prefetchInProgressRef.current.delete(cacheKey);
+    }
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset]);
+
+  // Prefetch surrounding frames for smooth playback
+  const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
+    for (let i = 1; i <= count; i++) {
+      prefetchFrame(currentIdx + i);
+    }
+    for (let i = 1; i <= 2; i++) {
+      if (currentIdx - i > 0) {
+        prefetchFrame(currentIdx - i);
+      }
+    }
+  }, [prefetchFrame]);
 
   const fetchStatVars = useCallback(async () => {
     setStatVarsLoading(true);
@@ -920,6 +990,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     appliedTransforms,
     setAppliedTransforms,
     clearTransforms,
-    effectiveDir,  // Added: Export for component use
+    effectiveDir,
+    prefetchSurrounding,
   };
 };

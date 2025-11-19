@@ -230,7 +230,6 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	const [vmax, setVmax] = useState(255);
 	const [autoScale, setAutoScale] = useState(true);
 	const [manuallyAdjusted, setManuallyAdjusted] = useState(false);
-	const [lastAutoContrastKey, setLastAutoContrastKey] = useState<string>('');
 
 	// Use masking config hook
 	const {
@@ -269,7 +268,8 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	}, [rectangularRight]);
 
 	// Use the centralized hook for fetching images
-	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index);
+	// Use PNG format for masking (lossless quality needed for precision work)
+	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'png');
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
 	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
@@ -278,7 +278,6 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	useEffect(() => {
 		if (autoScale) {
 			setManuallyAdjusted(false);
-			setLastAutoContrastKey(''); // Force re-calculation
 		}
 	}, [autoScale]);
 
@@ -287,84 +286,14 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		setManuallyAdjusted(false);
 	}, [basePathIdx, camera, index, frame]);
 
-	// Auto-contrast when image loads or changes
+	// Auto-contrast when server-provided stats change
 	useEffect(() => {
-		const currentKey = `${basePathIdx}-${camera}-${index}-${frame}`;
-		
-		// Only proceed if we have image data
-		if (!currentRaw && !currentImg) {
-			return;
-		}
-		
 		if (autoScale && !manuallyAdjusted) {
-			// Always apply auto-contrast if key changed or was reset
-			if (lastAutoContrastKey !== currentKey || lastAutoContrastKey === '') {
-				if (currentRaw) {
-					// Use raw data auto-contrast from useImagePair
-					if (autoVmin !== undefined && autoVmax !== undefined && (autoVmin !== 0 || autoVmax !== 255)) {
-						setVmin(autoVmin);
-						setVmax(autoVmax);
-						setLastAutoContrastKey(currentKey);
-					}
-				} else if (currentImg) {
-					// Analyze PNG for auto-contrast
-					const analyzePngContrast = async () => {
-						try {
-							const pngDataUrl = `data:image/png;base64,${currentImg}`;
-							const img = new Image();
-							img.onload = () => {
-								try {
-									const canvas = document.createElement('canvas');
-									const ctx = canvas.getContext('2d');
-									if (!ctx) return;
-									
-									canvas.width = img.width;
-									canvas.height = img.height;
-									ctx.drawImage(img, 0, 0);
-									
-									const imageData = ctx.getImageData(0, 0, img.width, img.height);
-									const pixels = imageData.data;
-									const grayscaleValues = [];
-									
-									for (let i = 0; i < pixels.length; i += 4) {
-										const r = pixels[i];
-										const g = pixels[i + 1];
-										const b = pixels[i + 2];
-										const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-										grayscaleValues.push(gray);
-									}
-									
-									grayscaleValues.sort((a, b) => a - b);
-									
-									const p1Index = Math.floor(grayscaleValues.length * 0.01);
-									const p99Index = Math.floor(grayscaleValues.length * 0.99);
-									
-									const vminAnalyzed = grayscaleValues[p1Index];
-									const vmaxAnalyzed = grayscaleValues[p99Index];
-									
-									setVmin(vminAnalyzed);
-									setVmax(vmaxAnalyzed);
-									setLastAutoContrastKey(currentKey);
-								} catch (err) {
-									console.warn('[Masking] PNG auto-contrast analysis failed:', err);
-									setVmin(0);
-									setVmax(255);
-									setLastAutoContrastKey(currentKey);
-								}
-							};
-							img.src = pngDataUrl;
-						} catch (err) {
-							console.warn('[Masking] PNG auto-contrast failed:', err);
-							setVmin(0);
-							setVmax(255);
-							setLastAutoContrastKey(currentKey);
-						}
-					};
-					analyzePngContrast();
-				}
-			}
+			// Use server-provided stats (no frontend calculation needed)
+			setVmin(autoVmin);
+			setVmax(autoVmax);
 		}
-	}, [currentImg, currentRaw, autoVmin, autoVmax, basePathIdx, camera, index, frame, lastAutoContrastKey, manuallyAdjusted, autoScale]);
+	}, [autoVmin, autoVmax, autoScale, manuallyAdjusted]);
 
 	return (
 		<div className="space-y-6">
