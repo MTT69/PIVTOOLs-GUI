@@ -1,7 +1,22 @@
-import { useState, useEffect } from 'react';
-import { RawImage, DType, decodeTypedArray, percentileFromRaw } from '@/lib/imageUtils'; // Assume utils are in a lib file
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { RawImage, DType, decodeTypedArray, percentileFromRaw } from '@/lib/imageUtils';
 
-export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: string, index: number) {
+// Prefetch buffer for smooth playback
+interface PrefetchedFrame {
+  index: number;
+  imgA: string | null;
+  imgB: string | null;
+  vmin: number;
+  vmax: number;
+}
+
+export function useImagePair(
+  backendUrl: string,
+  sourcePathIdx: number,
+  camera: string,
+  index: number,
+  imageFormat: 'jpeg' | 'png' = 'jpeg'
+) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imgA, setImgA] = useState<string | null>(null);
@@ -12,76 +27,113 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
   const [vmin, setVmin] = useState(0);
   const [vmax, setVmax] = useState(255);
 
-  // Helper function to analyze PNG pixel data for auto-contrast
-  const analyzePngContrast = async (pngDataUrl: string): Promise<{ vmin: number, vmax: number }> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          if (!ctx) throw new Error('Canvas context not available');
-          
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          
-          const imageData = ctx.getImageData(0, 0, img.width, img.height);
-          const pixels = imageData.data;
-          const grayscaleValues = [];
-          
-          // Convert RGBA to grayscale using luminance formula
-          for (let i = 0; i < pixels.length; i += 4) {
-            const r = pixels[i];
-            const g = pixels[i + 1];
-            const b = pixels[i + 2];
-            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-            grayscaleValues.push(gray);
-          }
-          
-          // Sort for percentile calculation
-          grayscaleValues.sort((a, b) => a - b);
-          
-          const p1Index = Math.floor(grayscaleValues.length * 0.01);
-          const p99Index = Math.floor(grayscaleValues.length * 0.99);
-          
-          const vmin = grayscaleValues[p1Index];
-          const vmax = grayscaleValues[p99Index];
-          
-          resolve({ vmin, vmax });
-        } catch (err) {
-          reject(err);
-        }
-      };
-      img.onerror = () => reject(new Error('Failed to load PNG for analysis'));
-      img.src = pngDataUrl;
-    });
-  };
+  // Prefetch buffer for smooth playback
+  const prefetchBufferRef = useRef<Map<string, PrefetchedFrame>>(new Map());
+  const prefetchInProgressRef = useRef<Set<string>>(new Set());
 
-  const fetchPair = async () => {
+  // Generate cache key for prefetch buffer
+  const getCacheKey = useCallback((idx: number) => {
+    return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}`;
+  }, [sourcePathIdx, camera, imageFormat]);
+
+  // Prefetch a single frame
+  const prefetchFrame = useCallback(async (idx: number) => {
+    const cacheKey = getCacheKey(idx);
+
+    // Skip if already in buffer or being fetched
+    if (prefetchBufferRef.current.has(cacheKey) || prefetchInProgressRef.current.has(cacheKey)) {
+      return;
+    }
+
+    prefetchInProgressRef.current.add(cacheKey);
+
+    try {
+      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
+      const res = await fetch(url);
+
+      if (!res.ok) {
+        prefetchInProgressRef.current.delete(cacheKey);
+        return;
+      }
+
+      const json = await res.json();
+
+      // Store in prefetch buffer
+      prefetchBufferRef.current.set(cacheKey, {
+        index: idx,
+        imgA: json.A || null,
+        imgB: json.B || null,
+        vmin: json.stats?.A?.vmin ?? 0,
+        vmax: json.stats?.A?.vmax ?? 255,
+      });
+
+      // Limit buffer size to prevent memory issues (keep last 20 frames)
+      if (prefetchBufferRef.current.size > 20) {
+        const keys = Array.from(prefetchBufferRef.current.keys());
+        // Remove oldest entries
+        for (let i = 0; i < keys.length - 15; i++) {
+          prefetchBufferRef.current.delete(keys[i]);
+        }
+      }
+    } catch (e) {
+      // Silent fail for prefetch
+    } finally {
+      prefetchInProgressRef.current.delete(cacheKey);
+    }
+  }, [backendUrl, camera, sourcePathIdx, imageFormat, getCacheKey]);
+
+  // Prefetch surrounding frames for smooth playback
+  const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
+    // Prefetch next N frames
+    for (let i = 1; i <= count; i++) {
+      prefetchFrame(currentIdx + i);
+    }
+    // Also prefetch a couple previous frames for reverse playback
+    for (let i = 1; i <= 2; i++) {
+      if (currentIdx - i > 0) {
+        prefetchFrame(currentIdx - i);
+      }
+    }
+  }, [prefetchFrame]);
+
+  const fetchPair = useCallback(async () => {
     if (!camera) return;
 
-    // Create unique key for this fetch request
     const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-    const fetchKey = `${sourcePathIdx}-${cameraNumber}-${index}`;
+    const cacheKey = getCacheKey(index);
+
+    // Check prefetch buffer first
+    const prefetched = prefetchBufferRef.current.get(cacheKey);
+    if (prefetched) {
+      setImgA(prefetched.imgA);
+      setImgB(prefetched.imgB);
+      setVmin(prefetched.vmin);
+      setVmax(prefetched.vmax);
+      setMetadata({ bitDepth: 8, dtype: 'uint8' });
+      setImgARaw(null);
+      setImgBRaw(null);
+      setError(null);
+
+      // Prefetch ahead for smooth playback
+      prefetchSurrounding(index);
+      return;
+    }
 
     setLoading(true);
     setError(null);
     setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
 
     try {
-      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
       const res = await fetch(url);
       const json = await res.json();
-      
-      // Create a unique key for this image load
-      const currentKey = `${sourcePathIdx}-${camera}-${index}`;
-      
+
       if (!res.ok) {
         throw new Error(json.error || `Image pair not found (frame ${index})`);
       }
 
-      // Check for raw image fields and meta
+      // Check for raw image fields and meta (for 16-bit support)
       if (json.meta?.width && (json.A_raw || json.B_raw)) {
         const meta = json.meta;
         setMetadata({ bitDepth: meta.bitDepth, dtype: meta.dtype, dims: { w: meta.width, h: meta.height } });
@@ -106,55 +158,46 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
         }
         setImgARaw(rawA);
         setImgBRaw(rawB);
-        // Auto-set contrast limits from raw data - always update for new image
-        if (rawA && rawA.data) {
+
+        // Use server-provided stats if available, otherwise calculate from raw
+        if (json.stats?.A) {
+          setVmin(json.stats.A.vmin);
+          setVmax(json.stats.A.vmax);
+        } else if (rawA && rawA.data) {
           const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
           const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
-          
           setVmin(newVmin);
           setVmax(newVmax);
         }
       } else {
-        // Fallback to PNGs
+        // Standard JPEG/PNG response
         setMetadata({ bitDepth: 8, dtype: 'uint8' });
         setImgA(json.A);
         setImgB(json.B);
-        
-        // Auto-contrast from PNG pixel analysis - always update for new image
-        try {
-          if (json.A) {
-            const pngDataUrl = `data:image/png;base64,${json.A}`;
-            const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
-            setVmin(analyzedVmin);
-            setVmax(analyzedVmax);
-          } else {
-            setVmin(0);
-            setVmax(255);
-          }
-        } catch (err) {
-          // Graceful fallback on analysis failure
-          if (typeof window !== 'undefined') {
-            console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
-          }
+
+        // Use server-provided stats (NO frontend calculation - this was the bottleneck!)
+        if (json.stats?.A) {
+          setVmin(json.stats.A.vmin);
+          setVmax(json.stats.A.vmax);
+        } else {
+          // Fallback to defaults - do NOT calculate in JS
           setVmin(0);
           setVmax(255);
         }
-        
-        // Debug: warn if raw fields missing
-        if (typeof window !== 'undefined') {
-          console.warn('[ImagePairViewer] No raw image data or meta in backend response.');
-        }
       }
+
+      // Prefetch surrounding frames for smooth playback
+      prefetchSurrounding(index);
 
     } catch (e: any) {
       setError(e.message);
       if (typeof window !== 'undefined') {
-        console.error('[ImagePairViewer] Error fetching image pair:', e);
+        console.error('[useImagePair] Error fetching image pair:', e);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding]);
 
   // Auto-fetch when parameters change with abort controller for cancellation
   useEffect(() => {
@@ -165,15 +208,35 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
       if (!camera) return;
 
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+      const cacheKey = getCacheKey(index);
+
+      // Check prefetch buffer first
+      const prefetched = prefetchBufferRef.current.get(cacheKey);
+      if (prefetched) {
+        setImgA(prefetched.imgA);
+        setImgB(prefetched.imgB);
+        setVmin(prefetched.vmin);
+        setVmax(prefetched.vmax);
+        setMetadata({ bitDepth: 8, dtype: 'uint8' });
+        setImgARaw(null);
+        setImgBRaw(null);
+        setError(null);
+        setLoading(false);
+
+        // Prefetch ahead
+        prefetchSurrounding(index);
+        return;
+      }
+
       setLoading(true);
       setError(null);
       setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
 
       try {
-        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}`;
+        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
         const res = await fetch(url, { signal: abortController.signal });
 
-        if (cancelled) return; // Don't update state if cancelled
+        if (cancelled) return;
 
         const json = await res.json();
 
@@ -206,46 +269,43 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
           }
           setImgARaw(rawA);
           setImgBRaw(rawB);
-          // Auto-set contrast limits from raw data
-          if (rawA && rawA.data) {
+
+          // Use server stats
+          if (json.stats?.A) {
+            setVmin(json.stats.A.vmin);
+            setVmax(json.stats.A.vmax);
+          } else if (rawA && rawA.data) {
             const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
             const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
             setVmin(newVmin);
             setVmax(newVmax);
           }
         } else {
-          // Fallback to PNGs
+          // Standard response
           setMetadata({ bitDepth: 8, dtype: 'uint8' });
           setImgA(json.A);
           setImgB(json.B);
 
-          // Auto-contrast from PNG pixel analysis
-          try {
-            if (json.A) {
-              const pngDataUrl = `data:image/png;base64,${json.A}`;
-              const { vmin: analyzedVmin, vmax: analyzedVmax } = await analyzePngContrast(pngDataUrl);
-              setVmin(analyzedVmin);
-              setVmax(analyzedVmax);
-            } else {
-              setVmin(0);
-              setVmax(255);
-            }
-          } catch (err) {
-            if (typeof window !== 'undefined') {
-              console.warn('[ImagePairViewer] PNG auto-contrast analysis failed, using default 0-255:', err);
-            }
+          // Use server-provided stats
+          if (json.stats?.A) {
+            setVmin(json.stats.A.vmin);
+            setVmax(json.stats.A.vmax);
+          } else {
             setVmin(0);
             setVmax(255);
           }
         }
+
+        // Prefetch surrounding frames
+        prefetchSurrounding(index);
+
       } catch (e: any) {
         if (e.name === 'AbortError') {
-          // Request was cancelled, ignore
           return;
         }
         setError(e.message);
         if (typeof window !== 'undefined') {
-          console.error('[ImagePairViewer] Error fetching image pair:', e);
+          console.error('[useImagePair] Error fetching image pair:', e);
         }
       } finally {
         if (!cancelled) {
@@ -260,7 +320,27 @@ export function useImagePair(backendUrl: string, sourcePathIdx: number, camera: 
       cancelled = true;
       abortController.abort();
     };
-  }, [backendUrl, sourcePathIdx, camera, index]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding]);
 
-  return { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin, setVmin, vmax, setVmax, reload: fetchPair };
+  // Clear prefetch buffer when source/camera changes
+  useEffect(() => {
+    prefetchBufferRef.current.clear();
+  }, [sourcePathIdx, camera]);
+
+  return {
+    loading,
+    error,
+    imgA,
+    imgB,
+    imgARaw,
+    imgBRaw,
+    metadata,
+    vmin,
+    setVmin,
+    vmax,
+    setVmax,
+    reload: fetchPair,
+    prefetchFrame,
+    prefetchSurrounding
+  };
 }
