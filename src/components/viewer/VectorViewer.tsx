@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 
@@ -155,6 +156,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     setPlaying,
     limitsLoading,
     meanMode,
+    setMeanMode,
     statsLoading,
     statsError,
     statVars,
@@ -353,23 +355,16 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium min-w-[100px]">Data Source:</label>
               <Select
-                value={meanMode ? "statistics" : (merged ? "merged" : (isUncalibrated ? "uncalibrated" : "single"))}
+                value={merged ? "merged" : (isUncalibrated ? "uncalibrated" : "single")}
                 onValueChange={v => {
-                  if (v === "statistics") {
-                    if (!meanMode) void toggleMeanMode();
-                    setMerged(false);
-                    setIsUncalibrated(false);
-                  } else if (v === "merged") {
+                  if (v === "merged") {
                     setMerged(true);
-                    if (meanMode) void toggleMeanMode();
                     setIsUncalibrated(false);
                   } else if (v === "uncalibrated") {
                     setIsUncalibrated(true);
                     setMerged(false);
-                    if (meanMode) void toggleMeanMode();
                   } else {
                     setMerged(false);
-                    if (meanMode) void toggleMeanMode();
                     setIsUncalibrated(false);
                   }
                 }}
@@ -381,16 +376,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   <SelectItem value="single">Single Camera (Calibrated)</SelectItem>
                   <SelectItem value="uncalibrated">Single Camera (Uncalibrated)</SelectItem>
                   {cameraOptions.length > 1 && <SelectItem value="merged">Merged Cameras</SelectItem>}
-                  <SelectItem value="statistics">Mean Statistics</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Camera Selection - Only show when not in statistics mode */}
-            {!meanMode && (
+            {/* Camera Selection - Only show when not merged */}
+            {!merged && (
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium min-w-[100px]">Camera:</label>
-                <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0 || merged}>
+                <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
                   <SelectTrigger className="flex-1">
                     <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
                   </SelectTrigger>
@@ -406,6 +400,21 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Select>
               </div>
             )}
+
+            {/* Show Statistics Toggle */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium min-w-[100px]">Show Statistics:</label>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-statistics"
+                  checked={meanMode}
+                  onCheckedChange={() => toggleMeanMode()}
+                />
+                <label htmlFor="show-statistics" className="text-sm text-gray-600">
+                  {meanMode ? "Enabled" : "Disabled"}
+                </label>
+              </div>
+            </div>
           </div>
 
           {/* Error Messages */}

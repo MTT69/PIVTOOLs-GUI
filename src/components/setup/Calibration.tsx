@@ -8,6 +8,7 @@ import { useCalibration } from '@/hooks/useCalibration';
 import { ScaleFactorCalibration } from './ScaleFactorCalibration';
 import { PinholeCalibration } from './PinholeCalibration';
 import { StereoCalibration } from './StereoCalibration';
+import { PolynomialCalibration } from './PolynomialCalibration';
 
 interface CalibrationProps {
   config: any;
@@ -40,6 +41,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
     { id: 'scale_factor', label: 'Scale Factor', component: ScaleFactorCalibration },
     { id: 'pinhole', label: 'Pinhole', component: PinholeCalibration },
     { id: 'stereo', label: 'Stereo', component: StereoCalibration },
+    { id: 'polynomial', label: 'Polynomial', component: PolynomialCalibration },
   ];
 
   return (
@@ -56,10 +58,11 @@ export const Calibration: React.FC<CalibrationProps> = ({
             <li><strong>Scale Factor:</strong> Calibrate physical dimensions and coordinate system</li>
             <li><strong>Pinhole:</strong> Calibrate individual camera intrinsic parameters</li>
             <li><strong>Stereo:</strong> Calibrate camera pairs for 3D reconstruction</li>
+            <li><strong>Polynomial:</strong> Calibrate using 3rd order polynomial coefficients</li>
           </ul>
 
           <Tabs value={currentTab} onValueChange={setCurrentTab}>
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>
                   {method.label}

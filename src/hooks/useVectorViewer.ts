@@ -268,11 +268,24 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       setHasRendered(true);
     } catch (e: any) {
-      setStatsError(e?.message ?? "Unknown error");
+      const msg = e?.message ?? "Unknown error";
+      // Filter out "Internal Server Error" if it's just a generic 500
+      if (msg.includes("Internal Server Error")) {
+        setStatsError("Statistics not found for this configuration.");
+      } else {
+        setStatsError(msg);
+      }
     } finally {
       setStatsLoading(false);
     }
   }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged]);
+
+  // Auto-fetch stat vars when configuration changes in mean mode
+  useEffect(() => {
+    if (meanMode && effectiveDir) {
+      void fetchStatVars();
+    }
+  }, [meanMode, effectiveDir, camera, merged, fetchStatVars]);
 
   const handleRender = useCallback(async () => {
     setHasRendered(true);
