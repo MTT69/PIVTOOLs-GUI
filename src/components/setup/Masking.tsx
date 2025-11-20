@@ -269,7 +269,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 
 	// Use the centralized hook for fetching images
 	// Use PNG format for masking (lossless quality needed for precision work)
-	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'png');
+	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'png', autoScale);
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
 	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;

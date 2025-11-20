@@ -74,7 +74,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding } =
-    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat);
+    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale);
   const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, fetchProcessed, updateFilter, moveFilter, downloadImage } =
     useImageFilters(backendUrl);
 
@@ -114,7 +114,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   // Preload first batch of images on mount or when camera/source/format changes
   // Use a ref to prevent multiple simultaneous preload requests
-  const preloadRef = useRef<{ camera: number; sourcePathIdx: number; imageFormat: string } | null>(null);
+  const preloadRef = useRef<{ camera: number; sourcePathIdx: number; imageFormat: string; autoLimits: boolean } | null>(null);
 
   useEffect(() => {
     const preloadImages = async () => {
@@ -123,11 +123,12 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
       // Prevent duplicate preload requests for the same camera/source/format combo
       if (preloadRef.current?.camera === camera &&
           preloadRef.current?.sourcePathIdx === sourcePathIdx &&
-          preloadRef.current?.imageFormat === imageFormat) {
+          preloadRef.current?.imageFormat === imageFormat &&
+          preloadRef.current?.autoLimits === rawAutoScale) {
         return;
       }
 
-      preloadRef.current = { camera, sourcePathIdx, imageFormat };
+      preloadRef.current = { camera, sourcePathIdx, imageFormat, autoLimits: rawAutoScale };
       const batchSize = config?.batches?.size || 30;
 
       try {
@@ -141,6 +142,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             count: batchSize,
             source_path_idx: sourcePathIdx,
             format: imageFormat,
+            auto_limits: rawAutoScale,
           }),
         });
         console.log('Preload request sent');
@@ -150,7 +152,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     };
 
     preloadImages();
-  }, [backendUrl, camera, sourcePathIdx, config, imageFormat]);
+  }, [backendUrl, camera, sourcePathIdx, config, imageFormat, rawAutoScale]);
 
   // Auto-fetch processed images when frame/camera/source changes
   useEffect(() => {

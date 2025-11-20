@@ -19,7 +19,8 @@ export function useImagePair(
   sourcePathIdx: number,
   camera: string,
   index: number,
-  imageFormat: 'jpeg' | 'png' = 'jpeg'
+  imageFormat: 'jpeg' | 'png' = 'jpeg',
+  autoLimits: boolean = false
 ) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,8 +44,8 @@ export function useImagePair(
 
   // Generate cache key for prefetch buffer
   const getCacheKey = useCallback((idx: number) => {
-    return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}`;
-  }, [sourcePathIdx, camera, imageFormat]);
+    return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}-${autoLimits}`;
+  }, [sourcePathIdx, camera, imageFormat, autoLimits]);
 
   // Cancel all in-progress prefetch requests
   const cancelPrefetches = useCallback(() => {
@@ -93,7 +94,7 @@ export function useImagePair(
 
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
       const res = await fetch(url, { signal });
 
       if (!res.ok) {
@@ -178,7 +179,7 @@ export function useImagePair(
     setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
 
     try {
-      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
       const res = await fetch(url);
       const json = await res.json();
 
@@ -292,7 +293,7 @@ export function useImagePair(
       setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
 
       try {
-        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
+        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
         const res = await fetch(url, { signal: abortController.signal });
 
         if (cancelled) return;
@@ -379,13 +380,13 @@ export function useImagePair(
       cancelled = true;
       abortController.abort();
     };
-  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding, cancelPrefetches]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches]);
 
   // Clear prefetch buffer and cancel prefetches when source/camera/format changes
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-  }, [sourcePathIdx, camera, imageFormat, cancelPrefetches]);
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches]);
 
   return {
     loading,
