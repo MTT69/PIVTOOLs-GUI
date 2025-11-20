@@ -112,24 +112,26 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [config?.filters, setFilters]);
 
-  // Preload first batch of images on mount or when camera/source changes
+  // Preload first batch of images on mount or when camera/source/format changes
   // Use a ref to prevent multiple simultaneous preload requests
-  const preloadRef = useRef<{ camera: number; sourcePathIdx: number } | null>(null);
+  const preloadRef = useRef<{ camera: number; sourcePathIdx: number; imageFormat: string } | null>(null);
 
   useEffect(() => {
     const preloadImages = async () => {
       if (!config || !camera) return;
 
-      // Prevent duplicate preload requests for the same camera/source combo
-      if (preloadRef.current?.camera === camera && preloadRef.current?.sourcePathIdx === sourcePathIdx) {
+      // Prevent duplicate preload requests for the same camera/source/format combo
+      if (preloadRef.current?.camera === camera &&
+          preloadRef.current?.sourcePathIdx === sourcePathIdx &&
+          preloadRef.current?.imageFormat === imageFormat) {
         return;
       }
 
-      preloadRef.current = { camera, sourcePathIdx };
+      preloadRef.current = { camera, sourcePathIdx, imageFormat };
       const batchSize = config?.batches?.size || 30;
 
       try {
-        console.log(`Preloading ${batchSize} images for camera ${camera}, source ${sourcePathIdx}`);
+        console.log(`Preloading ${batchSize} ${imageFormat} images for camera ${camera}, source ${sourcePathIdx}`);
         await fetch(`${backendUrl}/preload_images`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -138,6 +140,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             start_idx: 1,
             count: batchSize,
             source_path_idx: sourcePathIdx,
+            format: imageFormat,
           }),
         });
         console.log('Preload request sent');
@@ -147,7 +150,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     };
 
     preloadImages();
-  }, [backendUrl, camera, sourcePathIdx, config]);
+  }, [backendUrl, camera, sourcePathIdx, config, imageFormat]);
 
   // Auto-fetch processed images when frame/camera/source changes
   useEffect(() => {

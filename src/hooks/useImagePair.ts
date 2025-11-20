@@ -10,6 +10,10 @@ interface PrefetchedFrame {
   vmax: number;
 }
 
+// Constants for cache management
+const MAX_CACHE_SIZE = 30;
+const PREFETCH_WINDOW = 10; // Frames to load around current position
+
 export function useImagePair(
   backendUrl: string,
   sourcePathIdx: number,
@@ -31,13 +35,53 @@ export function useImagePair(
   const prefetchBufferRef = useRef<Map<string, PrefetchedFrame>>(new Map());
   const prefetchInProgressRef = useRef<Set<string>>(new Set());
 
+  // AbortController for cancelling prefetch requests
+  const prefetchAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Track the current "target" index to cancel prefetches when it changes
+  const currentTargetIndexRef = useRef<number>(index);
+
   // Generate cache key for prefetch buffer
   const getCacheKey = useCallback((idx: number) => {
     return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}`;
   }, [sourcePathIdx, camera, imageFormat]);
 
-  // Prefetch a single frame
-  const prefetchFrame = useCallback(async (idx: number) => {
+  // Cancel all in-progress prefetch requests
+  const cancelPrefetches = useCallback(() => {
+    if (prefetchAbortControllerRef.current) {
+      prefetchAbortControllerRef.current.abort();
+      prefetchAbortControllerRef.current = null;
+    }
+    prefetchInProgressRef.current.clear();
+  }, []);
+
+  // Clean cache to keep only frames around target index
+  const cleanCache = useCallback((targetIdx: number) => {
+    const buffer = prefetchBufferRef.current;
+    if (buffer.size <= MAX_CACHE_SIZE) return;
+
+    // Get all cached frame indices
+    const entries = Array.from(buffer.entries());
+
+    // Sort by distance from target
+    entries.sort((a, b) => {
+      const distA = Math.abs(a[1].index - targetIdx);
+      const distB = Math.abs(b[1].index - targetIdx);
+      return distA - distB;
+    });
+
+    // Keep only the closest frames up to MAX_CACHE_SIZE
+    const toKeep = new Set(entries.slice(0, MAX_CACHE_SIZE).map(e => e[0]));
+
+    for (const key of buffer.keys()) {
+      if (!toKeep.has(key)) {
+        buffer.delete(key);
+      }
+    }
+  }, []);
+
+  // Prefetch a single frame with cancellation support
+  const prefetchFrame = useCallback(async (idx: number, signal?: AbortSignal) => {
     const cacheKey = getCacheKey(idx);
 
     // Skip if already in buffer or being fetched
@@ -50,7 +94,7 @@ export function useImagePair(
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
 
       if (!res.ok) {
         prefetchInProgressRef.current.delete(cacheKey);
@@ -68,34 +112,43 @@ export function useImagePair(
         vmax: json.stats?.A?.vmax ?? 255,
       });
 
-      // Limit buffer size to prevent memory issues (keep last 20 frames)
-      if (prefetchBufferRef.current.size > 20) {
-        const keys = Array.from(prefetchBufferRef.current.keys());
-        // Remove oldest entries
-        for (let i = 0; i < keys.length - 15; i++) {
-          prefetchBufferRef.current.delete(keys[i]);
-        }
+      // Clean cache if it's getting too large
+      cleanCache(currentTargetIndexRef.current);
+    } catch (e: any) {
+      // Silent fail for prefetch (including AbortError)
+      if (e.name !== 'AbortError') {
+        // Only log non-abort errors
       }
-    } catch (e) {
-      // Silent fail for prefetch
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [backendUrl, camera, sourcePathIdx, imageFormat, getCacheKey]);
+  }, [backendUrl, camera, sourcePathIdx, imageFormat, getCacheKey, cleanCache]);
 
   // Prefetch surrounding frames for smooth playback
-  const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
-    // Prefetch next N frames
+  const prefetchSurrounding = useCallback((currentIdx: number, count: number = PREFETCH_WINDOW) => {
+    // Cancel any previous prefetch operations
+    cancelPrefetches();
+
+    // Update the target index
+    currentTargetIndexRef.current = currentIdx;
+
+    // Create new AbortController for this batch of prefetches
+    const abortController = new AbortController();
+    prefetchAbortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
+    // Prefetch next N frames (prioritize forward direction)
     for (let i = 1; i <= count; i++) {
-      prefetchFrame(currentIdx + i);
+      prefetchFrame(currentIdx + i, signal);
     }
-    // Also prefetch a couple previous frames for reverse playback
-    for (let i = 1; i <= 2; i++) {
+    // Also prefetch a few previous frames for reverse playback
+    const backwardCount = Math.min(count, 3);
+    for (let i = 1; i <= backwardCount; i++) {
       if (currentIdx - i > 0) {
-        prefetchFrame(currentIdx - i);
+        prefetchFrame(currentIdx - i, signal);
       }
     }
-  }, [prefetchFrame]);
+  }, [prefetchFrame, cancelPrefetches]);
 
   const fetchPair = useCallback(async () => {
     if (!camera) return;
@@ -203,6 +256,12 @@ export function useImagePair(
   useEffect(() => {
     const abortController = new AbortController();
     let cancelled = false;
+
+    // Cancel previous prefetches when frame changes
+    cancelPrefetches();
+
+    // Update target index
+    currentTargetIndexRef.current = index;
 
     const fetchPairWithCancel = async () => {
       if (!camera) return;
@@ -320,12 +379,13 @@ export function useImagePair(
       cancelled = true;
       abortController.abort();
     };
-  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding, cancelPrefetches]);
 
-  // Clear prefetch buffer when source/camera changes
+  // Clear prefetch buffer and cancel prefetches when source/camera/format changes
   useEffect(() => {
+    cancelPrefetches();
     prefetchBufferRef.current.clear();
-  }, [sourcePathIdx, camera]);
+  }, [sourcePathIdx, camera, imageFormat, cancelPrefetches]);
 
   return {
     loading,
@@ -341,6 +401,7 @@ export function useImagePair(
     setVmax,
     reload: fetchPair,
     prefetchFrame,
-    prefetchSurrounding
+    prefetchSurrounding,
+    cancelPrefetches
   };
 }
