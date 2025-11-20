@@ -55,7 +55,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   imageCount = 1000,
 }) => {
   const [coefficients, setCoefficients] = useState<Record<string, { dx: Record<string, string>, dy: Record<string, string> }>>({});
-  const [cameraParams, setCameraParams] = useState<Record<number, { s_o: number, t_o: number, nx: number, ny: number }>>({});
+  const [cameraParams, setCameraParams] = useState<Record<number, { s_o: string, t_o: string, nx: string, ny: string }>>({});
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [calibrating, setCalibrating] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -66,6 +66,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   useEffect(() => {
     const polyConfig = config.calibration?.polynomial || {};
     setCoefficients(polyConfig.coefficients || {});
+    setCameraParams(polyConfig.cameraParams || {});
     setSourcePathIdx(polyConfig.source_path_idx ?? 0);
   }, [config]);
 
@@ -82,7 +83,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         
         if (data.status === 'success' && data.cameras) {
           const newCoefficients: Record<string, { dx: Record<string, string>, dy: Record<string, string> }> = {};
-          const newCameraParams: Record<number, { s_o: number, t_o: number, nx: number, ny: number }> = {};
+          const newCameraParams: Record<number, { s_o: string, t_o: string, nx: string, ny: string }> = {};
           
           Object.entries(data.cameras).forEach(([camIdStr, camData]: [string, any]) => {
              const match = camIdStr.match(/\d+/);
@@ -94,10 +95,10 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
              // Extract params
              if (camData.origin && camData.normalisation) {
                  newCameraParams[camNum] = {
-                     s_o: camData.origin.s_o,
-                     t_o: camData.origin.t_o,
-                     nx: camData.normalisation.nx,
-                     ny: camData.normalisation.ny
+                     s_o: String(camData.origin.s_o),
+                     t_o: String(camData.origin.t_o),
+                     nx: String(camData.normalisation.nx),
+                     ny: String(camData.normalisation.ny)
                  };
              }
              
@@ -125,7 +126,25 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
           });
           
           if (Object.keys(newCameraParams).length > 0) {
-              setCameraParams(newCameraParams);
+              setCameraParams(prev => {
+                  let hasChanges = false;
+                  for (const [camId, params] of Object.entries(newCameraParams)) {
+                      if (!prev[Number(camId)]) {
+                          hasChanges = true;
+                          break;
+                      }
+                      if (JSON.stringify(prev[Number(camId)]) !== JSON.stringify(params)) {
+                          hasChanges = true;
+                          break;
+                      }
+                  }
+                  if (hasChanges) {
+                      const updated = { ...prev, ...newCameraParams };
+                      updateConfig(["calibration", "polynomial", "cameraParams"], updated);
+                      return updated;
+                  }
+                  return prev;
+              });
           }
           
           if (Object.keys(newCoefficients).length > 0) {
@@ -172,6 +191,17 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     
     // Update config
     updateConfig(["calibration", "polynomial", "coefficients"], newCoefficients);
+  };
+
+  // Handle param change
+  const handleParamChange = (camId: number, field: keyof { s_o: string, t_o: string, nx: string, ny: string }, value: string) => {
+    setCameraParams(prev => {
+        const currentCam = prev[camId] || { s_o: "", t_o: "", nx: "", ny: "" };
+        const updatedCam = { ...currentCam, [field]: value };
+        const updated = { ...prev, [camId]: updatedCam };
+        updateConfig(["calibration", "polynomial", "cameraParams"], updated);
+        return updated;
+    });
   };
 
   // Check if all cameras have coefficients
@@ -346,22 +376,50 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
               <Label className="text-base font-semibold">Camera {camId} Coefficients</Label>
               
               {/* Equations Display */}
-              {cameraParams[camId] && (
-                  <div className="bg-slate-50 p-4 rounded border mb-4 font-mono text-sm space-y-2">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                              <div className="font-semibold text-muted-foreground mb-1">Normalized Coordinates:</div>
-                              <div>s(x&apos;) = 2 · (x&apos; - {cameraParams[camId].s_o.toFixed(4)}) / {cameraParams[camId].nx}</div>
-                              <div>t(y&apos;) = 2 · (y&apos; - {cameraParams[camId].t_o.toFixed(4)}) / {cameraParams[camId].ny}</div>
+              <div className="bg-slate-50 p-4 rounded border mb-4 font-mono text-sm space-y-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                          <div className="font-semibold text-muted-foreground mb-1">Normalized Coordinates:</div>
+                          <div className="flex items-center gap-1 mb-1">
+                              <span>s(x&apos;) = 2 · (x&apos; - </span>
+                              <Input 
+                                className="h-6 w-20 px-1 text-center bg-white" 
+                                placeholder="s_o"
+                                value={cameraParams[camId]?.s_o || ""}
+                                onChange={(e) => handleParamChange(camId, 's_o', e.target.value)}
+                              />
+                              <span>) / </span>
+                              <Input 
+                                className="h-6 w-20 px-1 text-center bg-white" 
+                                placeholder="n_x"
+                                value={cameraParams[camId]?.nx || ""}
+                                onChange={(e) => handleParamChange(camId, 'nx', e.target.value)}
+                              />
                           </div>
-                          <div>
-                              <div className="font-semibold text-muted-foreground mb-1">World Coordinates:</div>
-                              <div>x = x&apos; - dx(s(x&apos;), t(y&apos;))</div>
-                              <div>y = y&apos; - dy(s(x&apos;), t(y&apos;))</div>
+                          <div className="flex items-center gap-1">
+                              <span>t(y&apos;) = 2 · (y&apos; - </span>
+                              <Input 
+                                className="h-6 w-20 px-1 text-center bg-white" 
+                                placeholder="t_o"
+                                value={cameraParams[camId]?.t_o || ""}
+                                onChange={(e) => handleParamChange(camId, 't_o', e.target.value)}
+                              />
+                              <span>) / </span>
+                              <Input 
+                                className="h-6 w-20 px-1 text-center bg-white" 
+                                placeholder="n_y"
+                                value={cameraParams[camId]?.ny || ""}
+                                onChange={(e) => handleParamChange(camId, 'ny', e.target.value)}
+                              />
                           </div>
                       </div>
+                      <div>
+                          <div className="font-semibold text-muted-foreground mb-1">World Coordinates:</div>
+                          <div className="h-6 flex items-center">x = x&apos; - dx(s(x&apos;), t(y&apos;))</div>
+                          <div className="h-6 flex items-center">y = y&apos; - dy(s(x&apos;), t(y&apos;))</div>
+                      </div>
                   </div>
-              )}
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* DX Section */}

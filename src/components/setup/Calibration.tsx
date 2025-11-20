@@ -40,8 +40,8 @@ export const Calibration: React.FC<CalibrationProps> = ({
   const calibrationMethods = [
     { id: 'scale_factor', label: 'Scale Factor', component: ScaleFactorCalibration },
     { id: 'pinhole', label: 'Pinhole', component: PinholeCalibration },
-    { id: 'stereo', label: 'Stereo', component: StereoCalibration },
     { id: 'polynomial', label: 'Polynomial', component: PolynomialCalibration },
+    { id: 'stereo', label: 'Stereo', component: StereoCalibration },
   ];
 
   return (
