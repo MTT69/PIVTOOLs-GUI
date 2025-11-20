@@ -23,11 +23,13 @@ export function useImageFilters(backendUrl: string) {
   const [procLoading, setProcLoading] = useState(false);
   const [procImgA, setProcImgA] = useState<string | null>(null);
   const [procImgB, setProcImgB] = useState<string | null>(null);
+  const [procStats, setProcStats] = useState<{ A: { vmin: number, vmax: number }, B: { vmin: number, vmax: number } } | null>(null);
 
-  const runProcessing = useCallback(async (camera: string, index: number, sourcePathIdx: number) => {
+  const runProcessing = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
     setProcLoading(true);
     setProcImgA(null);
     setProcImgB(null);
+    setProcStats(null);
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       
@@ -78,6 +80,7 @@ export function useImageFilters(backendUrl: string) {
           frame: String(index),
           camera: String(cameraNumber),
           source_path_idx: String(sourcePathIdx),
+          auto_limits: String(autoLimits),
         });
         const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
         const json = await res.json();
@@ -85,6 +88,7 @@ export function useImageFilters(backendUrl: string) {
         
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
+        if (json.stats) setProcStats(json.stats);
       } else {
         // Spatial filters only - process frame-by-frame on demand
         const res = await fetch(`${backendUrl}/filter_single_frame`, {
@@ -95,6 +99,7 @@ export function useImageFilters(backendUrl: string) {
             frame_idx: index,
             filters,
             source_path_idx: sourcePathIdx,
+            auto_limits: autoLimits,
           }),
         });
         
@@ -103,6 +108,7 @@ export function useImageFilters(backendUrl: string) {
         
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
+        if (json.stats) setProcStats(json.stats);
       }
     } catch (e: any) {
       console.error("Processing failed:", e);
@@ -112,10 +118,11 @@ export function useImageFilters(backendUrl: string) {
   }, [backendUrl, filters]);
 
   // Auto-processing function that doesn't set loading state
-  const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number) => {
+  const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
     // Clear processed images while processing
     setProcImgA(null);
     setProcImgB(null);
+    setProcStats(null);
     
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
@@ -130,6 +137,7 @@ export function useImageFilters(backendUrl: string) {
           frame: String(index),
           camera: String(cameraNumber),
           source_path_idx: String(sourcePathIdx),
+          auto_limits: String(autoLimits),
         });
         const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
         
@@ -137,6 +145,7 @@ export function useImageFilters(backendUrl: string) {
           const json = await res.json();
           setProcImgA(json.A ?? null);
           setProcImgB(json.B ?? null);
+          if (json.stats) setProcStats(json.stats);
         } else {
           // No pre-processed images available, clear display
           setProcImgA(null);
@@ -152,6 +161,7 @@ export function useImageFilters(backendUrl: string) {
             frame_idx: index,
             filters,
             source_path_idx: sourcePathIdx,
+            auto_limits: autoLimits,
           }),
         });
         
@@ -160,6 +170,7 @@ export function useImageFilters(backendUrl: string) {
         
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
+        if (json.stats) setProcStats(json.stats);
       }
     } catch (e: any) {
       console.error("Auto-processing failed:", e);
@@ -207,7 +218,7 @@ export function useImageFilters(backendUrl: string) {
   };
   
   // Improved fetchProcessed function
-  const fetchProcessed = useCallback(async (camera: string, index: number, sourcePathIdx: number) => {
+  const fetchProcessed = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const params = new URLSearchParams({
@@ -215,6 +226,7 @@ export function useImageFilters(backendUrl: string) {
         frame: String(index),
         camera: String(cameraNumber),
         source_path_idx: String(sourcePathIdx),
+        auto_limits: String(autoLimits),
       });
       
       const response = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
@@ -223,15 +235,18 @@ export function useImageFilters(backendUrl: string) {
         const data = await response.json();
         setProcImgA(data.A ?? null);
         setProcImgB(data.B ?? null);
+        if (data.stats) setProcStats(data.stats);
       } else {
         // No processed images available for this frame - clear the display
         setProcImgA(null);
         setProcImgB(null);
+        setProcStats(null);
       }
     } catch (error) {
       // Handle error by clearing processed images
       setProcImgA(null);
       setProcImgB(null);
+      setProcStats(null);
     }
   }, [backendUrl]);
 
@@ -293,6 +308,7 @@ export function useImageFilters(backendUrl: string) {
     procLoading,
     procImgA,
     procImgB,
+    procStats,
     fetchProcessed,
     downloadImage,
   };

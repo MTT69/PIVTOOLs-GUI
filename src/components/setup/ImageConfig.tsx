@@ -27,6 +27,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [savingMeta, setSavingMeta] = useState<string>("");
   const [isMacOS, setIsMacOS] = useState(false);
   const [hasUnsupportedFormat, setHasUnsupportedFormat] = useState(false);
+  const [zeroBasedIndexing, setZeroBasedIndexing] = useState<boolean>(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -85,6 +87,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     setNumCameras(String(cameraCount));
 
     setTimeResolved(!!images.time_resolved);
+    setZeroBasedIndexing(!!images.zero_based_indexing);
+    setCameraSubfolders(paths.camera_subfolders || []);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
     const rawFmt = images.image_format;
@@ -106,6 +110,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     nextNumImages: string,
     nextNumCameras: string,
     nextTimeResolved: boolean,
+    nextZeroBasedIndexing: boolean,
+    nextCameraSubfolders: string[],
     nextRawPatterns: string[],
     nextVectorPattern: string,
   ) => {
@@ -114,11 +120,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       images: {
         num_images: nextNumImages === "" ? null : Number(nextNumImages),
         time_resolved: nextTimeResolved,
+        zero_based_indexing: nextZeroBasedIndexing,
         image_format: nextTimeResolved ? nextRawPatterns[0] : nextRawPatterns,
         vector_format: [nextVectorPattern],
       },
       paths: {
         camera_count: Number(nextNumCameras),
+        camera_subfolders: nextCameraSubfolders,
       },
     };
 
@@ -157,7 +165,21 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       setRawPatterns(newPatterns);
     }
     // Save with the new patterns, not stale rawPatterns
-    saveConfig(numImages, numCameras, isTimeResolved, newPatterns, vectorPattern);
+    saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+  };
+
+  const handleCameraSubfolderChange = (index: number, value: string) => {
+    const newSubfolders = [...cameraSubfolders];
+    // Ensure array is long enough
+    while (newSubfolders.length <= index) {
+      newSubfolders.push("");
+    }
+    newSubfolders[index] = value;
+    setCameraSubfolders(newSubfolders);
+  };
+
+  const saveCameraSubfolders = () => {
+    saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
   };
 
   // Removed - validation handled by parent hook
@@ -203,7 +225,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     min="0"
                     value={numImages}
                     onChange={e => setNumImages(e.target.value)}
-                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern)}
+                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                   />
                 </div>
                 <div>
@@ -214,20 +236,58 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     min="1"
                     value={numCameras}
                     onChange={e => setNumCameras(e.target.value.replace(/[^0-9]/g, ''))}
-                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern)}
+                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     Total number of cameras in your setup
                   </p>
                 </div>
               </div>
-              <div className="mt-4 flex items-center gap-2">
-                <Switch
-                  id="time_resolved"
-                  checked={timeResolved}
-                  onCheckedChange={handleToggleTimeResolved}
-                />
-                <Label htmlFor="time_resolved">Time Resolved (single image pattern)</Label>
+              
+              {Number(numCameras) > 1 && (
+                <div className="mt-4">
+                  <Label>Camera Subfolders</Label>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    {Array.from({ length: Number(numCameras) }).map((_, i) => (
+                      <div key={i}>
+                        <Label htmlFor={`cam_folder_${i}`} className="text-xs">Camera {i + 1}</Label>
+                        <Input
+                          id={`cam_folder_${i}`}
+                          placeholder={`Cam${i + 1}`}
+                          value={cameraSubfolders[i] || ""}
+                          onChange={(e) => handleCameraSubfolderChange(i, e.target.value)}
+                          onBlur={saveCameraSubfolders}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Leave empty to use default "CamN" folders.
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="time_resolved"
+                    checked={timeResolved}
+                    onCheckedChange={handleToggleTimeResolved}
+                  />
+                  <Label htmlFor="time_resolved">Time Resolved (single image pattern)</Label>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="zero_based"
+                    checked={zeroBasedIndexing}
+                    onCheckedChange={(checked) => {
+                      setZeroBasedIndexing(checked);
+                      saveConfig(numImages, numCameras, timeResolved, checked, cameraSubfolders, rawPatterns, vectorPattern);
+                    }}
+                  />
+                  <Label htmlFor="zero_based">Zero-based Indexing (start at 0)</Label>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -264,7 +324,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                             setRawPatterns(nextPatterns);
                           }}
                           onBlur={() => {
-                            saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern);
+                            saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
                           }}
                         />
                         {!timeResolved && rawPatterns.length > 1 && (
@@ -274,7 +334,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                             onClick={() => {
                               const nextPatterns = rawPatterns.filter((_, idx) => idx !== i);
                               setRawPatterns(nextPatterns);
-                              saveConfig(numImages, numCameras, timeResolved, nextPatterns, vectorPattern);
+                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
                             }}
                           >
                             <Minus className="h-4 w-4" />
@@ -310,7 +370,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   className="font-mono mt-2"
                   value={vectorPattern}
                   onChange={e => setVectorPattern(e.target.value)}
-                  onBlur={() => saveConfig(numImages, numCameras, timeResolved, rawPatterns, vectorPattern)}
+                  onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   Output filename pattern for processed vector fields

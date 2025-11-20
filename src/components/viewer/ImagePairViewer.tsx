@@ -75,7 +75,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding } =
     useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale);
-  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, fetchProcessed, updateFilter, moveFilter, downloadImage } =
+  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage } =
     useImageFilters(backendUrl);
 
   // Memoize camera options and initialize camera
@@ -158,7 +158,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   useEffect(() => {
     const fetchProcessedForCurrentFrame = async () => {
       if (filters.length > 0) {
-        await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx);
+        await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx, procAutoScale);
       } else {
         // Clear processed images if no filters are applied
         // This is handled in useImageFilters by setting procImgA and procImgB to null
@@ -166,7 +166,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     };
 
     fetchProcessedForCurrentFrame();
-  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length]);
+  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length, procAutoScale]);
 
   // Reset manual adjustment flags when auto-scale is re-enabled
   useEffect(() => {
@@ -231,15 +231,25 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [autoVmin, autoVmax, rawAutoScale, rawManuallyAdjusted]);
 
-  // Auto-contrast for processed images - use defaults (server doesn't provide stats for processed)
+  // Auto-contrast for processed images
   useEffect(() => {
-    if (procAutoScale && !procManuallyAdjusted && (procImgA || procImgB)) {
-      // For processed images, use sensible defaults
-      // The server stats are for raw images; processed images typically need 0-255
-      setProcVmin(0);
-      setProcVmax(255);
+    if (procAutoScale && !procManuallyAdjusted) {
+      if (procStats) {
+        // Use server stats if available
+        if (procToggle === 'A' && procStats.A) {
+          setProcVmin(procStats.A.vmin);
+          setProcVmax(procStats.A.vmax);
+        } else if (procToggle === 'B' && procStats.B) {
+          setProcVmin(procStats.B.vmin);
+          setProcVmax(procStats.B.vmax);
+        }
+      } else if (procImgA || procImgB) {
+        // Fallback to 0-255 if no stats (existing logic)
+        setProcVmin(0);
+        setProcVmax(255);
+      }
     }
-  }, [procImgA, procImgB, procAutoScale, procManuallyAdjusted]);
+  }, [procStats, procImgA, procImgB, procAutoScale, procManuallyAdjusted, procToggle]);
 
   // Save filters to config when they change (debounced to avoid excessive updates)
   useEffect(() => {
@@ -368,7 +378,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 />
               ))}
             </div>
-            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx)} disabled={procLoading || filters.length === 0}>
+            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, procAutoScale)} disabled={procLoading || filters.length === 0}>
               {procLoading ? "Processing..." : "Test Filters"}
             </Button>
         </div>
