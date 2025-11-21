@@ -663,9 +663,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const res = await fetch(`${backendUrl}/config`);
         if (!res.ok) return;
         const json = await res.json();
-        const backendNumImages = json.images?.num_images;
-        if (Number.isFinite(backendNumImages) && backendNumImages > 0) {
-          setMaxFrameCount(backendNumImages);
+        const backendNumFramePairs = json.images?.num_frame_pairs;
+        if (Number.isFinite(backendNumFramePairs) && backendNumFramePairs > 0) {
+          setMaxFrameCount(backendNumFramePairs);
         }
       } catch (err) {
         console.error("Error fetching config for frame count:", err);

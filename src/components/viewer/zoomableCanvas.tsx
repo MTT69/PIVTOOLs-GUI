@@ -14,13 +14,14 @@ interface ZoomableCanvasProps {
   title: string;
   useGrid?: boolean;
   gridSize?: number;
+  gridThickness?: number;
   zoomLevel?: number;
   panX?: number;
   panY?: number;
   onZoomChange?: (zoom: number, panX: number, panY: number) => void;
 }
 
-export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, title, useGrid, gridSize = 16, zoomLevel, panX, panY, onZoomChange }: ZoomableCanvasProps) {
+export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, title, useGrid, gridSize = 16, gridThickness = 1, zoomLevel, panX, panY, onZoomChange }: ZoomableCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
@@ -190,8 +191,8 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
             </div>
             {useGrid && <div className="absolute inset-0 pointer-events-none" style={{
               backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
-              backgroundImage: `linear-gradient(to right, rgba(0,150,255,0.2) 1px, transparent 1px),
-                                linear-gradient(to bottom, rgba(0,150,255,0.2) 1px, transparent 1px)`
+              backgroundImage: `linear-gradient(to right, rgba(255,0,0,0.3) ${gridThickness}px, transparent ${gridThickness}px),
+                                linear-gradient(to bottom, rgba(255,0,0,0.3) ${gridThickness}px, transparent ${gridThickness}px)`
             }} />}
             {selectionRect && <div className="absolute pointer-events-none border-2 border-dashed border-white bg-blue-500/20" style={{
               left: selectionRect.x, top: selectionRect.y, width: selectionRect.w, height: selectionRect.h

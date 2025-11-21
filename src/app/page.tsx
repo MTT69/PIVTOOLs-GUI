@@ -18,6 +18,8 @@ import {
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
 import PathsConfig from '@/components/setup/PathsConfig';
 import POD from '@/components/setup/POD';
+import ImagePairViewer from '@/components/viewer/ImagePairViewer';
+import RunPIV from '@/components/setup/RunPIV';
 import ImageConfig from '@/components/setup/ImageConfig';
 import VectorViewer from '@/components/viewer/VectorViewer';
 import VideoMaker from '@/components/viewer/VideoMaker';

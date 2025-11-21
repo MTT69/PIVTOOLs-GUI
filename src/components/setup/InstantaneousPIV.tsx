@@ -550,6 +550,13 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
   return (
     <div className="space-y-6">
+      {/* Image Pre-Processing & Viewer */}
+      <ImagePairViewer
+        backendUrl="/backend"
+        config={config}
+        updateConfig={updateConfig}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Instantaneous PIV</CardTitle>
@@ -803,11 +810,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
           </div>        </CardContent>
       </Card>
 
-      <ImagePairViewer
-        backendUrl="/backend"
-        config={config}  
-      />
-
+      {/* PIV Runner */}
       <RunPIV config={config} />
     </div>
   );

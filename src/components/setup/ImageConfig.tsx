@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Minus, Image as ImageIcon, AlertTriangle } from "lucide-react";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
@@ -29,6 +30,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [hasUnsupportedFormat, setHasUnsupportedFormat] = useState(false);
   const [zeroBasedIndexing, setZeroBasedIndexing] = useState<boolean>(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [nonTimeResolvedMode, setNonTimeResolvedMode] = useState<string>("ab_format"); // "ab_format" or "skip_frames"
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -93,12 +95,29 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
     const rawFmt = images.image_format;
     if (images.time_resolved) {
+      // Time-resolved: always single format
       if (typeof rawFmt === 'string') setRawPatterns([rawFmt]);
       else if (Array.isArray(rawFmt) && rawFmt.length) setRawPatterns([rawFmt[0]]);
       else setRawPatterns(['B%05d.tif']);
     } else {
-      if (Array.isArray(rawFmt) && rawFmt.length) setRawPatterns(rawFmt);
-      else setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
+      // Non-time-resolved: detect mode from format
+      if (Array.isArray(rawFmt) && rawFmt.length === 2) {
+        // A/B format
+        setRawPatterns(rawFmt);
+        setNonTimeResolvedMode("ab_format");
+      } else if (Array.isArray(rawFmt) && rawFmt.length === 1) {
+        // Skip frames mode
+        setRawPatterns([rawFmt[0]]);
+        setNonTimeResolvedMode("skip_frames");
+      } else if (typeof rawFmt === 'string') {
+        // Single string - skip frames mode
+        setRawPatterns([rawFmt]);
+        setNonTimeResolvedMode("skip_frames");
+      } else {
+        // Default to A/B format
+        setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
+        setNonTimeResolvedMode("ab_format");
+      }
     }
   }, [config]);
 
@@ -218,7 +237,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
             <CardContent>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="num_images">Number of Images</Label>
+                  <Label htmlFor="num_images">Number of Image Files</Label>
                   <Input
                     id="num_images"
                     type="number"
@@ -227,6 +246,14 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     onChange={e => setNumImages(e.target.value)}
                     onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                   />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {timeResolved
+                      ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential overlapping)`
+                      : nonTimeResolvedMode === "ab_format"
+                        ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
+                        : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip frames)`
+                    }
+                  </p>
                 </div>
                 <div>
                   <Label htmlFor="num_cameras">Camera Count</Label>
@@ -246,7 +273,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
               
               {Number(numCameras) > 1 && (
                 <div className="mt-4">
-                  <Label>Camera Subfolders</Label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Label>Custom Camera Subfolders</Label>
+                    <span className="text-xs text-muted-foreground">(optional)</span>
+                  </div>
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     {Array.from({ length: Number(numCameras) }).map((_, i) => (
                       <div key={i}>
@@ -262,9 +292,20 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     ))}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Leave empty to use default "CamN" folders.
+                    Leave empty to use default "CamN" folders. Examples: "View_Left", "Camera_A", "Top"
                   </p>
+                  {(rawPatterns[0]?.includes('.set') || rawPatterns[0]?.includes('.im7') || rawPatterns[0]?.includes('.ims')) && (
+                    <p className="text-xs text-orange-600 mt-1">
+                      ⚠️ Camera subfolders are not used for container formats (.set, .im7, .ims) - all cameras are in the source directory.
+                    </p>
+                  )}
                 </div>
+              )}
+
+              {Number(numCameras) === 1 && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Single camera setup - files expected directly in source path (no subfolder).
+                </p>
               )}
 
               <div className="mt-4 flex flex-col gap-3">
@@ -274,9 +315,50 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     checked={timeResolved}
                     onCheckedChange={handleToggleTimeResolved}
                   />
-                  <Label htmlFor="time_resolved">Time Resolved (single image pattern)</Label>
+                  <Label htmlFor="time_resolved">Time Resolved (sequential overlapping pairs)</Label>
                 </div>
-                
+
+                {!timeResolved && (
+                  <div className="ml-6 space-y-2">
+                    <div>
+                      <Label htmlFor="non_time_resolved_mode" className="text-sm">Pairing Mode</Label>
+                      <Select
+                        value={nonTimeResolvedMode}
+                        onValueChange={(value) => {
+                          setNonTimeResolvedMode(value);
+                          // Update patterns based on mode
+                          let newPatterns: string[];
+                          if (value === "ab_format") {
+                            // A/B format: create two patterns from the first pattern
+                            const base = (rawPatterns[0] || "B%05d").replace(/\.tif$/i, "").replace(/_[AB]$/i, "");
+                            newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
+                          } else {
+                            // Skip frames: use single pattern
+                            const pattern = rawPatterns[0] || "B%05d.tif";
+                            newPatterns = [pattern.replace(/_[AB]\.tif$/i, ".tif")];
+                          }
+                          setRawPatterns(newPatterns);
+                          saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+                        }}
+                      >
+                        <SelectTrigger id="non_time_resolved_mode" className="w-full mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ab_format">A/B Format (B00001_A + B00001_B)</SelectItem>
+                          <SelectItem value="skip_frames">Skip Frames (1+2, 3+4, 5+6, ...)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {nonTimeResolvedMode === "ab_format"
+                          ? "Separate A and B files with same index"
+                          : "Non-overlapping pairs from single sequence"
+                        }
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-2">
                   <Switch
                     id="zero_based"

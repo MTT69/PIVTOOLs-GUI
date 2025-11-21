@@ -64,10 +64,16 @@ export function useAutoValidation(config: any) {
 
   useEffect(() => {
     // Create a validation key from critical config
+    // Include ALL fields that affect file loading
     const validationKey = JSON.stringify({
       sourcePaths: config?.paths?.source_paths,
       imageFormat: config?.images?.image_format,
       cameraNumbers: config?.paths?.camera_numbers,
+      cameraSubfolders: config?.paths?.camera_subfolders,
+      cameraCount: config?.paths?.camera_count,
+      numImages: config?.images?.num_images,
+      timeResolved: config?.images?.time_resolved,
+      zeroBasedIndexing: config?.images?.zero_based_indexing,
     });
 
     // Skip if nothing changed
@@ -94,32 +100,84 @@ export function useAutoValidation(config: any) {
 
     // Validate after short delay
     timerRef.current = setTimeout(async () => {
-      console.log('🔍 Auto-validation: Starting...');
+      console.log('🔍 Auto-validation: Starting smart validation...');
 
       const sourcePaths = config.paths?.source_paths || [];
       const cameraNumbers = config.paths?.camera_numbers || [1];
       const cameraToTest = cameraNumbers[0] || 1;
 
       try {
-        const url = `/backend/get_frame_pair?camera=${cameraToTest}&idx=1&source_path_idx=0`;
-        console.log('🔍 Auto-validation: Fetching', url);
-
-        const res = await fetch(url);
+        // Use new smart validation endpoint
+        const res = await fetch('/backend/validate_files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: 0 }),
+        });
 
         if (res.ok) {
-          console.log('✅ Auto-validation: Success');
-          setValidation({ valid: true, checked: true });
+          const json = await res.json();
 
-          // Preload images
-          fetch('/backend/preload_images', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ camera: cameraToTest, start_idx: 1, count: 10, source_path_idx: 0 }),
-          }).catch(e => console.warn('Failed to preload:', e));
+          if (json.valid) {
+            console.log('✅ Auto-validation: All files validated');
+
+            // Check for color images or subset processing
+            const messages: string[] = [];
+
+            Object.values(json.details || {}).forEach((detail: any) => {
+              if (detail.color_detected) {
+                messages.push('Color images will be converted to grayscale');
+              }
+              if (detail.error && detail.error.startsWith('Processing subset:')) {
+                messages.push(detail.error);
+              }
+              if (detail.indexing_warning) {
+                messages.push(detail.indexing_warning);
+              }
+            });
+
+            const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
+
+            setValidation({ valid: true, checked: true, error: message });
+
+            // Preload images
+            fetch('/backend/preload_images', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ camera: cameraToTest, start_idx: 1, count: 10, source_path_idx: 0 }),
+            }).catch(e => console.warn('Failed to preload:', e));
+          } else {
+            // Build detailed error message from validation results
+            const details = json.details || {};
+            const errors: string[] = [];
+            const warnings: string[] = [];
+
+            Object.entries(details).forEach(([key, value]: [string, any]) => {
+              if (value.status === 'error') {
+                // Use the detailed error message if available
+                const errorDetail = value.error ||
+                  (value.expected_count && value.actual_count !== value.expected_count
+                    ? `Found ${value.actual_count}/${value.expected_count} files`
+                    : 'Cannot read files');
+                errors.push(`${key}: ${errorDetail}`);
+              } else if (value.status === 'warning') {
+                const expected = value.expected_count || 0;
+                const actual = value.actual_count || 0;
+                warnings.push(`${key}: Found ${actual}/${expected} files`);
+              }
+            });
+
+            const errorMsg = [
+              ...errors,
+              ...warnings,
+            ].join('; ') || 'Image files not found';
+
+            console.log('❌ Auto-validation: Failed -', errorMsg);
+            setValidation({ valid: false, checked: true, error: errorMsg });
+          }
         } else {
           const json = await res.json();
-          const errorMsg = json.detail || json.error || 'Image files not found';
-          console.log('❌ Auto-validation: Failed -', errorMsg);
+          const errorMsg = json.error || 'Validation failed';
+          console.log('❌ Auto-validation: Request failed -', errorMsg);
           setValidation({ valid: false, checked: true, error: errorMsg });
         }
       } catch (e: any) {
@@ -133,7 +191,16 @@ export function useAutoValidation(config: any) {
         clearTimeout(timerRef.current);
       }
     };
-  }, [config?.paths?.source_paths, config?.images?.image_format, config?.paths?.camera_numbers]);
+  }, [
+    config?.paths?.source_paths,
+    config?.images?.image_format,
+    config?.paths?.camera_numbers,
+    config?.paths?.camera_subfolders,
+    config?.paths?.camera_count,
+    config?.images?.num_images,
+    config?.images?.time_resolved,
+    config?.images?.zero_based_indexing,
+  ]);
 
   return validation;
 }

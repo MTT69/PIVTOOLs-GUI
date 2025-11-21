@@ -17,6 +17,7 @@ interface ImagePairViewerProps {
   backendUrl?: string;
   config?: any;
   onFiltersChange?: (filters: any[]) => Promise<void>;
+  updateConfig?: (path: string[], value: any) => void;
 }
 
 // Loading spinner component
@@ -29,7 +30,7 @@ const LoadingSpinner = ({ className = "" }: { className?: string }) => (
   </div>
 );
 
-export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange }: ImagePairViewerProps) {
+export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange, updateConfig }: ImagePairViewerProps) {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(1);
@@ -39,6 +40,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [useGrid, setUseGrid] = useState(false);
   const [gridSize, setGridSize] = useState(16);
   const [customGridSize, setCustomGridSize] = useState<string>('16');
+  const [gridThickness, setGridThickness] = useState(1);
   const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
   const [procToggle, setProcToggle] = useState<"A" | "B">("A");
 
@@ -66,7 +68,27 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // Play/Frame navigation state
   const [playing, setPlaying] = useState(false);
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const maxFrames = useMemo(() => config?.images?.num_images || 100, [config]);
+
+  // Calculate number of frame pairs (not image files)
+  const maxFrames = useMemo(() => {
+    const numImages = config?.images?.num_images || 100;
+    const imageFormat = config?.images?.image_format;
+    const timeResolved = config?.images?.time_resolved || false;
+
+    // A/B format (2 patterns)
+    if (Array.isArray(imageFormat) && imageFormat.length === 2) {
+      return numImages;
+    }
+
+    // Time-resolved: sequential overlapping pairs
+    if (timeResolved) {
+      return Math.max(0, numImages - 1);
+    }
+
+    // Skip frames: non-overlapping pairs
+    return Math.floor(numImages / 2);
+  }, [config?.images?.num_images, config?.images?.image_format, config?.images?.time_resolved]);
+
   const [isImageLoading, setIsImageLoading] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 1, 2, 5, 10
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
@@ -90,9 +112,13 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [cameraOptions]);
 
-  // Initialize filters from config
+  // Track if filters have been initialized to prevent overwriting
+  const filtersInitializedRef = useRef(false);
+
+  // Initialize filters from config only once
   useEffect(() => {
-    if (config?.filters) {
+    // Only initialize if not already done AND config has filters
+    if (!filtersInitializedRef.current && config?.filters) {
       const configFilters = config.filters.map((f: any) => {
         const filter: any = { type: f.type };
 
@@ -109,6 +135,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         return filter;
       });
       setFilters(configFilters);
+      filtersInitializedRef.current = true;
     }
   }, [config?.filters, setFilters]);
 
@@ -209,6 +236,27 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     const num = parseInt(newBatchSize, 10);
     if (isNaN(num) || num < 1) return;
 
+    // Validate that batch size doesn't exceed number of frame pairs
+    if (num > maxFrames) {
+      console.warn(`Batch size (${num}) exceeds number of frame pairs (${maxFrames}). Setting to ${maxFrames}.`);
+      const validSize = maxFrames;
+      setBatchSize(String(validSize));
+
+      try {
+        await fetch(`${backendUrl}/update_config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            batches: { size: validSize }
+          }),
+        });
+        console.log('Batch size updated to', validSize);
+      } catch (e) {
+        console.error('Failed to save batch size', e);
+      }
+      return;
+    }
+
     try {
       await fetch(`${backendUrl}/update_config`, {
         method: 'POST',
@@ -278,13 +326,18 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filters: filtersToSave }),
         });
+
+        // Update parent config to keep it in sync
+        if (updateConfig) {
+          updateConfig(['filters'], filtersToSave);
+        }
       } catch (e) {
         console.error('Failed to save filters to backend', e);
       }
     }, 500); // 500ms debounce
 
     return () => clearTimeout(timeoutId);
-  }, [filters, backendUrl]);
+  }, [filters, backendUrl, updateConfig]);
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
@@ -347,18 +400,22 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 <FilterSelector onAddFilter={addFilter} />
               </div>
               {hasTemporalFilters && (
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="batch-size" className="text-xs whitespace-nowrap">Batch Size:</Label>
-                  <Input
-                    id="batch-size"
-                    type="number"
-                    min="1"
-                    value={batchSize}
-                    onChange={(e) => setBatchSize(e.target.value)}
-                    onBlur={() => saveBatchSize(batchSize)}
-                    className="w-20 h-9"
-                    title="Number of images per batch for temporal filters (Time, POD)"
-                  />
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="batch-size" className="text-xs whitespace-nowrap">Batch Size:</Label>
+                    <Input
+                      id="batch-size"
+                      type="number"
+                      min="1"
+                      max={maxFrames}
+                      value={batchSize}
+                      onChange={(e) => setBatchSize(e.target.value)}
+                      onBlur={() => saveBatchSize(batchSize)}
+                      className="w-20 h-9"
+                      title={`Number of images per batch for temporal filters (max: ${maxFrames})`}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Max: {maxFrames} frames</p>
                 </div>
               )}
             </div>
@@ -546,7 +603,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 src={rawToggle === 'A' ? (imgARaw ? undefined : imgA) : rawToggle === 'B' ? (imgBRaw ? undefined : imgB) : undefined}
                 error={error}
                 vmin={rawVmin} vmax={rawVmax} colormap={colormap} title={`Raw Image ${rawToggle}`}
-                useGrid={useGrid} gridSize={gridSize}
+                useGrid={useGrid} gridSize={gridSize} gridThickness={gridThickness}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
               {loading && !playing && (
@@ -556,60 +613,81 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               )}
             </div>
             <div className="space-y-3 p-3 border rounded-md">
-              <div className="flex items-center gap-2">
-                <Label>View</Label>
-                <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
-                <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
-                <div className="flex items-center gap-2 ml-auto">
+              <div className="flex items-center gap-2 justify-between">
+                <div className="flex items-center gap-2">
+                  <Label>View</Label>
+                  <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
+                  <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
+                </div>
+                <div className="flex items-center gap-2">
                   <Switch id="raw-auto-scale" checked={rawAutoScale} onCheckedChange={setRawAutoScale} />
                   <Label htmlFor="raw-auto-scale" className="text-sm">Auto Scale</Label>
-                  <Switch id="use-grid" checked={useGrid} onCheckedChange={setUseGrid} />
-                  <Label htmlFor="use-grid">Grid</Label>
-                  {useGrid && (
-                    <>
-                      <Select value={String(gridSize)} onValueChange={v => {
-                        const num = Number(v);
-                        setGridSize(num);
-                        if (num !== 0) setCustomGridSize(String(num));
-                      }}>
-                        <SelectTrigger className="w-24 h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="8">8x8</SelectItem>
-                          <SelectItem value="16">16x16</SelectItem>
-                          <SelectItem value="32">32x32</SelectItem>
-                          <SelectItem value="64">64x64</SelectItem>
-                          <SelectItem value="0">Custom</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {gridSize === 0 && (
-                        <Input
-                          type="number"
-                          min={1}
-                          max={512}
-                          value={customGridSize}
-                          onChange={e => {
-                            const val = e.target.value;
-                            setCustomGridSize(val);
-                            if (val && !isNaN(Number(val))) {
-                              setGridSize(Number(val));
-                            }
-                          }}
-                          onBlur={e => {
-                            const val = e.target.value;
-                            if (!val || isNaN(Number(val)) || Number(val) < 1) {
-                              setCustomGridSize('16');
-                              setGridSize(16);
-                            }
-                          }}
-                          className="w-16 h-8"
-                          placeholder="Size"
-                        />
-                      )}
-                    </>
-                  )}
                 </div>
+              </div>
+
+              {/* Grid Controls - Separate Row */}
+              <div className="flex items-center gap-2 pt-2 border-t">
+                <Switch id="use-grid" checked={useGrid} onCheckedChange={setUseGrid} />
+                <Label htmlFor="use-grid" className="text-sm">Grid</Label>
+                {useGrid && (
+                  <>
+                    <Label className="text-xs text-muted-foreground ml-2">Size:</Label>
+                    <Select value={String(gridSize)} onValueChange={v => {
+                      const num = Number(v);
+                      setGridSize(num);
+                      if (num !== 0) setCustomGridSize(String(num));
+                    }}>
+                      <SelectTrigger className="w-24 h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="8">8x8</SelectItem>
+                        <SelectItem value="16">16x16</SelectItem>
+                        <SelectItem value="32">32x32</SelectItem>
+                        <SelectItem value="64">64x64</SelectItem>
+                        <SelectItem value="0">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {gridSize === 0 && (
+                      <Input
+                        type="number"
+                        min={1}
+                        max={512}
+                        value={customGridSize}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setCustomGridSize(val);
+                          if (val && !isNaN(Number(val))) {
+                            setGridSize(Number(val));
+                          }
+                        }}
+                        onBlur={e => {
+                          const val = e.target.value;
+                          if (!val || isNaN(Number(val)) || Number(val) < 1) {
+                            setCustomGridSize('16');
+                            setGridSize(16);
+                          }
+                        }}
+                        className="w-16 h-8"
+                        placeholder="Size"
+                      />
+                    )}
+                    <Label className="text-xs text-muted-foreground ml-2">Thickness:</Label>
+                    <Select value={String(gridThickness)} onValueChange={v => setGridThickness(Number(v))}>
+                      <SelectTrigger className="w-20 h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1px</SelectItem>
+                        <SelectItem value="2">2px</SelectItem>
+                        <SelectItem value="4">4px</SelectItem>
+                        <SelectItem value="6">6px</SelectItem>
+                        <SelectItem value="8">8px</SelectItem>
+                        <SelectItem value="10">10px</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Input type="number" value={rawVmin} min={0} max={rawVmax} onChange={e => {
@@ -668,6 +746,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 vmax={procVmax}
                 colormap={colormap}
                 title={`Processed Image ${procToggle}`}
+                useGrid={useGrid} gridSize={gridSize} gridThickness={gridThickness}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
               {procLoading && !playing && (
