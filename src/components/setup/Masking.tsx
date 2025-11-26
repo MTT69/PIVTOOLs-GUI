@@ -239,10 +239,10 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		rectangularBottom,
 		rectangularLeft,
 		rectangularRight,
-		setRectangularTop,
-		setRectangularBottom,
-		setRectangularLeft,
-		setRectangularRight,
+		updateRectangularTop,
+		updateRectangularBottom,
+		updateRectangularLeft,
+		updateRectangularRight,
 		updateEnabled,
 		updateMode
 	} = useMaskingConfig(config?.masking, updateConfig!);
@@ -268,8 +268,8 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	}, [rectangularRight]);
 
 	// Use the centralized hook for fetching images
-	// Use PNG format for masking (lossless quality needed for precision work)
-	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'png', autoScale);
+	// Use JPEG format for consistency across all pages (faster, shares cache)
+	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'jpeg', autoScale);
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
 	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
@@ -397,11 +397,11 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 										onBlur={() => {
 											if (topInputValue === '' || isNaN(Number(topInputValue))) {
 												setTopInputValue('0');
-												setRectangularTop(0);
+												updateRectangularTop(0);
 											} else {
 												const numVal = Math.max(0, Number(topInputValue));
 												setTopInputValue(String(numVal));
-												setRectangularTop(numVal);
+												updateRectangularTop(numVal);
 											}
 										}}
 										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -421,11 +421,11 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 										onBlur={() => {
 											if (bottomInputValue === '' || isNaN(Number(bottomInputValue))) {
 												setBottomInputValue('0');
-												setRectangularBottom(0);
+												updateRectangularBottom(0);
 											} else {
 												const numVal = Math.max(0, Number(bottomInputValue));
 												setBottomInputValue(String(numVal));
-												setRectangularBottom(numVal);
+												updateRectangularBottom(numVal);
 											}
 										}}
 										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -445,11 +445,11 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 										onBlur={() => {
 											if (leftInputValue === '' || isNaN(Number(leftInputValue))) {
 												setLeftInputValue('0');
-												setRectangularLeft(0);
+												updateRectangularLeft(0);
 											} else {
 												const numVal = Math.max(0, Number(leftInputValue));
 												setLeftInputValue(String(numVal));
-												setRectangularLeft(numVal);
+												updateRectangularLeft(numVal);
 											}
 										}}
 										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -469,11 +469,11 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 										onBlur={() => {
 											if (rightInputValue === '' || isNaN(Number(rightInputValue))) {
 												setRightInputValue('0');
-												setRectangularRight(0);
+												updateRectangularRight(0);
 											} else {
 												const numVal = Math.max(0, Number(rightInputValue));
 												setRightInputValue(String(numVal));
-												setRectangularRight(numVal);
+												updateRectangularRight(numVal);
 											}
 										}}
 										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"

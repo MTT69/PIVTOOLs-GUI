@@ -115,7 +115,7 @@ export function useMaskingConfig(
     setRectangularBottom(rectangular.bottom);
     setRectangularLeft(rectangular.left);
     setRectangularRight(rectangular.right);
-    
+
     if (mode === 'pixel_border') {
       await saveMaskingConfig({
         enabled,
@@ -124,6 +124,71 @@ export function useMaskingConfig(
       });
     }
   }, [enabled, mode, saveMaskingConfig]);
+
+  // Individual update functions that save to backend
+  const updateRectangularTop = useCallback(async (value: number) => {
+    setRectangularTop(value);
+    if (mode === 'pixel_border') {
+      await saveMaskingConfig({
+        enabled,
+        mode: 'rectangular',
+        rectangular: {
+          top: value,
+          bottom: rectangularBottom,
+          left: rectangularLeft,
+          right: rectangularRight
+        }
+      });
+    }
+  }, [enabled, mode, rectangularBottom, rectangularLeft, rectangularRight, saveMaskingConfig]);
+
+  const updateRectangularBottom = useCallback(async (value: number) => {
+    setRectangularBottom(value);
+    if (mode === 'pixel_border') {
+      await saveMaskingConfig({
+        enabled,
+        mode: 'rectangular',
+        rectangular: {
+          top: rectangularTop,
+          bottom: value,
+          left: rectangularLeft,
+          right: rectangularRight
+        }
+      });
+    }
+  }, [enabled, mode, rectangularTop, rectangularLeft, rectangularRight, saveMaskingConfig]);
+
+  const updateRectangularLeft = useCallback(async (value: number) => {
+    setRectangularLeft(value);
+    if (mode === 'pixel_border') {
+      await saveMaskingConfig({
+        enabled,
+        mode: 'rectangular',
+        rectangular: {
+          top: rectangularTop,
+          bottom: rectangularBottom,
+          left: value,
+          right: rectangularRight
+        }
+      });
+    }
+  }, [enabled, mode, rectangularTop, rectangularBottom, rectangularRight, saveMaskingConfig]);
+
+  const updateRectangularRight = useCallback(async (value: number) => {
+    setRectangularRight(value);
+    if (mode === 'pixel_border') {
+      await saveMaskingConfig({
+        enabled,
+        mode: 'rectangular',
+        rectangular: {
+          top: rectangularTop,
+          bottom: rectangularBottom,
+          left: rectangularLeft,
+          right: value
+        }
+      });
+    }
+  }, [enabled, mode, rectangularTop, rectangularBottom, rectangularLeft, saveMaskingConfig]);
 
   return {
     enabled,
@@ -136,6 +201,10 @@ export function useMaskingConfig(
     setRectangularBottom,
     setRectangularLeft,
     setRectangularRight,
+    updateRectangularTop,
+    updateRectangularBottom,
+    updateRectangularLeft,
+    updateRectangularRight,
     updateEnabled,
     updateMode,
     updateRectangular

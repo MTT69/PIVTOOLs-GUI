@@ -48,29 +48,37 @@ function PolygonMaskEditor({
 	// start with a single empty polygon named "Polygon 1" and select it
 	const [polys, setPolys] = useState<Poly[]>([{ points: [], closed: false, name: "Polygon 1" }]);
 	const [active, setActive] = useState<number>(0);
-	const [isLoadingMask, setIsLoadingMask] = useState<boolean>(false);
+	const [isLoadingMask, setIsLoadingMask] = useState<boolean>(true); // Start true until load completes
+	const [maskLoadStatus, setMaskLoadStatus] = useState<'loading' | 'loaded' | 'none' | 'error'>('loading');
 
 	// Load existing mask on mount or when meta changes
 	useEffect(() => {
 		async function loadExistingMask() {
-			if (meta?.basePathIdx === undefined || !meta?.camera) return;
-			
+			if (meta?.basePathIdx === undefined || !meta?.camera) {
+				setIsLoadingMask(false);
+				setMaskLoadStatus('none');
+				return;
+			}
+
 			setIsLoadingMask(true);
+			setMaskLoadStatus('loading');
 			try {
 				const params = new URLSearchParams({
 					basepath_idx: meta.basePathIdx.toString(),
 					camera: meta.camera,
+					polygons_only: 'true', // Request only polygon data for faster loading
 				});
-				
+
 				const response = await fetch(`/backend/load_mask?${params}`);
 				if (!response.ok) {
 					// No existing mask found - that's fine, start with empty
 					console.log('No existing mask found, starting fresh');
+					setMaskLoadStatus('none');
 					return;
 				}
-				
+
 				const data = await response.json();
-				
+
 				if (data.polygons && data.polygons.length > 0) {
 					// Convert loaded polygons to the component's polygon format
 					const loadedPolys: Poly[] = data.polygons.map((p: any) => ({
@@ -78,19 +86,23 @@ function PolygonMaskEditor({
 						closed: true, // Saved polygons are always closed
 						points: p.points.map((pt: number[]) => ({ x: pt[0], y: pt[1] }))
 					}));
-					
+
 					setPolys(loadedPolys);
 					setActive(loadedPolys.length > 0 ? 0 : -1);
+					setMaskLoadStatus('loaded');
 					console.log(`Loaded ${loadedPolys.length} polygon(s) from existing mask`);
+				} else {
+					setMaskLoadStatus('none');
 				}
 			} catch (error) {
 				console.error('Error loading existing mask:', error);
+				setMaskLoadStatus('error');
 				// Continue with empty polygons on error
 			} finally {
 				setIsLoadingMask(false);
 			}
 		}
-		
+
 		loadExistingMask();
 	}, [meta?.basePathIdx, meta?.camera]);
 
@@ -399,14 +411,23 @@ function PolygonMaskEditor({
 				
 				// Make the first point larger and use a different color for active, unclosed polygons
 				if (ptIdx === 0 && i === active && !poly.closed && poly.points.length >= 3) {
-					// Draw a larger, pulsing circle for the starting point
+					// Draw a larger circle for the starting point - matches clickable radius (25px in screen space)
+					// The click detection is in native coords, so scale the visual to match
+					const clickRadiusScreen = 25 * scale; // Visual indicator matches click area
+					octx.fillStyle = "rgba(255, 51, 102, 0.3)";
+					octx.beginPath();
+					octx.arc(vx, vy, clickRadiusScreen, 0, Math.PI * 2);
+					octx.fill();
+					// Inner solid circle
 					octx.fillStyle = "#ff3366";
 					octx.beginPath();
-					octx.arc(vx, vy, 12, 0, Math.PI * 2);
+					octx.arc(vx, vy, 8, 0, Math.PI * 2);
 					octx.fill();
 					// Add white border
 					octx.strokeStyle = "#ffffff";
 					octx.lineWidth = 2;
+					octx.beginPath();
+					octx.arc(vx, vy, clickRadiusScreen, 0, Math.PI * 2);
 					octx.stroke();
 				} else {
 					octx.fillStyle = i === active ? "#00ff88" : "#ffcc00";
@@ -515,8 +536,15 @@ function PolygonMaskEditor({
 					Math.pow(pt.y - firstPt.y, 2)
 				);
 
-				// If within 15 pixels of the start, close the polygon and start a new one
-				if (distance <= 15) {
+				// Calculate click radius in native coordinates
+				// Use 25 screen pixels worth of native coordinates for generous click area
+				const wrapper = wrapperRef.current;
+				const clickRadiusNative = wrapper
+					? 25 * (nativeSize.w / wrapper.getBoundingClientRect().width)
+					: 30; // fallback to 30 native pixels
+
+				// If within click radius of the start, close the polygon and start a new one
+				if (distance <= clickRadiusNative) {
 					// Close current polygon
 					list[idx] = { ...poly, closed: true };
 					
@@ -667,17 +695,28 @@ function PolygonMaskEditor({
 				)}
 			</div>
 
-			{/* Loading indicator */}
+			{/* Loading indicator - prominent spinner */}
 			{isLoadingMask && (
-				<div className="mb-2 px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-md text-xs text-yellow-700">
-					<strong>⏳ Loading existing mask...</strong>
+				<div className="mb-2 px-3 py-3 bg-yellow-50 border-2 border-yellow-300 rounded-md text-sm text-yellow-800 flex items-center gap-2">
+					<svg className="animate-spin h-5 w-5 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+						<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+					<strong>Loading existing mask...</strong>
 				</div>
 			)}
 
 			{/* Success indicator when mask is loaded */}
-			{!isLoadingMask && polys.length > 0 && polys[0].points.length > 0 && (
+			{!isLoadingMask && maskLoadStatus === 'loaded' && (
 				<div className="mb-2 px-3 py-2 bg-green-50 border border-green-200 rounded-md text-xs text-green-700">
-					<strong>✅ Loaded {polys.filter(p => p.closed).length} polygon(s) from existing mask</strong> - You can edit, add, or delete polygons.
+					<strong>Loaded {polys.filter(p => p.closed).length} polygon(s) from existing mask</strong> - You can edit, add, or delete polygons.
+				</div>
+			)}
+
+			{/* No mask found indicator */}
+			{!isLoadingMask && maskLoadStatus === 'none' && (
+				<div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-xs text-gray-600">
+					<strong>No existing mask found</strong> - Click on the image to start creating a polygon mask.
 				</div>
 			)}
 

@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
+import EnsemblePIV from '@/components/setup/EnsemblePIV';
 import PathsConfig from '@/components/setup/PathsConfig';
 import POD from '@/components/setup/POD';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
@@ -25,7 +26,7 @@ import VectorViewer from '@/components/viewer/VectorViewer';
 import VideoMaker from '@/components/viewer/VideoMaker';
 import Masking from '@/components/setup/Masking';
 import { Calibration } from '@/components/setup/Calibration';
-import { useAutoValidation } from '@/hooks/useConfigUpdate';
+import { useAutoValidation, useConfigUpdate } from '@/hooks/useConfigUpdate';
 
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
@@ -118,31 +119,8 @@ export default function Home() {
   }, []);
   const [activeTab, setActiveTab] = useState("setup");
 
-  // Handle tab change with validation check
-  const handleTabChange = useCallback((newTab: string) => {
-    // If leaving setup tab and validation has been checked but failed, show warning
-    if (activeTab === 'setup' && newTab !== 'setup' && pathValidation.checked && !pathValidation.valid) {
-      setPendingTab(newTab);
-      setShowValidationWarning(true);
-    } else {
-      setActiveTab(newTab);
-    }
-  }, [activeTab, pathValidation]);
-
-  // Confirm navigation despite validation errors
-  const confirmNavigationWithErrors = useCallback(() => {
-    if (pendingTab) {
-      setActiveTab(pendingTab);
-      setPendingTab(null);
-    }
-    setShowValidationWarning(false);
-  }, [pendingTab]);
-
-  // Cancel navigation
-  const cancelNavigation = useCallback(() => {
-    setPendingTab(null);
-    setShowValidationWarning(false);
-  }, []);
+  // Hook for updating backend config
+  const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
   // Function to update config state (memoized to avoid infinite effect loops in children)
   const updateConfig = useCallback((path: string[], value: any) => {
@@ -160,6 +138,54 @@ export default function Home() {
       current[path[path.length - 1]] = value;
       return newConfig;
     });
+  }, []);
+
+  // Handle tab change with validation check and auto-toggle processing mode
+  const handleTabChange = useCallback(async (newTab: string) => {
+    // If leaving setup tab and validation has been checked but failed, show warning
+    if (activeTab === 'setup' && newTab !== 'setup' && pathValidation.checked && !pathValidation.valid) {
+      setPendingTab(newTab);
+      setShowValidationWarning(true);
+      return;
+    }
+
+    // Auto-toggle processing mode when switching between PIV and Ensemble tabs
+    if (newTab === 'instantaneous' || newTab === 'ensemble') {
+      const isEnsemble = newTab === 'ensemble';
+      const processingUpdate = {
+        processing: {
+          instantaneous: !isEnsemble,
+          ensemble: isEnsemble
+        }
+      };
+
+      // Update backend
+      try {
+        await updateConfigBackend(processingUpdate);
+        // Update local state
+        updateConfig(['processing', 'instantaneous'], !isEnsemble);
+        updateConfig(['processing', 'ensemble'], isEnsemble);
+      } catch (e) {
+        console.error('Failed to update processing mode:', e);
+      }
+    }
+
+    setActiveTab(newTab);
+  }, [activeTab, pathValidation, updateConfigBackend, updateConfig]);
+
+  // Confirm navigation despite validation errors
+  const confirmNavigationWithErrors = useCallback(() => {
+    if (pendingTab) {
+      setActiveTab(pendingTab);
+      setPendingTab(null);
+    }
+    setShowValidationWarning(false);
+  }, [pendingTab]);
+
+  // Cancel navigation
+  const cancelNavigation = useCallback(() => {
+    setPendingTab(null);
+    setShowValidationWarning(false);
   }, []);
 
   // DEBUG: Log component state on each render
@@ -202,7 +228,7 @@ export default function Home() {
               </p>
               
               <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-                <TabsList className="grid grid-cols-6 mb-6">
+                <TabsList className="grid grid-cols-7 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Setup
                   </TabsTrigger>
@@ -211,6 +237,9 @@ export default function Home() {
                   </TabsTrigger>
                   <TabsTrigger value="instantaneous" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     PIV
+                  </TabsTrigger>
+                  <TabsTrigger value="ensemble" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
+                    Ensemble
                   </TabsTrigger>
                   <TabsTrigger value="calibration" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Calibration
@@ -221,9 +250,6 @@ export default function Home() {
                   <TabsTrigger value="video" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
                     Video
                   </TabsTrigger>
-                  {/* <TabsTrigger value="viewer" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
-                    Viewer
-                  </TabsTrigger> */}
                 </TabsList>
                 
                 {/* Environment tab content removed */}
@@ -278,10 +304,10 @@ export default function Home() {
                 <TabsContent value="calibration">
                   <Calibration config={config} updateConfig={updateConfig} />
                 </TabsContent>
-                
-                {/* <TabsContent value="ensemble">
+
+                <TabsContent value="ensemble">
                   <EnsemblePIV config={config} updateConfig={updateConfig} />
-                </TabsContent> */}
+                </TabsContent>
 
                 <TabsContent value="pod">
                   <POD config={config} updateConfig={updateConfig} />

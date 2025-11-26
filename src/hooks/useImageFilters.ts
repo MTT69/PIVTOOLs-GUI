@@ -19,23 +19,57 @@ export interface ImageFilter {
 }
 
 export function useImageFilters(backendUrl: string) {
-  const [filters, setFilters] = useState<ImageFilter[]>([]);
+  const [filtersInternal, setFiltersInternal] = useState<ImageFilter[]>([]);
   const [procLoading, setProcLoading] = useState(false);
   const [procImgA, setProcImgA] = useState<string | null>(null);
   const [procImgB, setProcImgB] = useState<string | null>(null);
   const [procStats, setProcStats] = useState<{ A: { vmin: number, vmax: number }, B: { vmin: number, vmax: number } } | null>(null);
+  const [needsProcessing, setNeedsProcessing] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [processingBlocked, setProcessingBlocked] = useState(false);
+
+  // Wrapper for setFilters that blocks changes during processing
+  const setFilters = useCallback((newFilters: ImageFilter[] | ((prev: ImageFilter[]) => ImageFilter[])) => {
+    if (procLoading) {
+      setProcessingBlocked(true);
+      return false; // Indicate filter change was blocked
+    }
+    setFiltersInternal(newFilters);
+    setLastError(null);
+    return true;
+  }, [procLoading]);
+
+  // Read-only access to filters
+  const filters = filtersInternal;
+
+  // Cancel ongoing processing
+  const cancelProcessing = useCallback(async () => {
+    try {
+      await fetch(`${backendUrl}/processing_status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cancel: true }),
+      });
+      setProcLoading(false);
+      setProcessingBlocked(false);
+    } catch (e) {
+      console.error("Failed to cancel processing:", e);
+    }
+  }, [backendUrl]);
 
   const runProcessing = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
     setProcLoading(true);
+    setLastError(null);
+    setNeedsProcessing(false);
     setProcImgA(null);
     setProcImgB(null);
     setProcStats(null);
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-      
+
       // Determine if we need batch processing (time/pod filters present)
       const needsBatch = filters.some(f => f.type === 'time' || f.type === 'pod');
-      
+
       if (needsBatch) {
         // Batch processing for time/pod filters
         await fetch(`${backendUrl}/filter`, {
@@ -49,31 +83,31 @@ export function useImageFilters(backendUrl: string) {
             source_path_idx: sourcePathIdx,
           }),
         });
-        
-        // Poll for completion with better status checking
+
+        // Poll for completion using the new processing_status endpoint
         let attempts = 0;
-        const maxAttempts = 60; // 60 seconds max wait
+        const maxAttempts = 120; // 2 minutes max wait for batch processing
         let completed = false;
-        
+
         while (attempts < maxAttempts && !completed) {
           await new Promise(r => setTimeout(r, 1000));
-          
-          // Check status
-          const statusRes = await fetch(`${backendUrl}/status`);
+
+          // Check status using new endpoint
+          const statusRes = await fetch(`${backendUrl}/processing_status`);
           const statusJson = await statusRes.json();
-          
+
           if (!statusJson.processing) {
             completed = true;
             break;
           }
-          
+
           attempts++;
         }
-        
+
         if (!completed) {
           throw new Error("Processing timeout - batch filter took too long");
         }
-        
+
         // Fetch the result
         const params = new URLSearchParams({
           type: "processed",
@@ -85,7 +119,7 @@ export function useImageFilters(backendUrl: string) {
         const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to fetch processed pair");
-        
+
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
         if (json.stats) setProcStats(json.stats);
@@ -102,34 +136,41 @@ export function useImageFilters(backendUrl: string) {
             auto_limits: autoLimits,
           }),
         });
-        
+
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to process frame");
-        
+
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
         if (json.stats) setProcStats(json.stats);
       }
     } catch (e: any) {
       console.error("Processing failed:", e);
+      setLastError(e.message || "Processing failed");
     } finally {
       setProcLoading(false);
     }
   }, [backendUrl, filters]);
 
-  // Auto-processing function that doesn't set loading state
+  // Auto-processing function that checks cache for batch filters, processes spatial filters on demand
   const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
     // Clear processed images while processing
     setProcImgA(null);
     setProcImgB(null);
     setProcStats(null);
-    
+    setNeedsProcessing(false);
+
+    // If no filters, nothing to do
+    if (filters.length === 0) {
+      return;
+    }
+
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-      
+
       // Determine if we need batch processing (time/pod filters present)
       const needsBatch = filters.some(f => f.type === 'time' || f.type === 'pod');
-      
+
       if (needsBatch) {
         // For batch filters, try to fetch pre-processed images first
         const params = new URLSearchParams({
@@ -140,16 +181,26 @@ export function useImageFilters(backendUrl: string) {
           auto_limits: String(autoLimits),
         });
         const res = await fetch(`${backendUrl}/get_processed_pair?${params.toString()}`);
-        
+
         if (res.ok) {
           const json = await res.json();
-          setProcImgA(json.A ?? null);
-          setProcImgB(json.B ?? null);
-          if (json.stats) setProcStats(json.stats);
+          // Check if we actually got images (not just an OK status)
+          if (json.A && json.B) {
+            setProcImgA(json.A);
+            setProcImgB(json.B);
+            if (json.stats) setProcStats(json.stats);
+            setNeedsProcessing(false);
+          } else {
+            // Cache miss - signal that batch processing is needed
+            setProcImgA(null);
+            setProcImgB(null);
+            setNeedsProcessing(true);
+          }
         } else {
-          // No pre-processed images available, clear display
+          // No pre-processed images available - signal that batch processing is needed
           setProcImgA(null);
           setProcImgB(null);
+          setNeedsProcessing(true);
         }
       } else {
         // Spatial filters only - process frame-by-frame on demand
@@ -164,16 +215,17 @@ export function useImageFilters(backendUrl: string) {
             auto_limits: autoLimits,
           }),
         });
-        
+
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed to process frame");
-        
+
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
         if (json.stats) setProcStats(json.stats);
       }
     } catch (e: any) {
       console.error("Auto-processing failed:", e);
+      setLastError(e.message || "Auto-processing failed");
       // Clear processed images on error
       setProcImgA(null);
       setProcImgB(null);
@@ -311,5 +363,10 @@ export function useImageFilters(backendUrl: string) {
     procStats,
     fetchProcessed,
     downloadImage,
+    needsProcessing,
+    lastError,
+    processingBlocked,
+    cancelProcessing,
+    clearProcessingBlocked: () => setProcessingBlocked(false),
   };
 }

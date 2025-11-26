@@ -13,7 +13,21 @@ import { usePivRunner } from '@/hooks/usePivRunner';
 // Helper to display a user-friendly path name
 const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
 
-const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
+interface RunPIVProps {
+  config?: any;
+  showProgressBar?: boolean;
+  showFrameViewer?: boolean;
+  showSimpleStatus?: boolean;
+  title?: string;
+}
+
+const RunPIV: React.FC<RunPIVProps> = ({
+  config,
+  showProgressBar = true,
+  showFrameViewer = true,
+  showSimpleStatus = false,
+  title = "Run PIV"
+}) => {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [varType, setVarType] = useState<string>("ux");
@@ -90,7 +104,7 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
 
   return (
     <Card>
-      <CardHeader><CardTitle>Run PIV</CardTitle></CardHeader>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-6">
         <div className="grid grid-cols-1 gap-4">
           <div>
@@ -105,66 +119,89 @@ const RunPIV: React.FC<{ config?: any }> = ({ config }) => {
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-          <div>
-                <label className="text-sm font-medium">Variable</label>
-                <Select value={varType} onValueChange={setVarType} disabled={frameVarsLoading}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {frameVarsLoading ? <SelectItem value="loading" disabled>Loading...</SelectItem> : // <-- FIX HERE
-                     frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-          <div>
-            <label className="text-sm font-medium">Colormap</label>
-            <Select value={cmap} onValueChange={setCmap}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {['default', 'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'jet', 'gray'].map(c =>
-                  <SelectItem key={c} value={c}>{c}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-sm font-medium">Lower Limit</label>
-            <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Upper Limit</label>
-            <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <Progress value={progress} />
-          <p className="text-sm text-center font-medium text-gray-500">
-            {isPolling ? `Processing... ${progress}%` : (progress === 100 ? "✅ Completed!" : "Idle")}
-          </p>
-        </div>
-        <div>
-          <Button variant="outline" size="sm" onClick={() => setShowStatusImage(!showStatusImage)}>
-            {showStatusImage ? "Hide" : "Show"} Status Image
-          </Button>
-          {showStatusImage && (
-            <div className="mt-2 border rounded-lg p-2 bg-gray-50 min-h-[200px] flex items-center justify-center">
-              {statusImage.error && <p className="text-red-600 font-semibold">{statusImage.error}</p>}
-              {statusImage.src && !statusImage.error && (
-                <img src={`data:image/png;base64,${statusImage.src}`} alt="PIV Status" className="rounded max-w-full"/>
-              )}
-              {!statusImage.src && !statusImage.error && isPolling && (
-                <div className="flex flex-col items-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
-                  <p className="text-gray-500">
-                    {progress === 0 ? "Waiting for run to commence..." : "Processing first frame..."}
-                  </p>
-                </div>
-              )}
-              {!statusImage.src && !statusImage.error && !isPolling && (
-                <p className="text-gray-500">No image available</p>
-              )}
+        {showFrameViewer && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div>
+              <label className="text-sm font-medium">Variable</label>
+              <Select value={varType} onValueChange={setVarType} disabled={frameVarsLoading}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {frameVarsLoading ? <SelectItem value="loading" disabled>Loading...</SelectItem> :
+                   frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-        </div>
+            <div>
+              <label className="text-sm font-medium">Colormap</label>
+              <Select value={cmap} onValueChange={setCmap}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['default', 'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'jet', 'gray'].map(c =>
+                    <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Lower Limit</label>
+              <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Upper Limit</label>
+              <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" />
+            </div>
+          </div>
+        )}
+
+        {showProgressBar && (
+          <div className="space-y-2">
+            <Progress value={progress} />
+            <p className="text-sm text-center font-medium text-gray-500">
+              {isPolling ? `Processing... ${progress}%` : (progress === 100 ? "Completed!" : "Idle")}
+            </p>
+          </div>
+        )}
+
+        {showSimpleStatus && (
+          <div className="p-4 bg-gray-50 rounded-lg text-center">
+            <p className="text-sm font-medium text-gray-600">
+              {isPolling ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></span>
+                  Processing...
+                </span>
+              ) : (
+                progress === 100 ? "Complete!" : "Ready to run"
+              )}
+            </p>
+          </div>
+        )}
+
+        {showFrameViewer && (
+          <div>
+            <Button variant="outline" size="sm" onClick={() => setShowStatusImage(!showStatusImage)}>
+              {showStatusImage ? "Hide" : "Show"} Status Image
+            </Button>
+            {showStatusImage && (
+              <div className="mt-2 border rounded-lg p-2 bg-gray-50 min-h-[200px] flex items-center justify-center">
+                {statusImage.error && <p className="text-red-600 font-semibold">{statusImage.error}</p>}
+                {statusImage.src && !statusImage.error && (
+                  <img src={`data:image/png;base64,${statusImage.src}`} alt="PIV Status" className="rounded max-w-full"/>
+                )}
+                {!statusImage.src && !statusImage.error && isPolling && (
+                  <div className="flex flex-col items-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
+                    <p className="text-gray-500">
+                      {progress === 0 ? "Waiting for run to commence..." : "Processing first frame..."}
+                    </p>
+                  </div>
+                )}
+                {!statusImage.src && !statusImage.error && !isPolling && (
+                  <p className="text-gray-500">No image available</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div>
           <Button variant="outline" size="sm" onClick={() => setShowLogs(!showLogs)}>
             {showLogs ? "Hide" : "Show"} Console Logs

@@ -100,8 +100,6 @@ export function useAutoValidation(config: any) {
 
     // Validate after short delay
     timerRef.current = setTimeout(async () => {
-      console.log('🔍 Auto-validation: Starting smart validation...');
-
       const sourcePaths = config.paths?.source_paths || [];
       const cameraNumbers = config.paths?.camera_numbers || [1];
       const cameraToTest = cameraNumbers[0] || 1;
@@ -118,8 +116,6 @@ export function useAutoValidation(config: any) {
           const json = await res.json();
 
           if (json.valid) {
-            console.log('✅ Auto-validation: All files validated');
-
             // Check for color images or subset processing
             const messages: string[] = [];
 
@@ -139,12 +135,8 @@ export function useAutoValidation(config: any) {
 
             setValidation({ valid: true, checked: true, error: message });
 
-            // Preload images
-            fetch('/backend/preload_images', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ camera: cameraToTest, start_idx: 1, count: 10, source_path_idx: 0 }),
-            }).catch(e => console.warn('Failed to preload:', e));
+            // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
+            // We don't preload here to avoid loading the wrong format (jpeg vs png)
           } else {
             // Build detailed error message from validation results
             const details = json.details || {};
@@ -171,17 +163,14 @@ export function useAutoValidation(config: any) {
               ...warnings,
             ].join('; ') || 'Image files not found';
 
-            console.log('❌ Auto-validation: Failed -', errorMsg);
             setValidation({ valid: false, checked: true, error: errorMsg });
           }
         } else {
           const json = await res.json();
           const errorMsg = json.error || 'Validation failed';
-          console.log('❌ Auto-validation: Request failed -', errorMsg);
           setValidation({ valid: false, checked: true, error: errorMsg });
         }
       } catch (e: any) {
-        console.log('❌ Auto-validation: Error -', e.message);
         setValidation({ valid: false, checked: true, error: `Validation failed: ${e.message}` });
       }
     }, 500);

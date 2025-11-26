@@ -29,8 +29,6 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     setLower,
     upper,
     setUpper,
-    merged,
-    setMerged,
     resolution,
     setResolution,
     resolutionOptions,
@@ -48,6 +46,18 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     videoReady,
     videoError,
     effectiveDir,
+    // New state
+    ffmpegStatus,
+    dataSourcesLoading,
+    dataSource,
+    setDataSource,
+    dataSourceOptions,
+    hasAnyData,
+    // Runs state
+    availableRuns,
+    highestRun,
+    runsLoading,
+    // Functions
     handleBrowse,
     onDirPicked,
     fetchAvailableVideos,
@@ -58,6 +68,9 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     handleVideoError,
     handleRetryVideo,
   } = useVideoMaker(backendUrl, config);
+
+  // Determine if video creation is disabled
+  const videoCreationDisabled = !ffmpegStatus.installed || !hasAnyData || creating || videoStatus?.processing;
 
   return (
     <div className="space-y-6">
@@ -108,27 +121,70 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               </TabsList>
               
               <TabsContent value="create" className="pt-4">
-                {/* Camera selection and merged checkbox */}
-                <div className="flex items-center gap-4">
-                  <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                  <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-                    <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
-                    <SelectContent>
-                      {cameraOptions.map((c, i) => (
-                        <SelectItem key={i} value={String(c)}>{c}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {/* Merged Data checkbox */}
-                  <label className="flex items-center gap-2 text-sm font-medium">
-                    <input
-                      type="checkbox"
-                      checked={merged}
-                      onChange={e => setMerged(e.target.checked)}
-                      className="accent-soton-blue w-4 h-4 rounded border-gray-300"
-                    />
-                    Merged Data
-                  </label>
+                {/* FFmpeg warning */}
+                {ffmpegStatus.loading ? (
+                  <div className="p-3 mb-4 rounded border border-gray-200 bg-gray-50 text-gray-600 text-sm">
+                    Checking ffmpeg installation...
+                  </div>
+                ) : !ffmpegStatus.installed && (
+                  <div className="p-3 mb-4 rounded border border-amber-200 bg-amber-50 text-amber-800 text-sm">
+                    <div className="font-medium mb-1">FFmpeg Not Installed</div>
+                    <p>FFmpeg is required to create videos. Please install it:</p>
+                    <ul className="mt-2 ml-4 list-disc text-xs">
+                      <li><strong>macOS:</strong> <code className="bg-amber-100 px-1 rounded">brew install ffmpeg</code></li>
+                      <li><strong>Ubuntu/Debian:</strong> <code className="bg-amber-100 px-1 rounded">sudo apt install ffmpeg</code></li>
+                      <li><strong>Windows:</strong> Download from <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">ffmpeg.org</a></li>
+                    </ul>
+                    {ffmpegStatus.error && (
+                      <p className="mt-2 text-xs text-amber-600">Error: {ffmpegStatus.error}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* No data warning */}
+                {!dataSourcesLoading && !hasAnyData && effectiveDir && (
+                  <div className="p-3 mb-4 rounded border border-red-200 bg-red-50 text-red-700 text-sm">
+                    <div className="font-medium mb-1">No PIV Data Found</div>
+                    <p>No calibrated, uncalibrated, or merged data found for Camera {camera}.</p>
+                    <p className="mt-1 text-xs">Please run PIV processing first or select a different camera/base path.</p>
+                  </div>
+                )}
+
+                {/* Camera and Data Source selection */}
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
+                    <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
+                      <SelectTrigger id="camera" className="w-28"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                      <SelectContent>
+                        {cameraOptions.map((c, i) => {
+                          const camNum = c.replace('Cam', '');
+                          return (
+                            <SelectItem key={i} value={camNum}>{c}</SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Data Source selection */}
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="dataSource" className="text-sm font-medium">Data Source:</label>
+                    {dataSourcesLoading ? (
+                      <span className="text-sm text-gray-500">Loading...</span>
+                    ) : dataSourceOptions.length > 0 ? (
+                      <Select value={dataSource} onValueChange={v => setDataSource(v as any)}>
+                        <SelectTrigger id="dataSource" className="w-52"><SelectValue placeholder="Select data source" /></SelectTrigger>
+                        <SelectContent>
+                          {dataSourceOptions.map(opt => (
+                            <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="text-sm text-red-500">No data available</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
@@ -175,12 +231,27 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
 
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Run</label>
-                    <Input 
-                      type="number" 
-                      min={1} 
-                      value={run} 
-                      onChange={(e) => setRun(Number(e.target.value || 1))} 
-                    />
+                    {runsLoading ? (
+                      <span className="text-sm text-gray-500">Loading...</span>
+                    ) : availableRuns.length > 1 ? (
+                      <Select value={String(run)} onValueChange={v => setRun(Number(v))}>
+                        <SelectTrigger id="run"><SelectValue placeholder="Select run" /></SelectTrigger>
+                        <SelectContent>
+                          {availableRuns.map((r) => (
+                            <SelectItem key={r} value={String(r)}>
+                              Run {r}{r === highestRun ? ' (latest)' : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        type="number"
+                        min={1}
+                        value={run}
+                        onChange={(e) => setRun(Number(e.target.value || 1))}
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -297,24 +368,26 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
 
                 <div className="pt-4 flex flex-col gap-2">
                   <div className="flex justify-end gap-2">
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={handleCancelVideo}
                       disabled={!videoStatus?.processing}
                     >
                       Cancel
                     </Button>
-                    <Button 
+                    <Button
                       variant="outline"
                       onClick={() => handleCreateVideo(true)}
-                      disabled={creating || videoStatus?.processing}
+                      disabled={videoCreationDisabled}
+                      title={!ffmpegStatus.installed ? "FFmpeg is required" : !hasAnyData ? "No data available" : undefined}
                     >
                       Test Video (50 frames)
                     </Button>
-                    <Button 
-                      className="bg-soton-blue" 
+                    <Button
+                      className="bg-soton-blue"
                       onClick={() => handleCreateVideo(false)}
-                      disabled={creating || videoStatus?.processing}
+                      disabled={videoCreationDisabled}
+                      title={!ffmpegStatus.installed ? "FFmpeg is required" : !hasAnyData ? "No data available" : undefined}
                     >
                       {creating ? "Starting..." : videoStatus?.processing ? "Processing..." : "Create Full Video"}
                     </Button>

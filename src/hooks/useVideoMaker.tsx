@@ -1,4 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+// Types for ffmpeg and data source checking
+interface FfmpegStatus {
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  error: string | null;
+  loading: boolean;
+}
+
+interface DataSourceInfo {
+  exists: boolean;
+  frame_count: number;
+  path: string | null;
+}
+
+interface DataSourcesAvailability {
+  calibrated: DataSourceInfo;
+  uncalibrated: DataSourceInfo;
+  merged: DataSourceInfo;
+}
+
+export type DataSourceType = 'calibrated' | 'uncalibrated' | 'merged';
 
 export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Directory / base paths - now from config instead of localStorage
@@ -20,6 +43,25 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
 
+  // FFmpeg status
+  const [ffmpegStatus, setFfmpegStatus] = useState<FfmpegStatus>({
+    installed: false,
+    version: null,
+    path: null,
+    error: null,
+    loading: true,
+  });
+
+  // Data sources availability
+  const [dataSources, setDataSources] = useState<DataSourcesAvailability | null>(null);
+  const [dataSourcesLoading, setDataSourcesLoading] = useState<boolean>(false);
+  const [dataSource, setDataSource] = useState<DataSourceType>('calibrated');
+
+  // Available runs
+  const [availableRuns, setAvailableRuns] = useState<number[]>([1]);
+  const [highestRun, setHighestRun] = useState<number>(1);
+  const [runsLoading, setRunsLoading] = useState<boolean>(false);
+
   // Other selection state
   const [type, setType] = useState<string>('ux');
   const [cmap, setCmap] = useState<string>('default');
@@ -27,7 +69,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const [lower, setLower] = useState<string>('');
   const [upper, setUpper] = useState<string>('');
   const [merged, setMerged] = useState<boolean>(false);
-  
+
   // Resolution settings
   const [resolution, setResolution] = useState<string>('1080p');
   const resolutionOptions = [
@@ -76,6 +118,136 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   useEffect(() => {
     if (effectiveDir) setDirectory(effectiveDir);
   }, [effectiveDir]);
+
+  // Check ffmpeg on mount
+  const checkFfmpeg = useCallback(async () => {
+    setFfmpegStatus(prev => ({ ...prev, loading: true }));
+    try {
+      const response = await fetch(`${backendUrl}/video/check_ffmpeg`);
+      const data = await response.json();
+      setFfmpegStatus({
+        installed: data.installed || false,
+        version: data.version || null,
+        path: data.path || null,
+        error: data.error || null,
+        loading: false,
+      });
+    } catch (error) {
+      console.error('Error checking ffmpeg:', error);
+      setFfmpegStatus({
+        installed: false,
+        version: null,
+        path: null,
+        error: 'Failed to check ffmpeg status',
+        loading: false,
+      });
+    }
+  }, [backendUrl]);
+
+  useEffect(() => {
+    checkFfmpeg();
+  }, [checkFfmpeg]);
+
+  // Check data sources when camera or effectiveDir changes
+  const checkDataSources = useCallback(async () => {
+    if (!effectiveDir) return;
+
+    setDataSourcesLoading(true);
+    try {
+      const response = await fetch(
+        `${backendUrl}/video/check_data_sources?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}`
+      );
+      const data = await response.json();
+
+      if (data.success && data.available) {
+        setDataSources(data.available);
+
+        // Auto-select the default source if current selection is not available
+        if (data.default_source && !data.available[dataSource]?.exists) {
+          setDataSource(data.default_source as DataSourceType);
+        }
+      } else {
+        setDataSources(null);
+      }
+    } catch (error) {
+      console.error('Error checking data sources:', error);
+      setDataSources(null);
+    } finally {
+      setDataSourcesLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, dataSource]);
+
+  useEffect(() => {
+    checkDataSources();
+  }, [effectiveDir, camera]);
+
+  // Check available runs when data source changes
+  const checkAvailableRuns = useCallback(async () => {
+    if (!effectiveDir || !dataSource) return;
+
+    setRunsLoading(true);
+    try {
+      const response = await fetch(
+        `${backendUrl}/video/check_runs?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}&data_source=${dataSource}&var=${type}`
+      );
+      const data = await response.json();
+
+      if (data.success && data.runs) {
+        setAvailableRuns(data.runs);
+        setHighestRun(data.highest_run || 1);
+        // Auto-set to highest run if current run is not available
+        if (!data.runs.includes(run)) {
+          setRun(data.highest_run || 1);
+        }
+      } else {
+        setAvailableRuns([1]);
+        setHighestRun(1);
+      }
+    } catch (error) {
+      console.error('Error checking available runs:', error);
+      setAvailableRuns([1]);
+      setHighestRun(1);
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, dataSource, type, run]);
+
+  useEffect(() => {
+    checkAvailableRuns();
+  }, [effectiveDir, camera, dataSource]);
+
+  // Available data source options (only show sources that exist)
+  const dataSourceOptions = useMemo(() => {
+    if (!dataSources) return [];
+    const options: { value: DataSourceType; label: string; frameCount: number }[] = [];
+    if (dataSources.calibrated.exists) {
+      options.push({
+        value: 'calibrated',
+        label: `Calibrated (${dataSources.calibrated.frame_count} frames)`,
+        frameCount: dataSources.calibrated.frame_count,
+      });
+    }
+    if (dataSources.uncalibrated.exists) {
+      options.push({
+        value: 'uncalibrated',
+        label: `Uncalibrated (${dataSources.uncalibrated.frame_count} frames)`,
+        frameCount: dataSources.uncalibrated.frame_count,
+      });
+    }
+    if (dataSources.merged.exists) {
+      options.push({
+        value: 'merged',
+        label: `Merged (${dataSources.merged.frame_count} frames)`,
+        frameCount: dataSources.merged.frame_count,
+      });
+    }
+    return options;
+  }, [dataSources]);
+
+  // Check if any data is available
+  const hasAnyData = useMemo(() => {
+    return dataSourceOptions.length > 0;
+  }, [dataSourceOptions]);
 
   // Directory picker
   const handleBrowse = () => {
@@ -141,7 +313,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       camera: camera,
       var: type,
       run: String(run),
-      merged: merged ? '1' : '0',
+      data_source: dataSource,  // New: use dataSource instead of merged flag
       cmap,
       lower,
       upper,
@@ -271,25 +443,42 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     }
   };
 
-  // Video ready effect
+  // Video ready effect - with auto-retry on error
+  const videoRetryCount = useRef(0);
+  const maxVideoRetries = 5;
+  const videoRetryDelay = 1500; // ms between retries
+
   useEffect(() => {
     if (videoResult?.out_path) {
       setVideoReady(false);
       setVideoError(false);
-      const timer = setTimeout(() => setVideoReady(true), 2000);
+      videoRetryCount.current = 0;
+      // Initial delay before showing video
+      const timer = setTimeout(() => setVideoReady(true), 2500);
       return () => clearTimeout(timer);
     }
   }, [videoResult?.out_path]);
 
-  const handleVideoError = () => {
-    setVideoError(true);
-  };
+  const handleVideoError = useCallback(() => {
+    // Auto-retry silently up to maxVideoRetries times
+    if (videoRetryCount.current < maxVideoRetries) {
+      videoRetryCount.current += 1;
+      console.log(`Video load failed, auto-retrying (${videoRetryCount.current}/${maxVideoRetries})...`);
+      setVideoReady(false);
+      setTimeout(() => setVideoReady(true), videoRetryDelay);
+    } else {
+      // Only show error after all retries exhausted
+      console.error('Video load failed after all retries');
+      setVideoError(true);
+    }
+  }, []);
 
-  const handleRetryVideo = () => {
+  const handleRetryVideo = useCallback(() => {
+    videoRetryCount.current = 0;
     setVideoError(false);
     setVideoReady(false);
-    setTimeout(() => setVideoReady(true), 1500);
-  };
+    setTimeout(() => setVideoReady(true), videoRetryDelay);
+  }, []);
 
   return {
     // State
@@ -331,6 +520,18 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     videoReady,
     videoError,
     effectiveDir,
+    // New: FFmpeg and data source state
+    ffmpegStatus,
+    dataSources,
+    dataSourcesLoading,
+    // Runs state
+    availableRuns,
+    highestRun,
+    runsLoading,
+    dataSource,
+    setDataSource,
+    dataSourceOptions,
+    hasAnyData,
     // Functions
     handleBrowse,
     onDirPicked,
@@ -341,5 +542,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     createVideoUrl,
     handleVideoError,
     handleRetryVideo,
+    checkFfmpeg,
+    checkDataSources,
   };
 }

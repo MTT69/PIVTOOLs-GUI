@@ -6,6 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { X } from "lucide-react";
+import { toast } from "@/components/ui/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useImagePair } from '@/hooks/useImagePair';
 import { useImageFilters } from '@/hooks/useImageFilters';
 import { FilterSelector, FilterEditor } from '@/components/FilterComponents';
@@ -97,8 +108,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // --- Hooks for Logic ---
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding } =
     useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale);
-  const { filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame, procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage } =
-    useImageFilters(backendUrl);
+  const {
+    filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame,
+    procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage,
+    needsProcessing, lastError, processingBlocked, cancelProcessing, clearProcessingBlocked
+  } = useImageFilters(backendUrl);
 
   // Memoize camera options and initialize camera
   const cameraOptions = useMemo(() => {
@@ -139,47 +153,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [config?.filters, setFilters]);
 
-  // Preload first batch of images on mount or when camera/source/format changes
-  // Use a ref to prevent multiple simultaneous preload requests
-  const preloadRef = useRef<{ camera: number; sourcePathIdx: number; imageFormat: string; autoLimits: boolean } | null>(null);
-
-  useEffect(() => {
-    const preloadImages = async () => {
-      if (!config || !camera) return;
-
-      // Prevent duplicate preload requests for the same camera/source/format combo
-      if (preloadRef.current?.camera === camera &&
-          preloadRef.current?.sourcePathIdx === sourcePathIdx &&
-          preloadRef.current?.imageFormat === imageFormat &&
-          preloadRef.current?.autoLimits === rawAutoScale) {
-        return;
-      }
-
-      preloadRef.current = { camera, sourcePathIdx, imageFormat, autoLimits: rawAutoScale };
-      const batchSize = config?.batches?.size || 30;
-
-      try {
-        console.log(`Preloading ${batchSize} ${imageFormat} images for camera ${camera}, source ${sourcePathIdx}`);
-        await fetch(`${backendUrl}/preload_images`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            camera,
-            start_idx: 1,
-            count: batchSize,
-            source_path_idx: sourcePathIdx,
-            format: imageFormat,
-            auto_limits: rawAutoScale,
-          }),
-        });
-        console.log('Preload request sent');
-      } catch (e) {
-        console.warn('Failed to preload images:', e);
-      }
-    };
-
-    preloadImages();
-  }, [backendUrl, camera, sourcePathIdx, config, imageFormat, rawAutoScale]);
+  // NOTE: Removed automatic preloading on mount - useImagePair handles prefetching
+  // The frontend prefetch buffer in useImagePair loads frames as user navigates
 
   // Auto-fetch processed images when frame/camera/source changes
   useEffect(() => {
@@ -230,6 +205,17 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const hasTemporalFilters = useMemo(() => {
     return filters.some(f => f.type === 'time' || f.type === 'pod');
   }, [filters]);
+
+  // Show toast when there's an error from filter processing
+  useEffect(() => {
+    if (lastError) {
+      toast({
+        title: "Filter Processing Failed",
+        description: lastError,
+        variant: "destructive",
+      });
+    }
+  }, [lastError]);
 
   // Save batch size to backend
   const saveBatchSize = async (newBatchSize: string) => {
@@ -750,8 +736,25 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
               {procLoading && !playing && (
-                <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
+                <div className="absolute inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center rounded-lg">
                   <LoadingSpinner />
+                  <p className="text-white mt-2 text-sm">Processing filters...</p>
+                </div>
+              )}
+              {!procLoading && needsProcessing && hasTemporalFilters && (
+                <div className="absolute inset-0 bg-gray-100/90 flex flex-col items-center justify-center rounded-lg border border-gray-300">
+                  <p className="text-gray-600 text-sm mb-3">Frame not yet processed</p>
+                  <Button
+                    size="sm"
+                    onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, procAutoScale)}
+                  >
+                    Test Filters
+                  </Button>
+                </div>
+              )}
+              {!procLoading && !needsProcessing && !procImgA && !procImgB && filters.length === 0 && (
+                <div className="absolute inset-0 bg-gray-50/80 flex flex-col items-center justify-center rounded-lg">
+                  <p className="text-gray-500 text-sm">No filters configured</p>
                 </div>
               )}
             </div>
@@ -814,6 +817,28 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           </div>
         </div>
       </CardContent>
+
+      {/* Dialog shown when user tries to modify filters during processing */}
+      <AlertDialog open={processingBlocked} onOpenChange={(open) => !open && clearProcessingBlocked()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Processing in Progress</AlertDialogTitle>
+            <AlertDialogDescription>
+              Filters cannot be modified while batch processing is running.
+              Would you like to cancel the current processing?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={clearProcessingBlocked}>Wait for Completion</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              cancelProcessing();
+              clearProcessingBlocked();
+            }}>
+              Cancel Processing
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

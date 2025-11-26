@@ -202,6 +202,22 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     dpr,
     effectiveDir,
     prefetchSurrounding,
+    // New data source management
+    dataSource,
+    setDataSource,
+    availableDataSources,
+    availabilityLoading,
+    // Derived feature flags
+    isEnsemble,
+    isMerged,
+    isStatistics,
+    canTransform,
+    canEditCoordinates,
+    canMerge,
+    canViewMerged,
+    canCalculateStatistics,
+    canViewStatistics,
+    hasFrameNavigation,
   } = useVectorViewer({ backendUrl, config });
 
   // Additional UI state for improved controls
@@ -358,37 +374,75 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </Select>
             </div>
 
-            {/* Data Source Selection - Clean dropdown */}
+            {/* Data Source Selection - Dynamic based on availability */}
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium min-w-[100px]">Data Source:</label>
               <Select
-                value={merged ? "merged" : (isUncalibrated ? "uncalibrated" : "single")}
-                onValueChange={v => {
-                  if (v === "merged") {
-                    setMerged(true);
-                    setIsUncalibrated(false);
-                  } else if (v === "uncalibrated") {
-                    setIsUncalibrated(true);
-                    setMerged(false);
-                  } else {
-                    setMerged(false);
-                    setIsUncalibrated(false);
-                  }
-                }}
+                value={dataSource}
+                onValueChange={v => setDataSource(v as any)}
+                disabled={availabilityLoading}
               >
                 <SelectTrigger className="flex-1">
-                  <SelectValue />
+                  <SelectValue placeholder={availabilityLoading ? "Loading..." : "Select data source"} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="single">Single Camera (Calibrated)</SelectItem>
-                  <SelectItem value="uncalibrated">Single Camera (Uncalibrated)</SelectItem>
-                  {cameraOptions.length > 1 && <SelectItem value="merged">Merged Cameras</SelectItem>}
+                  {/* Instantaneous options */}
+                  {availableDataSources.calibrated_instantaneous.exists && (
+                    <SelectItem value="calibrated_instantaneous">
+                      Calibrated Instantaneous ({availableDataSources.calibrated_instantaneous.frame_count} frames)
+                    </SelectItem>
+                  )}
+                  {availableDataSources.uncalibrated_instantaneous.exists && (
+                    <SelectItem value="uncalibrated_instantaneous">
+                      Uncalibrated Instantaneous ({availableDataSources.uncalibrated_instantaneous.frame_count} frames)
+                    </SelectItem>
+                  )}
+                  {/* Ensemble options */}
+                  {availableDataSources.calibrated_ensemble.exists && (
+                    <SelectItem value="calibrated_ensemble">
+                      Calibrated Ensemble (Mean)
+                    </SelectItem>
+                  )}
+                  {availableDataSources.uncalibrated_ensemble.exists && (
+                    <SelectItem value="uncalibrated_ensemble">
+                      Uncalibrated Ensemble (Mean)
+                    </SelectItem>
+                  )}
+                  {/* Merged options - only for calibrated */}
+                  {availableDataSources.merged_instantaneous.exists && cameraOptions.length > 1 && (
+                    <SelectItem value="merged_instantaneous">
+                      Merged Instantaneous ({availableDataSources.merged_instantaneous.frame_count} frames)
+                    </SelectItem>
+                  )}
+                  {availableDataSources.merged_ensemble.exists && cameraOptions.length > 1 && (
+                    <SelectItem value="merged_ensemble">
+                      Merged Ensemble (Mean)
+                    </SelectItem>
+                  )}
+                  {/* Statistics - only for calibrated instantaneous */}
+                  {availableDataSources.statistics.exists && (
+                    <SelectItem value="statistics">
+                      Mean Statistics
+                    </SelectItem>
+                  )}
+                  {availableDataSources.merged_statistics?.exists && cameraOptions.length > 1 && (
+                    <SelectItem value="merged_statistics">
+                      Merged Mean Statistics
+                    </SelectItem>
+                  )}
+                  {/* Show message if nothing available */}
+                  {!availableDataSources.calibrated_instantaneous.exists &&
+                   !availableDataSources.uncalibrated_instantaneous.exists &&
+                   !availableDataSources.calibrated_ensemble.exists &&
+                   !availableDataSources.uncalibrated_ensemble.exists && (
+                    <SelectItem value="none" disabled>No data available</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
 
             {/* Camera Selection - Only show when not merged */}
-            {!merged && (
+            {!isMerged && (
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium min-w-[100px]">Camera:</label>
                 <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
@@ -408,20 +462,22 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Show Statistics Toggle */}
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium min-w-[100px]">Show Statistics:</label>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="show-statistics"
-                  checked={meanMode}
-                  onCheckedChange={() => toggleMeanMode()}
-                />
-                <label htmlFor="show-statistics" className="text-sm text-gray-600">
-                  {meanMode ? "Enabled" : "Disabled"}
-                </label>
+            {/* Show Statistics Toggle - Only for calibrated instantaneous */}
+            {canViewStatistics && !isStatistics && (
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium min-w-[100px]">Show Statistics:</label>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="show-statistics"
+                    checked={meanMode}
+                    onCheckedChange={() => toggleMeanMode()}
+                  />
+                  <label htmlFor="show-statistics" className="text-sm text-gray-600">
+                    {meanMode ? "Enabled" : "Disabled"}
+                  </label>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Error Messages */}
@@ -667,8 +723,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 onMouseLeave={e => { onMouseLeave(); handleMagnifierLeave(); }}
                 onClick={e => { if (datumMode) handleImageClick(e); }}
               >
-                {/* Frame navigation arrows - Only show when not in mean mode */}
-                {!meanMode && (
+                {/* Frame navigation arrows - Only show when frame navigation is available */}
+                {hasFrameNavigation && !meanMode && (
                   <>
                     <Button
                       size="sm"
@@ -738,8 +794,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 )}
               </div>
 
-              {/* Frame controls - Hidden in mean mode */}
-              {maxFrameCount > 0 && !meanMode && (
+              {/* Frame controls - Hidden for ensemble and statistics */}
+              {maxFrameCount > 0 && hasFrameNavigation && !meanMode && (
                 <div className="flex flex-col md:flex-row items-center justify-center gap-4 p-4 bg-gray-50 border rounded-lg">
                   {/* Frame slider + numeric input */}
                   <div className="flex items-center gap-3 flex-1 w-full">
@@ -828,75 +884,87 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
           {/* ========== SECTION 5: COLLAPSIBLE BUTTONS ROW ========== */}
           <div className="space-y-4">
-            {/* Horizontal row of collapsible buttons */}
+            {/* Horizontal row of collapsible buttons - only show available features */}
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant={showCoordinates ? "default" : "outline"}
-                onClick={() => setShowCoordinates(!showCoordinates)}
-                className="flex items-center gap-2"
-              >
-                Coordinates
-                <svg
-                  className={`w-4 h-4 transition-transform ${showCoordinates ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              {/* Coordinates - Only for calibrated data */}
+              {canEditCoordinates && (
+                <Button
+                  variant={showCoordinates ? "default" : "outline"}
+                  onClick={() => setShowCoordinates(!showCoordinates)}
+                  className="flex items-center gap-2"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </Button>
+                  Coordinates
+                  <svg
+                    className={`w-4 h-4 transition-transform ${showCoordinates ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </Button>
+              )}
 
-              <Button
-                variant={showStatistics ? "default" : "outline"}
-                onClick={() => setShowStatistics(!showStatistics)}
-                className="flex items-center gap-2"
-              >
-                Statistics
-                <svg
-                  className={`w-4 h-4 transition-transform ${showStatistics ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              {/* Statistics - Only for calibrated instantaneous */}
+              {canCalculateStatistics && (
+                <Button
+                  variant={showStatistics ? "default" : "outline"}
+                  onClick={() => setShowStatistics(!showStatistics)}
+                  className="flex items-center gap-2"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </Button>
+                  Statistics
+                  <svg
+                    className={`w-4 h-4 transition-transform ${showStatistics ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </Button>
+              )}
 
-              <Button
-                variant={showTransforms ? "default" : "outline"}
-                onClick={() => setShowTransforms(!showTransforms)}
-                className="flex items-center gap-2"
-              >
-                Transforms
-                <svg
-                  className={`w-4 h-4 transition-transform ${showTransforms ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              {/* Transforms - Only for calibrated data */}
+              {canTransform && (
+                <Button
+                  variant={showTransforms ? "default" : "outline"}
+                  onClick={() => setShowTransforms(!showTransforms)}
+                  className="flex items-center gap-2"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </Button>
+                  Transforms
+                  <svg
+                    className={`w-4 h-4 transition-transform ${showTransforms ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </Button>
+              )}
 
-              <Button
-                variant={showMerging ? "default" : "outline"}
-                onClick={() => setShowMerging(!showMerging)}
-                className="flex items-center gap-2"
-              >
-                Merging
-                <svg
-                  className={`w-4 h-4 transition-transform ${showMerging ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+              {/* Merging - Only for calibrated instantaneous with multiple cameras */}
+              {canMerge && cameraOptions.length > 1 && (
+                <Button
+                  variant={showMerging ? "default" : "outline"}
+                  onClick={() => setShowMerging(!showMerging)}
+                  className="flex items-center gap-2"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </Button>
+                  Merging
+                  <svg
+                    className={`w-4 h-4 transition-transform ${showMerging ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </Button>
+              )}
             </div>
 
-            {/* Coordinates Panel */}
-            {showCoordinates && !meanMode && (
+            {/* Coordinates Panel - Only for calibrated data */}
+            {showCoordinates && canEditCoordinates && !meanMode && (
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
                 <h3 className="text-lg font-semibold text-blue-900">Coordinate System</h3>
 
@@ -967,8 +1035,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Statistics Panel */}
-            {showStatistics && (
+            {/* Statistics Panel - Only for calibrated instantaneous */}
+            {showStatistics && canCalculateStatistics && (
               <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg space-y-3">
                 <h3 className="text-lg font-semibold text-blue-900">Statistics Calculation</h3>
                 <p className="text-xs text-blue-800">
@@ -1104,8 +1172,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Transforms Panel */}
-            {showTransforms && imageSrc && !error && !meanMode && (
+            {/* Transforms Panel - Only for calibrated data */}
+            {showTransforms && canTransform && imageSrc && !error && !meanMode && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
 
@@ -1192,8 +1260,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Merging Panel */}
-            {showMerging && cameraOptions.length > 1 && !meanMode && (
+            {/* Merging Panel - Only for calibrated instantaneous with multiple cameras */}
+            {showMerging && canMerge && cameraOptions.length > 1 && !meanMode && (
               <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg space-y-3">
                 <h3 className="text-lg font-semibold text-green-900">Merge Vectors</h3>
                 <p className="text-xs text-green-800">

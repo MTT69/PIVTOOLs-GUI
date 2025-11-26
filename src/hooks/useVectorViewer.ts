@@ -24,6 +24,46 @@ interface CornerCoordinates {
   bottomRight: { x: number; y: number };
 }
 
+// Data source types
+export type DataSourceType =
+  | "calibrated_instantaneous"
+  | "uncalibrated_instantaneous"
+  | "calibrated_ensemble"
+  | "uncalibrated_ensemble"
+  | "merged_instantaneous"
+  | "merged_ensemble"
+  | "statistics"
+  | "merged_statistics";
+
+interface DataSourceAvailability {
+  exists: boolean;
+  frame_count: number;
+  variables: string[];
+}
+
+export interface AvailableDataSources {
+  uncalibrated_instantaneous: DataSourceAvailability;
+  calibrated_instantaneous: DataSourceAvailability;
+  uncalibrated_ensemble: DataSourceAvailability;
+  calibrated_ensemble: DataSourceAvailability;
+  merged_instantaneous: DataSourceAvailability;
+  merged_ensemble: DataSourceAvailability;
+  statistics: DataSourceAvailability;
+  merged_statistics: DataSourceAvailability;
+}
+
+// Default empty availability
+const defaultAvailability: AvailableDataSources = {
+  uncalibrated_instantaneous: { exists: false, frame_count: 0, variables: [] },
+  calibrated_instantaneous: { exists: false, frame_count: 0, variables: [] },
+  uncalibrated_ensemble: { exists: false, frame_count: 1, variables: [] },
+  calibrated_ensemble: { exists: false, frame_count: 1, variables: [] },
+  merged_instantaneous: { exists: false, frame_count: 0, variables: [] },
+  merged_ensemble: { exists: false, frame_count: 1, variables: [] },
+  statistics: { exists: false, frame_count: 0, variables: [] },
+  merged_statistics: { exists: false, frame_count: 0, variables: [] },
+};
+
 export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) => {
   // State variables
   const [basePaths, setBasePaths] = useState<string[]>(() => config?.paths?.base_paths || []);
@@ -48,8 +88,57 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
-  const [merged, setMerged] = useState<boolean>(false);
-  const [isUncalibrated, setIsUncalibrated] = useState<boolean>(false);
+
+  // New unified data source state
+  const [dataSource, setDataSource] = useState<DataSourceType>("calibrated_instantaneous");
+  const [availableDataSources, setAvailableDataSources] = useState<AvailableDataSources>(defaultAvailability);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+
+  // Derived state from dataSource
+  const isUncalibrated = useMemo(() =>
+    dataSource === "uncalibrated_instantaneous" || dataSource === "uncalibrated_ensemble",
+    [dataSource]
+  );
+  const isEnsemble = useMemo(() =>
+    dataSource === "calibrated_ensemble" || dataSource === "uncalibrated_ensemble" || dataSource === "merged_ensemble",
+    [dataSource]
+  );
+  const isMerged = useMemo(() =>
+    dataSource === "merged_instantaneous" || dataSource === "merged_ensemble" || dataSource === "merged_statistics",
+    [dataSource]
+  );
+  const isStatistics = useMemo(() =>
+    dataSource === "statistics" || dataSource === "merged_statistics",
+    [dataSource]
+  );
+
+  // Feature availability based on data source
+  const canTransform = useMemo(() => !isUncalibrated, [isUncalibrated]);
+  const canEditCoordinates = useMemo(() => !isUncalibrated, [isUncalibrated]);
+  const canMerge = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
+  const canViewMerged = useMemo(() => !isUncalibrated, [isUncalibrated]);
+  const canCalculateStatistics = useMemo(() => !isUncalibrated && !isEnsemble && !isStatistics, [isUncalibrated, isEnsemble, isStatistics]);
+  const canViewStatistics = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
+  const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics, [isEnsemble, isStatistics]);
+
+  // Legacy compatibility - derived from dataSource
+  const merged = isMerged;
+  const setMerged = useCallback((val: boolean) => {
+    if (val) {
+      setDataSource("merged_instantaneous");
+    } else {
+      setDataSource("calibrated_instantaneous");
+    }
+  }, []);
+
+  const setIsUncalibrated = useCallback((val: boolean) => {
+    if (val) {
+      setDataSource("uncalibrated_instantaneous");
+    } else {
+      setDataSource("calibrated_instantaneous");
+    }
+  }, []);
+
   const [playing, setPlaying] = useState(false);
   const [pendingIndex, setPendingIndex] = useState<number>(index);
   const [pointerDown, setPointerDown] = useState<boolean>(false);
@@ -204,6 +293,127 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
     }
   }, [prefetchFrame]);
+
+  // Track last fetched path/camera to avoid redundant fetches
+  const lastFetchedAvailabilityRef = useRef<string | null>(null);
+
+  // Fetch available data sources for the current base path and camera
+  // Only fetches once per base path + camera combination
+  const fetchAvailableDataSources = useCallback(async (force: boolean = false) => {
+    const fetchKey = `${effectiveDir}|${camera}`;
+
+    // Skip if we already fetched for this path/camera (unless forced)
+    if (!force && lastFetchedAvailabilityRef.current === fetchKey) {
+      console.log("fetchAvailableDataSources: skipping (already fetched for", fetchKey, ")");
+      return;
+    }
+
+    console.log("fetchAvailableDataSources: fetching for", fetchKey);
+    setAvailabilityLoading(true);
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) return;
+
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("camera", String(camera));
+
+      const url = `${backendUrl}/plot/check_available_data?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (res.ok && json.available) {
+        // Mark as fetched for this path/camera
+        lastFetchedAvailabilityRef.current = fetchKey;
+
+        console.log("fetchAvailableDataSources: received", json.available);
+        setAvailableDataSources(json.available);
+
+        // Auto-select first available data source if current is not available
+        // Use functional update to get current dataSource value
+        setDataSource(currentDataSource => {
+          const current = json.available[currentDataSource as keyof AvailableDataSources];
+          if (!current?.exists) {
+            // Priority order for auto-selection - prefer calibrated over uncalibrated
+            const priorityOrder: DataSourceType[] = [
+              "calibrated_instantaneous",
+              "calibrated_ensemble",
+              "uncalibrated_instantaneous",
+              "uncalibrated_ensemble",
+              "merged_instantaneous",
+              "merged_ensemble",
+              "statistics",
+            ];
+            for (const source of priorityOrder) {
+              if (json.available[source]?.exists) {
+                return source;
+              }
+            }
+          }
+          return currentDataSource;
+        });
+      }
+    } catch (e) {
+      console.error("Error fetching available data sources:", e);
+    } finally {
+      setAvailabilityLoading(false);
+    }
+  }, [effectiveDir, camera, backendUrl]);
+
+  // Fetch ensemble data
+  const fetchEnsembleImage = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) throw new Error("Please provide a base path");
+
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("var", type);
+      params.set("cmap", cmap);
+      if (run && run > 0) params.set("run", String(run));
+      if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
+      if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
+      params.set("camera", String(camera));
+      params.set("merged", isMerged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+
+      const url = `${backendUrl}/plot/plot_ensemble?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (!res.ok) throw new Error(json.error || "Failed to fetch ensemble plot");
+
+      setImageSrc(json.image ?? null);
+      setMeta(json.meta ?? null);
+      if (json.meta?.run != null) {
+        const parsed = Number(json.meta.run);
+        if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+      }
+      if (json.meta?.var != null && typeof json.meta.var === "string") {
+        if (json.meta.var !== type) setType(json.meta.var);
+      }
+      return true;
+    } catch (e: any) {
+      setError(e.message || "Unknown error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, isMerged, isUncalibrated]);
+
+  // Unified fetch function that chooses the right endpoint based on data source
+  const fetchCurrentView = useCallback(async () => {
+    if (isStatistics) {
+      // Statistics mode - use existing stats endpoint
+      return;
+    } else if (isEnsemble) {
+      return fetchEnsembleImage();
+    } else {
+      return fetchImage();
+    }
+  }, [isStatistics, isEnsemble, fetchEnsembleImage, fetchImage]);
 
   const fetchStatVars = useCallback(async () => {
     setStatVarsLoading(true);
@@ -363,9 +573,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       await fetchStatsImage();
       return;
     }
+    // For ensemble data, use the ensemble endpoint
+    if (isEnsemble) {
+      await fetchEnsembleImage();
+      return;
+    }
     await fetchFrameVars();
     await fetchImage();
-  }, [meanMode, fetchFrameVars, fetchImage, fetchStatsImage]);
+  }, [meanMode, isEnsemble, fetchFrameVars, fetchImage, fetchStatsImage, fetchEnsembleImage]);
 
   const toggleMeanMode = async () => {
     const newVal = !meanMode;
@@ -519,6 +734,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   useEffect(() => { clearHover(); }, [imageSrc, meta, type, index, meanMode, camera, merged, clearHover]);
 
   const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
+    // Skip coordinate fetching for uncalibrated data - coordinates are not available
+    if (isUncalibrated) return;
+
     if (pendingFetchRef.current) return;
     pendingFetchRef.current = true;
     const endpoint = meanMode ? "get_stats_value_at_position" : "get_vector_at_position";
@@ -531,7 +749,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("merged", merged ? "1" : "0");
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
-    
+
     const url = `${backendUrl}/plot/${endpoint}?${params.toString()}`;
     fetch(url)
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
@@ -541,7 +759,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -674,6 +892,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     fetchConfig();
   }, [backendUrl]);
 
+  // Fetch available data sources when base path or camera changes
+  useEffect(() => {
+    if (effectiveDir) {
+      void fetchAvailableDataSources();
+    }
+  }, [effectiveDir, camera, fetchAvailableDataSources]);
+
   useEffect(() => {
     if (!effectiveDir || meanMode) return;
     fetchAvailableRuns().then(runs => {
@@ -689,6 +914,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     if (!hasRendered || !(effectiveDir || basePaths.length > 0)) return;
     if (meanMode) {
       void fetchStatsImage();
+    } else if (isEnsemble) {
+      void fetchEnsembleImage();
     } else {
       void fetchImage();
     }
@@ -704,10 +931,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     camera,
     merged,
     isUncalibrated,
+    isEnsemble,
+    dataSource,
     basePathIdx,
     meanMode,
     fetchImage,
     fetchStatsImage,
+    fetchEnsembleImage,
   ]);
 
   useEffect(() => {
@@ -992,5 +1222,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     clearTransforms,
     effectiveDir,
     prefetchSurrounding,
+    // New data source management
+    dataSource,
+    setDataSource,
+    availableDataSources,
+    availabilityLoading,
+    fetchAvailableDataSources,
+    // Derived feature flags
+    isEnsemble,
+    isMerged,
+    isStatistics,
+    canTransform,
+    canEditCoordinates,
+    canMerge,
+    canViewMerged,
+    canCalculateStatistics,
+    canViewStatistics,
+    hasFrameNavigation,
+    // Ensemble specific
+    fetchEnsembleImage,
+    fetchCurrentView,
   };
 };

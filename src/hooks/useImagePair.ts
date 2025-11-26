@@ -11,8 +11,9 @@ interface PrefetchedFrame {
 }
 
 // Constants for cache management
-const MAX_CACHE_SIZE = 30;
-const PREFETCH_WINDOW = 10; // Frames to load around current position
+const MAX_CACHE_SIZE = 20;
+const PREFETCH_WINDOW = 5; // Frames to prefetch ahead (reduced for lighter load)
+const PINNED_FRAME = 1; // Frame 1 should always stay in cache
 
 export function useImagePair(
   backendUrl: string,
@@ -56,23 +57,29 @@ export function useImagePair(
     prefetchInProgressRef.current.clear();
   }, []);
 
-  // Clean cache to keep only frames around target index
+  // Clean cache to keep only frames around target index (with frame 1 pinning)
   const cleanCache = useCallback((targetIdx: number) => {
     const buffer = prefetchBufferRef.current;
     if (buffer.size <= MAX_CACHE_SIZE) return;
 
-    // Get all cached frame indices
+    // Get all cached frame indices, separating pinned and evictable
     const entries = Array.from(buffer.entries());
+    const pinnedEntries = entries.filter(e => e[1].index === PINNED_FRAME);
+    const evictableEntries = entries.filter(e => e[1].index !== PINNED_FRAME);
 
-    // Sort by distance from target
-    entries.sort((a, b) => {
+    // Sort evictable by distance from target
+    evictableEntries.sort((a, b) => {
       const distA = Math.abs(a[1].index - targetIdx);
       const distB = Math.abs(b[1].index - targetIdx);
       return distA - distB;
     });
 
-    // Keep only the closest frames up to MAX_CACHE_SIZE
-    const toKeep = new Set(entries.slice(0, MAX_CACHE_SIZE).map(e => e[0]));
+    // Keep pinned frames plus closest evictable frames up to MAX_CACHE_SIZE
+    const evictableToKeep = MAX_CACHE_SIZE - pinnedEntries.length;
+    const toKeep = new Set([
+      ...pinnedEntries.map(e => e[0]),
+      ...evictableEntries.slice(0, evictableToKeep).map(e => e[0])
+    ]);
 
     for (const key of buffer.keys()) {
       if (!toKeep.has(key)) {
