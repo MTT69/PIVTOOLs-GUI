@@ -56,6 +56,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
 }) => {
   const [coefficients, setCoefficients] = useState<Record<string, { dx: Record<string, string>, dy: Record<string, string> }>>({});
   const [cameraParams, setCameraParams] = useState<Record<number, { s_o: string, t_o: string, nx: string, ny: string }>>({});
+  const [mmPerPixel, setMmPerPixel] = useState<Record<number, number>>({});
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [calibrating, setCalibrating] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   useEffect(() => {
     const fetchXmlData = async () => {
       try {
-        const response = await fetch('/backend/calibration/polynomial/read_xml', {
+        const response = await fetch('/backend/calibration_poly/read_xml', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source_path_idx: sourcePathIdx })
@@ -84,6 +85,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         if (data.status === 'success' && data.cameras) {
           const newCoefficients: Record<string, { dx: Record<string, string>, dy: Record<string, string> }> = {};
           const newCameraParams: Record<number, { s_o: string, t_o: string, nx: string, ny: string }> = {};
+          const newMmPerPixel: Record<number, number> = {};
           
           Object.entries(data.cameras).forEach(([camIdStr, camData]: [string, any]) => {
              const match = camIdStr.match(/\d+/);
@@ -100,6 +102,10 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
                      nx: String(camData.normalisation.nx),
                      ny: String(camData.normalisation.ny)
                  };
+             }
+
+             if (camData.mm_per_pixel) {
+                 newMmPerPixel[camNum] = camData.mm_per_pixel;
              }
              
              const coeffsA = camData.coefficients_a || {};
@@ -145,6 +151,10 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
                   }
                   return prev;
               });
+          }
+
+          if (Object.keys(newMmPerPixel).length > 0) {
+              setMmPerPixel(prev => ({ ...prev, ...newMmPerPixel }));
           }
           
           if (Object.keys(newCoefficients).length > 0) {
@@ -221,24 +231,75 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   const calibrateVectors = async () => {
     if (!allPopulated) return;
     setCalibrating(true);
+    
+    const termToIndex: Record<string, number> = {
+        "const": 0, "s": 1, "s2": 2, "s3": 3,
+        "t": 4, "t2": 5, "t3": 6,
+        "st": 7, "s2t": 8, "st2": 9
+    };
+
     try {
-      const response = await fetch('/backend/calibration/polynomial/calibrate_vectors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          coefficients: coefficients,
-          image_count: imageCount,
-          type_name: "instantaneous"
-        })
-      });
-      const result = await response.json();
-      if (response.ok) {
-        console.log(`Polynomial calibration started! Job ID: ${result.job_id}`);
-        setJobId(result.job_id);
-      } else {
-        console.error(result.error || "Failed to start polynomial calibration");
+      // We need to launch a job for each camera
+      // For now, we'll just track the last job ID for progress, 
+      // or we could improve the backend to handle multiple cameras in one request.
+      // But the requirement is to connect to the new endpoint which takes one camera.
+      
+      const dt = config.piv_parameters?.dt || 1.0;
+
+      for (const camId of cameraOptions) {
+          const camCoeffs = coefficients[camId];
+          const params = cameraParams[camId];
+          const mm = mmPerPixel[camId] || 1.0;
+          
+          if (!camCoeffs || !params) continue;
+
+          // Map coefficients to indices
+          const dx_coeff: Record<string, number> = {};
+          const dy_coeff: Record<string, number> = {};
+          
+          Object.entries(camCoeffs.dx).forEach(([key, val]) => {
+              if (termToIndex[key] !== undefined) {
+                  dx_coeff[String(termToIndex[key])] = parseFloat(val);
+              }
+          });
+          
+          Object.entries(camCoeffs.dy).forEach(([key, val]) => {
+              if (termToIndex[key] !== undefined) {
+                  dy_coeff[String(termToIndex[key])] = parseFloat(val);
+              }
+          });
+
+          const payload = {
+            source_path_idx: sourcePathIdx,
+            camera: camId,
+            dt: dt,
+            mm_per_pixel: mm,
+            dx_coeff: dx_coeff,
+            dy_coeff: dy_coeff,
+            x_origin: parseFloat(params.s_o),
+            y_origin: parseFloat(params.t_o),
+            nx: parseFloat(params.nx),
+            ny: parseFloat(params.ny),
+            num_images: imageCount,
+            type_name: "instantaneous" // or make this configurable
+          };
+
+          const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          const result = await response.json();
+          if (response.ok) {
+            console.log(`Polynomial calibration started for Camera ${camId}! Job ID: ${result.job_id}`);
+            // We only track the last one for now in the UI
+            setJobId(result.job_id);
+          } else {
+            console.error(result.error || `Failed to start polynomial calibration for Camera ${camId}`);
+          }
       }
+      
     } catch (e: any) {
       console.error(`Error starting polynomial calibration: ${e.message}`);
     } finally {
