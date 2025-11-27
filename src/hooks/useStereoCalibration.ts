@@ -329,6 +329,33 @@ export function useStereoCalibration(
     }
   };
 
+  // --- Load saved calibration results (without recomputing) ---
+  const loadSavedCalibration = async () => {
+    setIsLoading(true);
+    try {
+      const [cam1, cam2] = cameraPair;
+      const res = await fetch(
+        `/backend/stereo/calibration/load_results?source_path_idx=${sourcePathIdx}&cam1=${cam1}&cam2=${cam2}`
+      );
+      const data = await res.json();
+
+      if (res.ok && data.exists) {
+        setCalibrationResults(data.results);
+        setGridImages(data.results?.grid_images || null);
+        console.log('Loaded saved stereo calibration results');
+        return true;
+      } else {
+        console.log('No saved stereo calibration results found');
+        return false;
+      }
+    } catch (e: any) {
+      console.error(`Error loading saved stereo calibration: ${e.message}`);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- Deep equality check ---
   function deepEqual(a: any, b: any): boolean {
     if (a === b) return true;
@@ -404,5 +431,6 @@ export function useStereoCalibration(
     // Actions
     startStereoCalibration,
     calibrateVectors,
+    loadSavedCalibration,
   };
 }

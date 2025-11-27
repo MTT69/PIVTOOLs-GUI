@@ -350,6 +350,40 @@ export function usePinholeCalibration(
     }
   };
 
+  // --- Load saved calibration results (without recomputing) ---
+  const loadSavedCalibration = async () => {
+    setLoadingResults(true);
+    try {
+      const res = await fetch(
+        `/backend/calibration/planar/load_results?source_path_idx=${sourcePathIdx}&camera=${camera}&image_index=${imageIndex}`
+      );
+      const data = await res.json();
+
+      if (res.ok && data.exists) {
+        if (data.results?.grid_data) {
+          setGridData(data.results.grid_data);
+          setGridPoints(data.results.grid_data.grid_points || []);
+        }
+        if (data.results?.camera_model) {
+          setCameraModel(data.results.camera_model);
+        }
+        if (data.results?.dewarped_image) {
+          setDewarpedB64(data.results.dewarped_image);
+        }
+        console.log('Loaded saved calibration results');
+        return true;
+      } else {
+        console.log('No saved calibration results found');
+        return false;
+      }
+    } catch (e: any) {
+      console.error(`Error loading saved calibration: ${e.message}`);
+      return false;
+    } finally {
+      setLoadingResults(false);
+    }
+  };
+
   // --- Calibrate vectors ---
   const calibrateVectors = async () => {
     try {
@@ -441,5 +475,6 @@ export function usePinholeCalibration(
     generateCameraModel,
     calibrateVectors,
     loadResultsForCurrentImage,
+    loadSavedCalibration,
   };
 }

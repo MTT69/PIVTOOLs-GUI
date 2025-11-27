@@ -5,11 +5,15 @@ interface ValidationAlertProps {
   validation: {
     valid: boolean;
     checked: boolean;
-    error?: string;
+    error?: string | null;
   };
+  /** Custom success message to display instead of default */
+  customSuccessMessage?: string;
+  /** Optional count of found items to display */
+  foundCount?: number | string;
 }
 
-export function ValidationAlert({ validation }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount }: ValidationAlertProps) {
   // Checking state
   if (!validation.checked && validation.error) {
     return (
@@ -24,11 +28,17 @@ export function ValidationAlert({ validation }: ValidationAlertProps) {
 
   // Success state
   if (validation.checked && validation.valid) {
+    const message = customSuccessMessage
+      ? customSuccessMessage
+      : foundCount !== undefined
+        ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
+        : "Image files found and validated successfully!";
+
     return (
       <Alert className="border-green-500 bg-green-50">
         <CheckCircle className="h-4 w-4 text-green-600" />
         <AlertDescription className="text-sm text-green-800">
-          Image files found and validated successfully!
+          {message}
         </AlertDescription>
       </Alert>
     );

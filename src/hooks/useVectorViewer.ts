@@ -333,6 +333,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         // Use functional update to get current dataSource value
         setDataSource(currentDataSource => {
           const current = json.available[currentDataSource as keyof AvailableDataSources];
+          console.log(`fetchAvailableDataSources: current=${currentDataSource}, exists=${current?.exists}`);
           if (!current?.exists) {
             // Priority order for auto-selection - prefer calibrated over uncalibrated
             const priorityOrder: DataSourceType[] = [
@@ -346,6 +347,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
             ];
             for (const source of priorityOrder) {
               if (json.available[source]?.exists) {
+                console.log(`fetchAvailableDataSources: auto-selecting ${source}`);
                 return source;
               }
             }
@@ -451,6 +453,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("frame", String(index));
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
       const url = `${backendUrl}/plot/check_vars?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -464,7 +467,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setFrameVarsLoading(false);
     }
-  }, [effectiveDir, index, camera, merged, backendUrl]);
+  }, [effectiveDir, index, camera, merged, isUncalibrated, backendUrl]);
 
   const fetchLimits = useCallback(async () => {
     setLimitsLoading(true);
@@ -566,6 +569,20 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       void fetchStatVars();
     }
   }, [meanMode, effectiveDir, camera, merged, fetchStatVars]);
+
+  // Auto-fetch frame vars when configuration changes (not in mean mode)
+  useEffect(() => {
+    if (!meanMode && effectiveDir && !isEnsemble) {
+      void fetchFrameVars();
+    }
+  }, [meanMode, effectiveDir, camera, merged, index, isEnsemble, isUncalibrated, fetchFrameVars]);
+
+  // Auto-render when we have a valid configuration
+  useEffect(() => {
+    if (effectiveDir && !hasRendered) {
+      setHasRendered(true);
+    }
+  }, [effectiveDir, hasRendered]);
 
   const handleRender = useCallback(async () => {
     setHasRendered(true);

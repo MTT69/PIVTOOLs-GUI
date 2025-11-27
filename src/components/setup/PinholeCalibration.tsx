@@ -4,7 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 import { usePinholeCalibration } from "@/hooks/usePinholeCalibration";
+import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
+import { ValidationAlert } from "@/components/setup/ValidationAlert";
 
 interface PinholeCalibrationProps {
   config: any;
@@ -65,6 +69,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     vectorDetails,
     generateCameraModel,
     calibrateVectors,
+    loadSavedCalibration,
   } = usePinholeCalibration(
     config.calibration?.pinhole || {},
     updateConfig,
@@ -72,6 +77,11 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     sourcePaths,
     imageCount
   );
+
+  // Validate calibration images and get preview
+  const validation = usePinholeValidation(sourcePathIdx, camera, filePattern);
+  const isMacOS = useIsMacOS();
+  const hasUnsupportedFormat = isContainerFormat(filePattern);
 
   // Local state for inputs to prevent debouncing issues
   const [dtInput, setDtInput] = useState(String(dt));
@@ -249,6 +259,87 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
               </label>
             </div>
           </div>
+
+          {/* macOS Warning for Unsupported Formats */}
+          {hasUnsupportedFormat && isMacOS && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Unsupported File Format on macOS</AlertTitle>
+              <AlertDescription>
+                .set and .im7 container formats require Windows or Linux.
+                These formats are not supported on macOS.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Calibration Validation */}
+          <ValidationAlert
+            validation={validation}
+            customSuccessMessage={
+              validation.valid
+                ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
+                : undefined
+            }
+          />
+
+          {/* Suggested Pattern Button - show when validation fails but a suggestion is available */}
+          {!validation.valid && validation.suggested_pattern && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setFilePattern(validation.suggested_pattern!)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.suggested_pattern}"
+              </Button>
+            </div>
+          )}
+
+          {/* Calibration Target Preview - only show when validation succeeds */}
+          {validation.valid && validation.first_image_preview && (
+            <Card className="border-green-200 bg-green-50/30">
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm font-medium text-green-800">
+                  Calibration Target Preview
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="py-2">
+                <div className="flex items-start gap-4">
+                  <div className="relative border rounded overflow-hidden bg-white" style={{ maxWidth: "300px" }}>
+                    <img
+                      src={`data:image/png;base64,${validation.first_image_preview}`}
+                      alt="Calibration target preview"
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="text-xs text-gray-600 space-y-1">
+                    {validation.image_size && (
+                      <div><strong>Size:</strong> {validation.image_size[0]} x {validation.image_size[1]} px</div>
+                    )}
+                    {validation.format_detected && (
+                      <div><strong>Format:</strong> .{validation.format_detected}</div>
+                    )}
+                    {validation.sample_files && validation.sample_files.length > 0 && (
+                      <div>
+                        <strong>Sample files:</strong>
+                        <ul className="mt-1 ml-3 text-gray-500">
+                          {validation.sample_files.slice(0, 3).map((f, i) => (
+                            <li key={i}>{f}</li>
+                          ))}
+                          {validation.sample_files.length > 3 && (
+                            <li>... and {(validation.found_count as number) - 3} more</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Calibration Status Indicator */}
           <div className="mb-2">
             {calibrationStatus === "running" && (
@@ -277,15 +368,23 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             )}
           </div>
 
-          {/* THREE MAIN BUTTONS */}
+          {/* MAIN BUTTONS */}
           <div className="border-t pt-4">
-            <div className="flex gap-4 items-center">
+            <div className="flex gap-4 items-center flex-wrap">
               <Button
                 onClick={generateCameraModel}
                 disabled={generating || vectorStatus === "running" || calibrationStatus === "running"}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3"
               >
                 {generating ? 'Generating...' : 'Generate Camera Model'}
+              </Button>
+              <Button
+                onClick={loadSavedCalibration}
+                disabled={loadingResults}
+                variant="outline"
+                className="px-6 py-3"
+              >
+                {loadingResults ? 'Loading...' : 'Load Calibration'}
               </Button>
               <Button
                 onClick={calibrateVectors}
@@ -305,8 +404,8 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             </div>
             <div className="text-xs text-gray-500 mt-2">
               <p><strong>Generate Camera Model:</strong> Process all calibration images to create camera models.</p>
+              <p><strong>Load Calibration:</strong> Load previously generated calibration results without recomputing.</p>
               <p><strong>Calibrate Vectors:</strong> Use camera model to calibrate PIV vectors.</p>
-              <p><strong>Load Results:</strong> Load existing calibration results.</p>
             </div>
           </div>
         </CardContent>
