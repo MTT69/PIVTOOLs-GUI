@@ -141,6 +141,17 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     setUpper,
     cmap,
     setCmap,
+    // New: axis limits and custom title
+    xlimMin,
+    setXlimMin,
+    xlimMax,
+    setXlimMax,
+    ylimMin,
+    setYlimMin,
+    ylimMax,
+    setYlimMax,
+    plotTitle,
+    setPlotTitle,
     imageSrc,
     meta,
     loading,
@@ -612,6 +623,62 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               >
                 {limitsLoading ? "Getting..." : "Auto-Calculate"}
               </Button>
+            </div>
+
+            {/* X/Y Axis Limits */}
+            <div className="flex items-end gap-4 flex-wrap">
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-sm font-medium block mb-2">X Min:</label>
+                <Input
+                  type="number"
+                  value={xlimMin}
+                  onChange={e => setXlimMin(e.target.value)}
+                  placeholder="auto"
+                />
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-sm font-medium block mb-2">X Max:</label>
+                <Input
+                  type="number"
+                  value={xlimMax}
+                  onChange={e => setXlimMax(e.target.value)}
+                  placeholder="auto"
+                />
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-sm font-medium block mb-2">Y Min:</label>
+                <Input
+                  type="number"
+                  value={ylimMin}
+                  onChange={e => setYlimMin(e.target.value)}
+                  placeholder="auto"
+                />
+              </div>
+
+              <div className="flex-1 min-w-[100px]">
+                <label className="text-sm font-medium block mb-2">Y Max:</label>
+                <Input
+                  type="number"
+                  value={ylimMax}
+                  onChange={e => setYlimMax(e.target.value)}
+                  placeholder="auto"
+                />
+              </div>
+            </div>
+
+            {/* Custom Plot Title */}
+            <div className="flex items-end gap-4">
+              <div className="flex-1">
+                <label className="text-sm font-medium block mb-2">Plot Title:</label>
+                <Input
+                  type="text"
+                  value={plotTitle}
+                  onChange={e => setPlotTitle(e.target.value)}
+                  placeholder="auto-generated"
+                />
+              </div>
             </div>
 
             {/* Render Button */}

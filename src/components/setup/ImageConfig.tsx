@@ -8,9 +8,17 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Image as ImageIcon, AlertTriangle } from "lucide-react";
+import { Plus, Minus, Image as ImageIcon, AlertTriangle, Info } from "lucide-react";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
+
+// Helper to detect container formats (.set, .im7, .ims) which store all cameras and frame pairs internally
+const isContainerFormat = (pattern: string | undefined): boolean => {
+  if (!pattern) return false;
+  const lower = pattern.toLowerCase();
+  return lower.endsWith('.set') || lower.endsWith('.im7') || lower.endsWith('.ims') ||
+         lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims');
+};
 
 interface ImageConfigProps {
   config: any;
@@ -106,13 +114,20 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         setRawPatterns(rawFmt);
         setNonTimeResolvedMode("ab_format");
       } else if (Array.isArray(rawFmt) && rawFmt.length === 1) {
-        // Skip frames mode
+        // Single pattern - could be skip_frames OR container format
+        // For container formats, don't force a mode - pairing is handled internally
         setRawPatterns([rawFmt[0]]);
-        setNonTimeResolvedMode("skip_frames");
+        // Only set skip_frames mode for non-container formats
+        if (!isContainerFormat(rawFmt[0])) {
+          setNonTimeResolvedMode("skip_frames");
+        }
       } else if (typeof rawFmt === 'string') {
-        // Single string - skip frames mode
+        // Single string - could be skip_frames OR container format
         setRawPatterns([rawFmt]);
-        setNonTimeResolvedMode("skip_frames");
+        // Only set skip_frames mode for non-container formats
+        if (!isContainerFormat(rawFmt)) {
+          setNonTimeResolvedMode("skip_frames");
+        }
       } else {
         // Default to A/B format
         setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
@@ -169,6 +184,17 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
   const handleToggleTimeResolved = (isTimeResolved: boolean) => {
     setTimeResolved(isTimeResolved);
+    
+    // For container formats, don't transform patterns - just toggle the flag
+    // Container formats handle frame pairing internally
+    const currentPattern = rawPatterns[0] || "";
+    if (isContainerFormat(currentPattern)) {
+      // Keep the pattern as-is, just save the time_resolved change
+      saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+      return;
+    }
+    
+    // Standard format: transform patterns based on time-resolved mode
     let newPatterns: string[];
     if (isTimeResolved) {
       const newPattern = (rawPatterns[0] || "B%05d.tif").replace(/_A\.tif$/i, ".tif");
@@ -247,11 +273,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    {timeResolved
-                      ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential overlapping)`
-                      : nonTimeResolvedMode === "ab_format"
-                        ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
-                        : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip frames)`
+                    {isContainerFormat(rawPatterns[0])
+                      ? `${numImages} files → ${numImages} frame pairs (container format stores A+B together)`
+                      : timeResolved
+                        ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential overlapping)`
+                        : nonTimeResolvedMode === "ab_format"
+                          ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
+                          : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip frames)`
                     }
                   </p>
                 </div>
@@ -271,7 +299,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
               </div>
               
-              {Number(numCameras) > 1 && (
+              {Number(numCameras) > 1 && !isContainerFormat(rawPatterns[0]) && (
                 <div className="mt-4">
                   <div className="flex items-center gap-2 mb-2">
                     <Label>Custom Camera Subfolders</Label>
@@ -294,11 +322,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <p className="text-xs text-muted-foreground mt-1">
                     Leave empty to use default "CamN" folders. Examples: "View_Left", "Camera_A", "Top"
                   </p>
-                  {(rawPatterns[0]?.includes('.set') || rawPatterns[0]?.includes('.im7') || rawPatterns[0]?.includes('.ims')) && (
-                    <p className="text-xs text-orange-600 mt-1">
-                      ⚠️ Camera subfolders are not used for container formats (.set, .im7, .ims) - all cameras are in the source directory.
-                    </p>
-                  )}
+                </div>
+              )}
+
+              {Number(numCameras) > 1 && isContainerFormat(rawPatterns[0]) && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-muted-foreground">
+                  <Info className="h-4 w-4 mt-0.5 text-blue-500" />
+                  <p>Container formats (.set, .im7, .ims) store all cameras in a single file - no camera subfolders needed.</p>
                 </div>
               )}
 
@@ -318,7 +348,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <Label htmlFor="time_resolved">Time Resolved (sequential overlapping pairs)</Label>
                 </div>
 
-                {!timeResolved && (
+                {!timeResolved && !isContainerFormat(rawPatterns[0]) && (
                   <div className="ml-6 space-y-2">
                     <div>
                       <Label htmlFor="non_time_resolved_mode" className="text-sm">Pairing Mode</Label>
@@ -326,7 +356,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                         value={nonTimeResolvedMode}
                         onValueChange={(value) => {
                           setNonTimeResolvedMode(value);
-                          // Update patterns based on mode
+                          // Update patterns based on mode (only for standard formats)
                           let newPatterns: string[];
                           if (value === "ab_format") {
                             // A/B format: create two patterns from the first pattern
@@ -356,6 +386,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                         }
                       </p>
                     </div>
+                  </div>
+                )}
+
+                {!timeResolved && isContainerFormat(rawPatterns[0]) && (
+                  <div className="ml-6 flex items-start gap-2 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4 mt-0.5 text-blue-500" />
+                    <p>Frame pairing is handled internally by the container format (.set/.im7/.ims).</p>
                   </div>
                 )}
 

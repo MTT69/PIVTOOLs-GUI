@@ -74,6 +74,24 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [lower, setLower] = useState<string>("");
   const [upper, setUpper] = useState<string>("");
   const [cmap, setCmap] = useState<string>("default");
+  // New: axis limits and custom title
+  const [xlimMin, setXlimMin] = useState<string>("");
+  const [xlimMax, setXlimMax] = useState<string>("");
+  const [ylimMin, setYlimMin] = useState<string>("");
+  const [ylimMax, setYlimMax] = useState<string>("");
+  const [plotTitle, setPlotTitle] = useState<string>("");
+  // Refs to access latest values without triggering re-renders
+  const xlimMinRef = useRef(xlimMin);
+  const xlimMaxRef = useRef(xlimMax);
+  const ylimMinRef = useRef(ylimMin);
+  const ylimMaxRef = useRef(ylimMax);
+  const plotTitleRef = useRef(plotTitle);
+  // Keep refs in sync with state
+  xlimMinRef.current = xlimMin;
+  xlimMaxRef.current = xlimMax;
+  ylimMinRef.current = ylimMin;
+  ylimMaxRef.current = ylimMax;
+  plotTitleRef.current = plotTitle;
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ run: number; var: string; width?: number; height?: number; axes_bbox?: { left: number; top: number; width: number; height: number; png_width: number; png_height: number } } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -205,6 +223,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+      // Axis limits - only send if both min and max are provided (use refs for latest values)
+      if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
+        params.set("xlim_min", String(Number(xlimMinRef.current)));
+        params.set("xlim_max", String(Number(xlimMaxRef.current)));
+      }
+      if (ylimMinRef.current.trim() !== "" && ylimMaxRef.current.trim() !== "") {
+        params.set("ylim_min", String(Number(ylimMinRef.current)));
+        params.set("ylim_max", String(Number(ylimMaxRef.current)));
+      }
+      // Custom title (use ref for latest value)
+      if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
@@ -256,6 +285,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
       if (xOffset.trim() !== "") params.set("x_offset", xOffset);
       if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+      // Axis limits - only send if both min and max are provided (use refs for latest values)
+      if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
+        params.set("xlim_min", String(Number(xlimMinRef.current)));
+        params.set("xlim_max", String(Number(xlimMaxRef.current)));
+      }
+      if (ylimMinRef.current.trim() !== "" && ylimMaxRef.current.trim() !== "") {
+        params.set("ylim_min", String(Number(ylimMinRef.current)));
+        params.set("ylim_max", String(Number(ylimMaxRef.current)));
+      }
+      // Custom title (use ref for latest value)
+      if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
@@ -380,6 +420,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("camera", String(camera));
       params.set("merged", isMerged ? "1" : "0");
       params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      // Axis limits - only send if both min and max are provided (use refs for latest values)
+      if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
+        params.set("xlim_min", String(Number(xlimMinRef.current)));
+        params.set("xlim_max", String(Number(xlimMaxRef.current)));
+      }
+      if (ylimMinRef.current.trim() !== "" && ylimMaxRef.current.trim() !== "") {
+        params.set("ylim_min", String(Number(ylimMinRef.current)));
+        params.set("ylim_max", String(Number(ylimMaxRef.current)));
+      }
+      // Custom title (use ref for latest value)
+      if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
 
       const url = `${backendUrl}/plot/plot_ensemble?${params.toString()}`;
       const res = await fetch(url);
@@ -535,6 +586,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      // Axis limits - only send if both min and max are provided (use refs for latest values)
+      if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
+        params.set("xlim_min", String(Number(xlimMinRef.current)));
+        params.set("xlim_max", String(Number(xlimMaxRef.current)));
+      }
+      if (ylimMinRef.current.trim() !== "" && ylimMaxRef.current.trim() !== "") {
+        params.set("ylim_min", String(Number(ylimMinRef.current)));
+        params.set("ylim_max", String(Number(ylimMaxRef.current)));
+      }
+      // Custom title (use ref for latest value)
+      if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
       
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
       const res = await fetch(url);
@@ -766,6 +828,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("merged", merged ? "1" : "0");
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
+    // Pass axis limits so backend can correctly map percentage to visible region
+    if (xlimMin.trim() !== "" && xlimMax.trim() !== "") {
+      params.set("xlim_min", String(Number(xlimMin)));
+      params.set("xlim_max", String(Number(xlimMax)));
+    }
+    if (ylimMin.trim() !== "" && ylimMax.trim() !== "") {
+      params.set("ylim_min", String(Number(ylimMin)));
+      params.set("ylim_max", String(Number(ylimMax)));
+    }
 
     const url = `${backendUrl}/plot/${endpoint}?${params.toString()}`;
     fetch(url)
@@ -776,7 +847,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -1178,6 +1249,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setUpper,
     cmap,
     setCmap,
+    // New: axis limits and custom title
+    xlimMin,
+    setXlimMin,
+    xlimMax,
+    setXlimMax,
+    ylimMin,
+    setYlimMin,
+    ylimMax,
+    setYlimMax,
+    plotTitle,
+    setPlotTitle,
     imageSrc,
     meta,
     loading,

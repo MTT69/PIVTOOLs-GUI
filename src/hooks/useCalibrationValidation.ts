@@ -326,8 +326,9 @@ export function useIsMacOS(): boolean {
 
 /**
  * Helper function to check if file pattern is a container format
+ * Container formats (.set, .im7, .ims) store all cameras and frame pairs internally
  */
 export function isContainerFormat(filePattern: string): boolean {
   const lower = filePattern.toLowerCase();
-  return lower.includes('.set') || lower.includes('.im7');
+  return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims');
 }
