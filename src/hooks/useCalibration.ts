@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-export type CalibrationMethod = "scale_factor" | "pinhole" | "stereo";
+export type CalibrationMethod = "scale_factor" | "pinhole" | "charuco" | "polynomial" | "stereo";
 
 export interface CalibrationConfig {
   active?: CalibrationMethod;
   scale_factor?: any;
   pinhole?: any;
+  charuco?: any;
+  polynomial?: any;
   stereo?: any;
   [key: string]: any;
 }

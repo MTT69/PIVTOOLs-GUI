@@ -12,12 +12,26 @@ import { Plus, Minus, Image as ImageIcon, AlertTriangle, Info } from "lucide-rea
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
 
-// Helper to detect container formats (.set, .im7, .ims) which store all cameras and frame pairs internally
+// Helper to detect image type from format pattern
+const detectImageType = (pattern: string | undefined): string => {
+  if (!pattern) return "standard";
+  const lower = pattern.toLowerCase();
+  if (lower.includes('.cine')) return "cine";
+  if (lower.includes('.set')) return "lavision_set";
+  if (lower.includes('.im7') || lower.includes('.ims')) return "lavision_im7";
+  return "standard";
+};
+
+// Helper to detect container formats (.set, .im7, .ims, .cine) which store multiple frames
 const isContainerFormat = (pattern: string | undefined): boolean => {
   if (!pattern) return false;
   const lower = pattern.toLowerCase();
-  return lower.endsWith('.set') || lower.endsWith('.im7') || lower.endsWith('.ims') ||
-         lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims');
+  return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims') || lower.includes('.cine');
+};
+
+// Helper to detect LaVision multi-camera formats (all cameras in one file)
+const isMultiCameraContainer = (imageType: string): boolean => {
+  return imageType === "lavision_set" || imageType === "lavision_im7";
 };
 
 interface ImageConfigProps {
@@ -39,6 +53,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [zeroBasedIndexing, setZeroBasedIndexing] = useState<boolean>(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [nonTimeResolvedMode, setNonTimeResolvedMode] = useState<string>("ab_format"); // "ab_format" or "skip_frames"
+  const [imageType, setImageType] = useState<string>("standard"); // "standard", "cine", "lavision_set", "lavision_im7"
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -101,6 +116,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     setCameraSubfolders(paths.camera_subfolders || []);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
+    // Detect image type from config or format pattern
+    const detectedType = images.image_type || detectImageType(
+      Array.isArray(images.image_format) ? images.image_format[0] : images.image_format
+    );
+    setImageType(detectedType);
+
     const rawFmt = images.image_format;
     if (images.time_resolved) {
       // Time-resolved: always single format
@@ -148,8 +169,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     nextCameraSubfolders: string[],
     nextRawPatterns: string[],
     nextVectorPattern: string,
+    nextImageType?: string,
   ) => {
     setSavingMeta("Saving...");
+    const effectiveImageType = nextImageType || imageType;
     const payload = {
       images: {
         num_images: nextNumImages === "" ? null : Number(nextNumImages),
@@ -157,6 +180,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         zero_based_indexing: nextZeroBasedIndexing,
         image_format: nextTimeResolved ? nextRawPatterns[0] : nextRawPatterns,
         vector_format: [nextVectorPattern],
+        image_type: effectiveImageType,
       },
       paths: {
         camera_count: Number(nextNumCameras),
@@ -263,7 +287,58 @@ export default function ImageConfig({ config, updateConfig, validation, sections
             <CardContent>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="num_images">Number of Image Files</Label>
+                  <Label htmlFor="image_type">Image Type</Label>
+                  <Select
+                    value={imageType}
+                    onValueChange={(value) => {
+                      setImageType(value);
+                      // Set default format pattern based on type
+                      let defaultFormat = "";
+                      let defaultTimeResolved = timeResolved;
+                      switch(value) {
+                        case "cine":
+                          defaultFormat = "Camera%d.cine";
+                          // CINE typically time-resolved
+                          defaultTimeResolved = true;
+                          break;
+                        case "lavision_set":
+                          defaultFormat = "data.set";
+                          defaultTimeResolved = false;
+                          break;
+                        case "lavision_im7":
+                          defaultFormat = "B%05d.im7";
+                          defaultTimeResolved = false;
+                          break;
+                        default:
+                          defaultFormat = timeResolved ? "B%05d.tif" : "B%05d_A.tif";
+                      }
+                      const newPatterns = value === "standard" && !defaultTimeResolved
+                        ? ["B%05d_A.tif", "B%05d_B.tif"]
+                        : [defaultFormat];
+                      setRawPatterns(newPatterns);
+                      setTimeResolved(defaultTimeResolved);
+                      saveConfig(numImages, numCameras, defaultTimeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern, value);
+                    }}
+                  >
+                    <SelectTrigger id="image_type" className="w-full mt-1">
+                      <SelectValue placeholder="Select format type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
+                      <SelectItem value="cine">Phantom CINE</SelectItem>
+                      <SelectItem value="lavision_set">LaVision SET</SelectItem>
+                      <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {imageType === "cine" && "High-speed camera video files"}
+                    {imageType === "lavision_set" && "LaVision container (all cameras in one file)"}
+                    {imageType === "lavision_im7" && "LaVision image sequence"}
+                    {imageType === "standard" && "Standard image sequences"}
+                  </p>
+                </div>
+                <div>
+                  <Label htmlFor="num_images">Number of {imageType === "cine" ? "Frames" : "Image Files"}</Label>
                   <Input
                     id="num_images"
                     type="number"
@@ -273,16 +348,29 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    {isContainerFormat(rawPatterns[0])
-                      ? `${numImages} files → ${numImages} frame pairs (container format stores A+B together)`
-                      : timeResolved
-                        ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential overlapping)`
-                        : nonTimeResolvedMode === "ab_format"
-                          ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
-                          : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip frames)`
+                    {imageType === "cine"
+                      ? (timeResolved
+                          ? `${numImages} frames → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (overlapping)`
+                          : `${numImages} frames → ${Math.floor((parseInt(numImages || '0')) / 2)} pairs (skip)`)
+                      : imageType === "lavision_set"
+                        ? (timeResolved
+                            ? `${numImages} entries → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (across entries)`
+                            : `${numImages} entries → ${numImages} frame pairs (A+B in each entry)`)
+                        : imageType === "lavision_im7"
+                          ? (timeResolved
+                              ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (across files)`
+                              : `${numImages} files → ${numImages} frame pairs (A+B in each file)`)
+                          : timeResolved
+                            ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential)`
+                            : nonTimeResolvedMode === "ab_format"
+                              ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
+                              : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip)`
                     }
                   </p>
                 </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mt-4">
                 <div>
                   <Label htmlFor="num_cameras">Camera Count</Label>
                   <Input
@@ -299,7 +387,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
               </div>
               
-              {Number(numCameras) > 1 && !isContainerFormat(rawPatterns[0]) && (
+              {Number(numCameras) > 1 && imageType === "standard" && (
                 <div className="mt-4">
                   <div className="flex items-center gap-2 mb-2">
                     <Label>Custom Camera Subfolders</Label>
@@ -325,10 +413,17 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
               )}
 
-              {Number(numCameras) > 1 && isContainerFormat(rawPatterns[0]) && (
+              {Number(numCameras) > 1 && isMultiCameraContainer(imageType) && (
                 <div className="mt-4 flex items-start gap-2 text-sm text-muted-foreground">
                   <Info className="h-4 w-4 mt-0.5 text-blue-500" />
-                  <p>Container formats (.set, .im7, .ims) store all cameras in a single file - no camera subfolders needed.</p>
+                  <p>LaVision formats (.set, .im7) store all cameras in a single file - no camera subfolders needed.</p>
+                </div>
+              )}
+
+              {Number(numCameras) > 1 && imageType === "cine" && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-muted-foreground">
+                  <Info className="h-4 w-4 mt-0.5 text-blue-500" />
+                  <p>CINE files: One file per camera in source directory (e.g., Camera1.cine, Camera2.cine). Pattern uses %d for camera number.</p>
                 </div>
               )}
 
@@ -339,74 +434,162 @@ export default function ImageConfig({ config, updateConfig, validation, sections
               )}
 
               <div className="mt-4 flex flex-col gap-3">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="time_resolved"
-                    checked={timeResolved}
-                    onCheckedChange={handleToggleTimeResolved}
-                  />
-                  <Label htmlFor="time_resolved">Time Resolved (sequential overlapping pairs)</Label>
-                </div>
+                {/* CINE: Show pairing mode selector (both time-resolved and skip supported) */}
+                {imageType === "cine" && (
+                  <div>
+                    <Label htmlFor="cine_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
+                    <Select
+                      value={timeResolved ? "time_resolved" : "skip"}
+                      onValueChange={(value) => {
+                        const isTimeResolved = value === "time_resolved";
+                        setTimeResolved(isTimeResolved);
+                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+                      }}
+                    >
+                      <SelectTrigger id="cine_pairing_mode" className="w-full mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="time_resolved">Time Resolved (1+2, 2+3, 3+4...)</SelectItem>
+                        <SelectItem value="skip">Skip Frames (1+2, 3+4, 5+6...)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {timeResolved
+                        ? "Sequential overlapping pairs - typical for high-speed PIV"
+                        : "Non-overlapping pairs - typical for double-pulse laser PIV"
+                      }
+                    </p>
+                  </div>
+                )}
 
-                {!timeResolved && !isContainerFormat(rawPatterns[0]) && (
-                  <div className="ml-6 space-y-2">
-                    <div>
-                      <Label htmlFor="non_time_resolved_mode" className="text-sm">Pairing Mode</Label>
-                      <Select
-                        value={nonTimeResolvedMode}
-                        onValueChange={(value) => {
-                          setNonTimeResolvedMode(value);
-                          // Update patterns based on mode (only for standard formats)
-                          let newPatterns: string[];
-                          if (value === "ab_format") {
-                            // A/B format: create two patterns from the first pattern
-                            const base = (rawPatterns[0] || "B%05d").replace(/\.tif$/i, "").replace(/_[AB]$/i, "");
-                            newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
-                          } else {
-                            // Skip frames: use single pattern
-                            const pattern = rawPatterns[0] || "B%05d.tif";
-                            newPatterns = [pattern.replace(/_[AB]\.tif$/i, ".tif")];
-                          }
-                          setRawPatterns(newPatterns);
-                          saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
-                        }}
-                      >
-                        <SelectTrigger id="non_time_resolved_mode" className="w-full mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="ab_format">A/B Format (B00001_A + B00001_B)</SelectItem>
-                          <SelectItem value="skip_frames">Skip Frames (1+2, 3+4, 5+6, ...)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {nonTimeResolvedMode === "ab_format"
-                          ? "Separate A and B files with same index"
-                          : "Non-overlapping pairs from single sequence"
-                        }
-                      </p>
+                {/* LaVision .im7: Show pairing mode selector (time-resolved supported) */}
+                {imageType === "lavision_im7" && (
+                  <div>
+                    <Label htmlFor="im7_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
+                    <Select
+                      value={timeResolved ? "time_resolved" : "paired"}
+                      onValueChange={(value) => {
+                        const isTimeResolved = value === "time_resolved";
+                        setTimeResolved(isTimeResolved);
+                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+                      }}
+                    >
+                      <SelectTrigger id="im7_pairing_mode" className="w-full mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="paired">Pre-paired A+B (each file contains both frames)</SelectItem>
+                        <SelectItem value="time_resolved">Time Resolved (pair across files: 1+2, 2+3...)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {timeResolved
+                        ? "Each .im7 has one frame per camera - pairs formed across consecutive files"
+                        : "Each .im7 contains both A and B frames per camera"
+                      }
+                    </p>
+                  </div>
+                )}
+
+                {/* LaVision .set: Show pairing mode selector (time-resolved now supported) */}
+                {imageType === "lavision_set" && (
+                  <div>
+                    <Label htmlFor="set_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
+                    <Select
+                      value={timeResolved ? "time_resolved" : "paired"}
+                      onValueChange={(value) => {
+                        const isTimeResolved = value === "time_resolved";
+                        setTimeResolved(isTimeResolved);
+                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+                      }}
+                    >
+                      <SelectTrigger id="set_pairing_mode" className="w-full mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="paired">Pre-paired A+B (each entry contains both frames)</SelectItem>
+                        <SelectItem value="time_resolved">Time Resolved (pair across entries: 1+2, 2+3...)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {timeResolved
+                        ? "Each .set entry has one frame per camera - pairs formed across consecutive entries"
+                        : "Each .set entry contains both A and B frames per camera"
+                      }
+                    </p>
+                  </div>
+                )}
+
+                {/* Standard formats: show time-resolved toggle */}
+                {imageType === "standard" && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id="time_resolved"
+                        checked={timeResolved}
+                        onCheckedChange={handleToggleTimeResolved}
+                      />
+                      <Label htmlFor="time_resolved">Time Resolved (sequential overlapping pairs)</Label>
                     </div>
-                  </div>
+
+                    {!timeResolved && (
+                      <div className="ml-6 space-y-2">
+                        <div>
+                          <Label htmlFor="non_time_resolved_mode" className="text-sm">Pairing Mode</Label>
+                          <Select
+                            value={nonTimeResolvedMode}
+                            onValueChange={(value) => {
+                              setNonTimeResolvedMode(value);
+                              // Update patterns based on mode (only for standard formats)
+                              let newPatterns: string[];
+                              if (value === "ab_format") {
+                                // A/B format: create two patterns from the first pattern
+                                const base = (rawPatterns[0] || "B%05d").replace(/\.tif$/i, "").replace(/_[AB]$/i, "");
+                                newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
+                              } else {
+                                // Skip frames: use single pattern
+                                const pattern = rawPatterns[0] || "B%05d.tif";
+                                newPatterns = [pattern.replace(/_[AB]\.tif$/i, ".tif")];
+                              }
+                              setRawPatterns(newPatterns);
+                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+                            }}
+                          >
+                            <SelectTrigger id="non_time_resolved_mode" className="w-full mt-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="ab_format">A/B Format (B00001_A + B00001_B)</SelectItem>
+                              <SelectItem value="skip_frames">Skip Frames (1+2, 3+4, 5+6, ...)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {nonTimeResolvedMode === "ab_format"
+                              ? "Separate A and B files with same index"
+                              : "Non-overlapping pairs from single sequence"
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
-                {!timeResolved && isContainerFormat(rawPatterns[0]) && (
-                  <div className="ml-6 flex items-start gap-2 text-sm text-muted-foreground">
-                    <Info className="h-4 w-4 mt-0.5 text-blue-500" />
-                    <p>Frame pairing is handled internally by the container format (.set/.im7/.ims).</p>
+                {/* Zero-based indexing: only show for standard formats */}
+                {imageType === "standard" && (
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="zero_based"
+                      checked={zeroBasedIndexing}
+                      onCheckedChange={(checked) => {
+                        setZeroBasedIndexing(checked);
+                        saveConfig(numImages, numCameras, timeResolved, checked, cameraSubfolders, rawPatterns, vectorPattern);
+                      }}
+                    />
+                    <Label htmlFor="zero_based">Zero-based Indexing (start at 0)</Label>
                   </div>
                 )}
-
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="zero_based"
-                    checked={zeroBasedIndexing}
-                    onCheckedChange={(checked) => {
-                      setZeroBasedIndexing(checked);
-                      saveConfig(numImages, numCameras, timeResolved, checked, cameraSubfolders, rawPatterns, vectorPattern);
-                    }}
-                  />
-                  <Label htmlFor="zero_based">Zero-based Indexing (start at 0)</Label>
-                </div>
               </div>
             </CardContent>
           </Card>

@@ -124,13 +124,18 @@ function PolygonMaskEditor({
 	}, [raw]);
 
 	// Build grayscale ImageData from RAW for drawing
+	// vmin/vmax are now percentages (0-100), convert to data range
 	const mappedRaw = useMemo(() => {
 		if (!raw?.data) return null;
-		const { width, height, data } = raw;
+		const { width, height, data, bitDepth } = raw;
 		const out = new Uint8ClampedArray(width * height * 4);
-		const rng = Math.max(1e-12, vmax - vmin);
+		// Convert percentages to actual data range
+		const maxDataVal = bitDepth ? Math.pow(2, bitDepth) - 1 : 255;
+		const dataVmin = (vmin / 100) * maxDataVal;
+		const dataVmax = (vmax / 100) * maxDataVal;
+		const rng = Math.max(1e-12, dataVmax - dataVmin);
 		for (let i = 0; i < width * height; i++) {
-			let t = (Number(data[i]) - vmin) / rng;
+			let t = (Number(data[i]) - dataVmin) / rng;
 			if (t < 0) t = 0; if (t > 1) t = 1;
 			const v = Math.round(t * 255);
 			const j = i * 4;
@@ -140,40 +145,43 @@ function PolygonMaskEditor({
 	}, [raw, vmin, vmax]);
 
 	// NEW: Process PNG images with contrast adjustment
+	// vmin/vmax are now percentages (0-100), convert to 0-255 for 8-bit PNG
 	const mappedPng = useMemo(() => {
 		if (raw?.data || !imgRef.current || !nativeSize.w || !nativeSize.h) return null;
-		
+
 		const { w, h } = nativeSize;
 		const tmpCanvas = document.createElement('canvas');
 		tmpCanvas.width = w;
 		tmpCanvas.height = h;
 		const tmpCtx = tmpCanvas.getContext('2d');
 		if (!tmpCtx) return null;
-		
+
 		// Draw original image
 		tmpCtx.drawImage(imgRef.current, 0, 0);
 		const imageData = tmpCtx.getImageData(0, 0, w, h);
 		const pixels = imageData.data;
-		
-		// Apply contrast adjustment
-		const rng = Math.max(1e-12, vmax - vmin);
+
+		// Convert percentages to pixel values (0-255 for 8-bit PNG)
+		const pixelVmin = (vmin / 100) * 255;
+		const pixelVmax = (vmax / 100) * 255;
+		const rng = Math.max(1e-12, pixelVmax - pixelVmin);
 		for (let i = 0; i < pixels.length; i += 4) {
 			// Convert to grayscale
 			const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
-			
+
 			// Apply contrast stretch
-			let t = (gray - vmin) / rng;
+			let t = (gray - pixelVmin) / rng;
 			if (t < 0) t = 0;
 			if (t > 1) t = 1;
 			const v = Math.round(t * 255);
-			
+
 			// Set RGB to adjusted value
 			pixels[i] = v;
 			pixels[i + 1] = v;
 			pixels[i + 2] = v;
 			// Alpha unchanged
 		}
-		
+
 		return imageData;
 	}, [raw, vmin, vmax, nativeSize]);
 

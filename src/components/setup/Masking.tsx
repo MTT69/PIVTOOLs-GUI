@@ -41,10 +41,14 @@ const PixelBorderViewer: React.FC<{
 		const overlay = overlayRef.current;
 		if (!canvas || !overlay) return;
 
+		// Convert percentages (0-100) to pixel values
+		const pixelVmin = (vmin / 100) * 255;
+		const pixelVmax = (vmax / 100) * 255;
+
 		// Load and display the image
 		if (raw?.data) {
 			// Handle raw image data
-			const { width, height, data } = raw;
+			const { width, height, data, bitDepth } = raw;
 			setDimensions({ width, height });
 
 			// Calculate display size (max 800px width)
@@ -59,8 +63,12 @@ const PixelBorderViewer: React.FC<{
 			overlay.height = displayHeight;
 
 			// Convert raw data to displayable image with contrast
+			// For raw data, use the actual data range based on bit depth
+			const maxDataVal = bitDepth ? Math.pow(2, bitDepth) - 1 : 255;
+			const dataVmin = (vmin / 100) * maxDataVal;
+			const dataVmax = (vmax / 100) * maxDataVal;
 			const imageData = new ImageData(displayWidth, displayHeight);
-			const rng = Math.max(1e-12, vmax - vmin);
+			const rng = Math.max(1e-12, dataVmax - dataVmin);
 
 			for (let y = 0; y < displayHeight; y++) {
 				for (let x = 0; x < displayWidth; x++) {
@@ -69,7 +77,7 @@ const PixelBorderViewer: React.FC<{
 					const srcIdx = srcY * width + srcX;
 					const value = Number(data[srcIdx]);
 
-					let t = (value - vmin) / rng;
+					let t = (value - dataVmin) / rng;
 					t = Math.max(0, Math.min(1, t));
 					const v = Math.round(t * 255);
 
@@ -225,9 +233,9 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	const [index, setIndex] = useState(1);
 	const [frame, setFrame] = useState<"A" | "B">("A");
 
-	// Add contrast control state
+	// Contrast values as percentages (0-100%)
 	const [vmin, setVmin] = useState(0);
-	const [vmax, setVmax] = useState(255);
+	const [vmax, setVmax] = useState(100);
 	const [autoScale, setAutoScale] = useState(true);
 	const [manuallyAdjusted, setManuallyAdjusted] = useState(false);
 
@@ -272,7 +280,8 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'jpeg', autoScale);
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
-	const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
+	// Contrast is now percentage-based (0-100%), independent of bit depth
+	const maxVal = 100;
 
 	// Reset manual adjustment flags when auto-scale is re-enabled
 	useEffect(() => {

@@ -112,12 +112,13 @@ export function useImagePair(
       const json = await res.json();
 
       // Store in prefetch buffer
+      // Stats are now percentages (0-100), default to full range if missing
       prefetchBufferRef.current.set(cacheKey, {
         index: idx,
         imgA: json.A || null,
         imgB: json.B || null,
-        vmin: json.stats?.A?.vmin ?? 0,
-        vmax: json.stats?.A?.vmax ?? 255,
+        vmin: json.stats?.A?.vmin_pct ?? 0,
+        vmax: json.stats?.A?.vmax_pct ?? 100,
       });
 
       // Clean cache if it's getting too large
@@ -220,15 +221,20 @@ export function useImagePair(
         setImgARaw(rawA);
         setImgBRaw(rawB);
 
-        // Use server-provided stats if available, otherwise calculate from raw
+        // Use server-provided stats (percentages 0-100)
         if (json.stats?.A) {
-          setVmin(json.stats.A.vmin);
-          setVmax(json.stats.A.vmax);
+          setVmin(json.stats.A.vmin_pct);
+          setVmax(json.stats.A.vmax_pct);
         } else if (rawA && rawA.data) {
-          const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
-          const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
-          setVmin(newVmin);
-          setVmax(newVmax);
+          // Fallback: calculate from raw data as percentage
+          const p1 = percentileFromRaw(rawA.data, 1);
+          const p99 = percentileFromRaw(rawA.data, 99);
+          const dataArr = Array.from(rawA.data) as number[];
+          const dataMin = Math.min(...dataArr);
+          const dataMax = Math.max(...dataArr);
+          const range = dataMax - dataMin || 1;
+          setVmin(Math.round(100 * (p1 - dataMin) / range));
+          setVmax(Math.round(100 * (p99 - dataMin) / range));
         }
       } else {
         // Standard JPEG/PNG response
@@ -236,14 +242,14 @@ export function useImagePair(
         setImgA(json.A);
         setImgB(json.B);
 
-        // Use server-provided stats (NO frontend calculation - this was the bottleneck!)
+        // Use server-provided stats (percentages 0-100)
         if (json.stats?.A) {
-          setVmin(json.stats.A.vmin);
-          setVmax(json.stats.A.vmax);
+          setVmin(json.stats.A.vmin_pct);
+          setVmax(json.stats.A.vmax_pct);
         } else {
-          // Fallback to defaults - do NOT calculate in JS
+          // Fallback to full range (0-100%)
           setVmin(0);
-          setVmax(255);
+          setVmax(100);
         }
       }
 
@@ -337,15 +343,20 @@ export function useImagePair(
           setImgARaw(rawA);
           setImgBRaw(rawB);
 
-          // Use server stats
+          // Use server stats (percentages 0-100)
           if (json.stats?.A) {
-            setVmin(json.stats.A.vmin);
-            setVmax(json.stats.A.vmax);
+            setVmin(json.stats.A.vmin_pct);
+            setVmax(json.stats.A.vmax_pct);
           } else if (rawA && rawA.data) {
-            const newVmin = Math.floor(percentileFromRaw(rawA.data, 1));
-            const newVmax = Math.ceil(percentileFromRaw(rawA.data, 99));
-            setVmin(newVmin);
-            setVmax(newVmax);
+            // Fallback: calculate from raw data as percentage
+            const p1 = percentileFromRaw(rawA.data, 1);
+            const p99 = percentileFromRaw(rawA.data, 99);
+            const dataArr = Array.from(rawA.data) as number[];
+            const dataMin = Math.min(...dataArr);
+            const dataMax = Math.max(...dataArr);
+            const range = dataMax - dataMin || 1;
+            setVmin(Math.round(100 * (p1 - dataMin) / range));
+            setVmax(Math.round(100 * (p99 - dataMin) / range));
           }
         } else {
           // Standard response
@@ -353,13 +364,13 @@ export function useImagePair(
           setImgA(json.A);
           setImgB(json.B);
 
-          // Use server-provided stats
+          // Use server-provided stats (percentages 0-100)
           if (json.stats?.A) {
-            setVmin(json.stats.A.vmin);
-            setVmax(json.stats.A.vmax);
+            setVmin(json.stats.A.vmin_pct);
+            setVmax(json.stats.A.vmax_pct);
           } else {
             setVmin(0);
-            setVmax(255);
+            setVmax(100);
           }
         }
 

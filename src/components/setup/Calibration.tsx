@@ -9,6 +9,7 @@ import { ScaleFactorCalibration } from './ScaleFactorCalibration';
 import { PinholeCalibration } from './PinholeCalibration';
 import { StereoCalibration } from './StereoCalibration';
 import { PolynomialCalibration } from './PolynomialCalibration';
+import { ChArUcoCalibration } from './ChArUcoCalibration';
 
 interface CalibrationProps {
   config: any;
@@ -40,6 +41,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
   const calibrationMethods = [
     { id: 'scale_factor', label: 'Scale Factor', component: ScaleFactorCalibration },
     { id: 'pinhole', label: 'Pinhole', component: PinholeCalibration },
+    { id: 'charuco', label: 'ChArUco', component: ChArUcoCalibration },
     { id: 'polynomial', label: 'Polynomial', component: PolynomialCalibration },
     { id: 'stereo', label: 'Stereo', component: StereoCalibration },
   ];
@@ -56,13 +58,14 @@ export const Calibration: React.FC<CalibrationProps> = ({
           </p>
           <ul className="text-sm text-muted-foreground space-y-1 mb-6">
             <li><strong>Scale Factor:</strong> Calibrate physical dimensions and coordinate system</li>
-            <li><strong>Pinhole:</strong> Calibrate individual camera intrinsic parameters</li>
-            <li><strong>Stereo:</strong> Calibrate camera pairs for 3D reconstruction</li>
+            <li><strong>Pinhole:</strong> Calibrate individual camera intrinsic parameters using dot grid</li>
+            <li><strong>ChArUco:</strong> Calibrate using ChArUco board (ArUco + chessboard) for robust detection</li>
             <li><strong>Polynomial:</strong> Calibrate using 3rd order polynomial coefficients</li>
+            <li><strong>Stereo:</strong> Calibrate camera pairs for 3D reconstruction</li>
           </ul>
 
           <Tabs value={currentTab} onValueChange={setCurrentTab}>
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>
                   {method.label}

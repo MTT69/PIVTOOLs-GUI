@@ -23,7 +23,8 @@ export function useImageFilters(backendUrl: string) {
   const [procLoading, setProcLoading] = useState(false);
   const [procImgA, setProcImgA] = useState<string | null>(null);
   const [procImgB, setProcImgB] = useState<string | null>(null);
-  const [procStats, setProcStats] = useState<{ A: { vmin: number, vmax: number }, B: { vmin: number, vmax: number } } | null>(null);
+  // Stats are now percentages (0-100%)
+  const [procStats, setProcStats] = useState<{ A: { vmin_pct: number, vmax_pct: number }, B: { vmin_pct: number, vmax_pct: number } } | null>(null);
   const [needsProcessing, setNeedsProcessing] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [processingBlocked, setProcessingBlocked] = useState(false);

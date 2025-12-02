@@ -8,8 +8,8 @@ interface ZoomableCanvasProps {
   raw?: RawImage | null;
   src?: string | null;
   error?: string | null;
-  vmin: number;
-  vmax: number;
+  vmin: number;  // Percentage (0-100)
+  vmax: number;  // Percentage (0-100)
   colormap: "gray" | "viridis";
   title: string;
   useGrid?: boolean;
@@ -52,14 +52,24 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!ctx || !canvas) return;
+
+    // Convert percentages (0-100) to pixel values (0-255)
+    // The image is normalized to 8-bit by the backend
+    const pixelVmin = (vmin / 100) * 255;
+    const pixelVmax = (vmax / 100) * 255;
+
     if (raw?.data) {
-      const { width, height, data } = raw;
+      const { width, height, data, bitDepth } = raw;
       canvas.width = width;
       canvas.height = height;
       const out = new Uint8ClampedArray(width * height * 4);
-      const range = Math.max(1e-9, vmax - vmin);
+      // For raw data, use the actual data range based on bit depth
+      const maxDataVal = bitDepth ? Math.pow(2, bitDepth) - 1 : 255;
+      const dataVmin = (vmin / 100) * maxDataVal;
+      const dataVmax = (vmax / 100) * maxDataVal;
+      const range = Math.max(1e-9, dataVmax - dataVmin);
       for (let i = 0; i < width * height; i++) {
-        const t = Math.max(0, Math.min(1, (Number(data[i]) - vmin) / range));
+        const t = Math.max(0, Math.min(1, (Number(data[i]) - dataVmin) / range));
         const idx = Math.floor(t * 255);
         const j = i * 4;
         [out[j], out[j+1], out[j+2]] = [cmap[idx * 3], cmap[idx * 3 + 1], cmap[idx * 3 + 2]];
@@ -70,15 +80,16 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
       canvas.width = imgEl.naturalWidth;
       canvas.height = imgEl.naturalHeight;
       // Draw image, then remap pixels according to vmin/vmax/colormap
+      // Image is 8-bit (0-255) from backend, convert percentage to pixel values
       ctx.drawImage(imgEl, 0, 0);
       try {
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imgData.data;
         const out = new Uint8ClampedArray(data.length);
-        const range = Math.max(1e-9, vmax - vmin);
+        const range = Math.max(1e-9, pixelVmax - pixelVmin);
         for (let i = 0; i < data.length; i += 4) {
           const I = data[i]; // Use red channel as intensity
-          const t = Math.max(0, Math.min(1, (I - vmin) / range));
+          const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
           const idx = Math.floor(t * 255);
           out[i] = cmap[idx * 3];
           out[i + 1] = cmap[idx * 3 + 1];

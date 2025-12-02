@@ -55,10 +55,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
   const [procToggle, setProcToggle] = useState<"A" | "B">("A");
 
+  // Contrast values as percentages (0-100%)
   const [rawVmin, setRawVmin] = useState(0);
-  const [rawVmax, setRawVmax] = useState(255);
+  const [rawVmax, setRawVmax] = useState(100);
   const [procVmin, setProcVmin] = useState(0);
-  const [procVmax, setProcVmax] = useState(255);
+  const [procVmax, setProcVmax] = useState(100);
 
   // Auto-scale toggles (enabled by default)
   const [rawAutoScale, setRawAutoScale] = useState(true);
@@ -265,22 +266,22 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [autoVmin, autoVmax, rawAutoScale, rawManuallyAdjusted]);
 
-  // Auto-contrast for processed images
+  // Auto-contrast for processed images (percentages 0-100%)
   useEffect(() => {
     if (procAutoScale && !procManuallyAdjusted) {
       if (procStats) {
-        // Use server stats if available
+        // Use server stats if available (now percentages)
         if (procToggle === 'A' && procStats.A) {
-          setProcVmin(procStats.A.vmin);
-          setProcVmax(procStats.A.vmax);
+          setProcVmin(procStats.A.vmin_pct ?? 0);
+          setProcVmax(procStats.A.vmax_pct ?? 100);
         } else if (procToggle === 'B' && procStats.B) {
-          setProcVmin(procStats.B.vmin);
-          setProcVmax(procStats.B.vmax);
+          setProcVmin(procStats.B.vmin_pct ?? 0);
+          setProcVmax(procStats.B.vmax_pct ?? 100);
         }
       } else if (procImgA || procImgB) {
-        // Fallback to 0-255 if no stats (existing logic)
+        // Fallback to full range (0-100%) if no stats
         setProcVmin(0);
-        setProcVmax(255);
+        setProcVmax(100);
       }
     }
   }, [procStats, procImgA, procImgB, procAutoScale, procManuallyAdjusted, procToggle]);
@@ -326,7 +327,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   }, [filters, backendUrl, updateConfig]);
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
-  const maxVal = metadata?.bitDepth ? 2 ** metadata.bitDepth - 1 : 255;
+  // Contrast is now percentage-based (0-100%), independent of bit depth
+  const maxVal = 100;
 
   // Track when images start/finish loading (but not during playback)
   useEffect(() => {
