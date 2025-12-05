@@ -33,6 +33,7 @@ export function useStatisticsCalculation(
   // --- State Initialization ---
   const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
   const [includeMerged, setIncludeMerged] = useState<boolean>(false);
+  const [requestedStatistics, setRequestedStatistics] = useState<string[]>([]);
   const [calculating, setCalculating] = useState<boolean>(false);
   const [statisticsJobId, setStatisticsJobId] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState<boolean>(false);
@@ -133,6 +134,7 @@ export function useStatisticsCalculation(
           image_count: imageCount,
           type_name: "instantaneous",
           endpoint: "",
+          requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
       });
 
@@ -162,6 +164,7 @@ export function useStatisticsCalculation(
     // State
     selectedCameras,
     includeMerged,
+    requestedStatistics,
     calculating,
     statisticsJobId,
     showDialog,
@@ -169,6 +172,7 @@ export function useStatisticsCalculation(
     // Setters
     setSelectedCameras,
     setIncludeMerged,
+    setRequestedStatistics,
     setCalculating,
     setStatisticsJobId,
     setShowDialog,

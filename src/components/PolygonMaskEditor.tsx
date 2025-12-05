@@ -480,6 +480,60 @@ function PolygonMaskEditor({
 	const closePoly = (p: Poly): Poly =>
 		(!p.closed && p.points.length >= 3 ? { ...p, closed: true } : p);
 
+	// Auto-save mask to backend (called when polygons change)
+	const autoSaveMask = async (polygonList: Poly[]) => {
+		const { w, h } = nativeSize;
+		if (!w || !h) return;
+
+		// Build mask canvas from closed polygons
+		const mc = document.createElement("canvas");
+		mc.width = w; mc.height = h;
+		const mctx = mc.getContext("2d")!;
+		mctx.clearRect(0, 0, w, h);
+		mctx.fillStyle = "#ffffff";
+		for (const poly of polygonList) {
+			if (poly.points.length < 3 || !poly.closed) continue;
+			mctx.beginPath();
+			mctx.moveTo(poly.points[0].x, poly.points[0].y);
+			for (let i = 1; i < poly.points.length; i++) mctx.lineTo(poly.points[i].x, poly.points[i].y);
+			mctx.closePath();
+			mctx.fill();
+		}
+
+		const id = mctx.getImageData(0, 0, w, h);
+		const N = w * h;
+		const out = new Uint8Array(N);
+		for (let i = 0; i < N; i++) out[i] = id.data[i * 4] > 0 ? 1 : 0;
+
+		// Serialize polygon corner data (native coordinates)
+		const polygons = polygonList
+			.filter(p => p.points.length >= 3 && p.closed)
+			.map((p, i) => ({
+				index: i,
+				name: p.name,
+				points: p.points.map(pt => [pt.x, pt.y])
+			}));
+
+		const payload = {
+			meta,
+			width: w,
+			height: h,
+			data: Array.from(out),
+			polygons
+		};
+
+		try {
+			await fetch(arrayPostUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload)
+			});
+			console.log(`Auto-saved mask with ${polygons.length} polygon(s)`);
+		} catch (error) {
+			console.error('Failed to auto-save mask:', error);
+		}
+	};
+
 	// Finish the current active polygon (if open and has >=3 points)
 	function finishActiveIfOpen() {
 		setPolys(prev => {
@@ -555,12 +609,15 @@ function PolygonMaskEditor({
 				if (distance <= clickRadiusNative) {
 					// Close current polygon
 					list[idx] = { ...poly, closed: true };
-					
+
 					// Create a new polygon and make it active
 					const newIdx = list.length;
 					list.push({ points: [], closed: false, name: `Polygon ${newIdx + 1}` });
 					setTimeout(() => setActive(newIdx), 0);
-					
+
+					// Auto-save after closing the polygon
+					setTimeout(() => autoSaveMask(list), 0);
+
 					return list;
 				}
 			}
@@ -592,6 +649,8 @@ function PolygonMaskEditor({
 			} else {
 				setActive(-1);
 			}
+			// Auto-save after deletion
+			setTimeout(() => autoSaveMask(filtered), 0);
 			return filtered;
 		});
 	}
@@ -599,6 +658,8 @@ function PolygonMaskEditor({
 	function clearAll() {
 		setPolys([]);
 		setActive(-1);
+		// Auto-save empty mask after clearing
+		setTimeout(() => autoSaveMask([]), 0);
 	}
 
 	function selectPrev() {
@@ -657,42 +718,6 @@ function PolygonMaskEditor({
 		URL.revokeObjectURL(url);
 	}
 
-	// Send mask as array (auto-finish all polygons first)
-	async function sendArray() {
-		const closed = finishAllPolygonsForExport();
-		const mc = buildMaskCanvasFrom(closed);
-		if (!mc) return;
-		const mctx = mc.getContext("2d")!;
-		const { w, h } = nativeSize;
-		const id = mctx.getImageData(0, 0, w, h);
-		const N = w * h;
-		const out = new Uint8Array(N);
-		for (let i = 0; i < N; i++) out[i] = id.data[i * 4] > 0 ? 1 : 0;
-
-		// NEW: serialize polygon corner data (native coordinates)
-		const polygons = closed
-			.filter(p => p.points.length >= 3)
-			.map((p, i) => ({
-				index: i,
-				name: p.name,
-				points: p.points.map(pt => [pt.x, pt.y]) // keep as number[][] for compact JSON
-			}));
-
-		const payload = {
-			meta,
-			width: w,
-			height: h,
-			data: Array.from(out),
-			polygons
-		};
-
-		await fetch(arrayPostUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(payload)
-		});
-	}
-
 	return (
 		<div className="w-full">
 			<div className="flex items-center justify-between mb-2">
@@ -731,7 +756,8 @@ function PolygonMaskEditor({
 			{/* Helpful hint about edge snapping and auto-closing */}
 			<div className="mb-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-xs text-blue-700">
 				<strong>💡 Tips:</strong> Click near image edges to snap to edge pixels (magnifier turns <span className="text-orange-600 font-semibold">orange</span>).
-				Click near the starting point (shown as a <span className="text-pink-600 font-semibold">larger red circle</span>) to auto-close and start a new polygon.
+				Click near the starting point (shown as a <span className="text-pink-600 font-semibold">larger red circle</span>) to auto-close the polygon.
+				<strong> Masks auto-save</strong> when polygons are completed, deleted, or cleared.
 			</div>
 
 			{/* Controls placed just below the mask path input (outside gray area) */}
@@ -760,7 +786,6 @@ function PolygonMaskEditor({
 						{magnifierEnabled ? "🔎 On" : "🔍"}
 					</Button>
 					<Button size="sm" variant="outline" onClick={savePng} disabled={nativeSize.w === 0}>Save PNG</Button>
-					<Button size="sm" className="bg-soton-blue hover:bg-soton-darkblue text-white" onClick={sendArray} disabled={nativeSize.w === 0}>💾 Save Mask</Button>
 					<Button size="sm" variant="destructive" onClick={clearAll}>🗑️ Clear Mask</Button>
 				</div>
 			</div>

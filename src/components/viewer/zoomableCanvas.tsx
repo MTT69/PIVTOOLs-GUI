@@ -4,6 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { RawImage, buildColormap } from "@/lib/imageUtils";
 
+interface OverlayPoint {
+  x: number;
+  y: number;
+}
+
 interface ZoomableCanvasProps {
   raw?: RawImage | null;
   src?: string | null;
@@ -19,9 +24,18 @@ interface ZoomableCanvasProps {
   panX?: number;
   panY?: number;
   onZoomChange?: (zoom: number, panX: number, panY: number) => void;
+  // Detection overlay
+  overlayPoints?: OverlayPoint[];
+  overlayColor?: string;
+  overlayRadius?: number;
 }
 
-export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, title, useGrid, gridSize = 16, gridThickness = 1, zoomLevel, panX, panY, onZoomChange }: ZoomableCanvasProps) {
+export default function ZoomableCanvas({
+  raw, src, error, vmin, vmax, colormap, title,
+  useGrid, gridSize = 16, gridThickness = 1,
+  zoomLevel, panX, panY, onZoomChange,
+  overlayPoints, overlayColor = '#ff0000', overlayRadius = 8
+}: ZoomableCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
@@ -164,11 +178,28 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
     if (isSelecting && selectionRect && selectionRect.w > 10 && selectionRect.h > 10) {
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
+
+      // Calculate new scale to fit the selection rectangle
       const newScale = Math.min(wrapper.clientWidth / selectionRect.w, wrapper.clientHeight / selectionRect.h) * scale;
+
+      // Find the center of the selection box in screen (wrapper) coordinates
+      const selectionCenterX = selectionRect.x + selectionRect.w / 2;
+      const selectionCenterY = selectionRect.y + selectionRect.h / 2;
+
+      // Convert selection center from screen coords to image coords
+      // Screen position = imagePos * scale + offset, so imagePos = (screenPos - offset) / scale
+      const imageCenterX = (selectionCenterX - offset.x) / scale;
+      const imageCenterY = (selectionCenterY - offset.y) / scale;
+
+      // Calculate new offset so that image center appears at wrapper center
+      const wrapperCenterX = wrapper.clientWidth / 2;
+      const wrapperCenterY = wrapper.clientHeight / 2;
+
       const newOffset = {
-        x: offset.x - selectionRect.x * (newScale / scale - 1),
-        y: offset.y - selectionRect.y * (newScale / scale - 1)
+        x: wrapperCenterX - imageCenterX * newScale,
+        y: wrapperCenterY - imageCenterY * newScale
       };
+
       onZoomChange?.(newScale, newOffset.x, newOffset.y);
       setBoxZoomMode(false);
     }
@@ -199,6 +230,27 @@ export default function ZoomableCanvas({ raw, src, error, vmin, vmax, colormap, 
           <>
             <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: "0 0" }}>
               <canvas ref={canvasRef} />
+              {/* Detection overlay points */}
+              {overlayPoints && overlayPoints.length > 0 && (
+                <svg
+                  className="absolute top-0 left-0 pointer-events-none"
+                  style={{
+                    width: raw?.width || imgEl?.naturalWidth || 0,
+                    height: raw?.height || imgEl?.naturalHeight || 0,
+                  }}
+                >
+                  {overlayPoints.map((pt, i) => (
+                    <circle
+                      key={i}
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={overlayRadius}
+                      fill={overlayColor}
+                      fillOpacity={0.8}
+                    />
+                  ))}
+                </svg>
+              )}
             </div>
             {useGrid && <div className="absolute inset-0 pointer-events-none" style={{
               backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,

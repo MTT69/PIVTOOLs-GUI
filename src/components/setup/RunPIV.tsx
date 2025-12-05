@@ -39,16 +39,35 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [showLogs, setShowLogs] = useState(true);
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
+  const [activePaths, setActivePaths] = useState<number[]>([]);
 
   // Ref for log container to enable auto-scroll
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   // --- Derived State (memoized for performance) ---
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
+  const basePaths = useMemo(() => config?.paths?.base_paths || [], [config]);
+
+  // Initialize activePaths when sourcePaths change
+  useEffect(() => {
+    if (sourcePaths.length > 0) {
+      // Default: all paths active
+      setActivePaths(sourcePaths.map((_: string, i: number) => i));
+    }
+  }, [sourcePaths]);
+
+  // Toggle a specific path's active state
+  const togglePath = (idx: number) => {
+    setActivePaths(prev =>
+      prev.includes(idx)
+        ? prev.filter(i => i !== idx)
+        : [...prev, idx].sort((a, b) => a - b)
+    );
+  };
 
   // --- PIV Logic from Custom Hook ---
   const { isLoading, isPolling, progress, statusImage, logs, run, cancel } = usePivRunner({
-    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage
+    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage, activePaths
   });
 
   // --- Effects for UI Sync ---
@@ -106,17 +125,58 @@ const RunPIV: React.FC<RunPIVProps> = ({
     <Card>
       <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid grid-cols-1 gap-4">
+        <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium">Source Path</label>
-            <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {sourcePaths.length > 0 ? sourcePaths.map((p: string, i: number) => (
-                  <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
-                )) : <SelectItem value="0" disabled>No paths</SelectItem>}
-              </SelectContent>
-            </Select>
+            <label className="text-sm font-medium block mb-2">Source/Base Path Pairs to Process</label>
+            {sourcePaths.length > 0 ? (
+              <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-3 bg-gray-50">
+                {sourcePaths.map((sourcePath: string, i: number) => (
+                  <label key={i} className="flex items-start gap-3 cursor-pointer hover:bg-gray-100 p-2 rounded">
+                    <input
+                      type="checkbox"
+                      checked={activePaths.includes(i)}
+                      onChange={() => togglePath(i)}
+                      className="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">
+                        {basename(sourcePath)}
+                      </div>
+                      {basePaths[i] && (
+                        <div className="text-xs text-gray-500 truncate">
+                          → {basename(basePaths[i])}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 italic">No paths configured</p>
+            )}
+            <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+              <span>{activePaths.length} of {sourcePaths.length} path(s) selected</span>
+              {sourcePaths.length > 1 && (
+                <>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline"
+                    onClick={() => setActivePaths(sourcePaths.map((_: string, i: number) => i))}
+                  >
+                    Select All
+                  </button>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    className="text-blue-600 hover:underline"
+                    onClick={() => setActivePaths([])}
+                  >
+                    Clear All
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
         {showFrameViewer && (
@@ -238,8 +298,12 @@ const RunPIV: React.FC<RunPIVProps> = ({
           )}
         </div>
         <div className="flex items-center gap-4 pt-2">
-          <Button className="bg-green-600 hover:bg-green-700" onClick={run} disabled={isLoading || isPolling}>
-            {isPolling ? "Running..." : "Run PIV"}
+          <Button
+            className="bg-green-600 hover:bg-green-700"
+            onClick={run}
+            disabled={isLoading || isPolling || activePaths.length === 0}
+          >
+            {isPolling ? "Running..." : activePaths.length === 0 ? "Select Paths" : "Run PIV"}
           </Button>
           <Button className="bg-red-600 hover:bg-red-700" onClick={cancel} disabled={!isPolling && !isLoading}>
             Cancel Run

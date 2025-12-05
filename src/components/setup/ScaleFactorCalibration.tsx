@@ -1,9 +1,10 @@
 "use client";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2 } from "lucide-react";
 import { useScaleFactorCalibration } from "@/hooks/useScaleFactorCalibration";
 
 interface ScaleFactorCalibrationProps {
@@ -48,6 +49,35 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     sourcePaths,
     imageCount
   );
+
+  // Scope selectors for vector calibration
+  const [vectorScope, setVectorScope] = useState<'current' | 'all'>('all');
+  const [selectedCamera, setSelectedCamera] = useState<number>(cameraOptions[0] || 1);
+  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
+
+  // Load piv_type from config on mount
+  useEffect(() => {
+    const pivType = config.calibration?.piv_type;
+    if (pivType === 'instantaneous' || pivType === 'ensemble') {
+      setVectorTypeName(pivType);
+    }
+  }, [config.calibration?.piv_type]);
+
+  // Save piv_type when changed
+  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
+    setVectorTypeName(value);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { piv_type: value }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save piv_type:', e);
+    }
+  };
 
   const setAsActiveMethod = async () => {
     try {
@@ -170,18 +200,60 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           )}
         </div>
 
-        <div className="flex gap-2">
+        {/* Calibrate Vectors with scope and type selectors */}
+        <div className="flex gap-2 items-center flex-wrap">
+          <Select value={vectorScope} onValueChange={(v) => setVectorScope(v as 'current' | 'all')}>
+            <SelectTrigger className="w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Cameras</SelectItem>
+              <SelectItem value="current">Single Camera</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {vectorScope === 'current' && (
+            <Select value={String(selectedCamera)} onValueChange={(v) => setSelectedCamera(Number(v))}>
+              <SelectTrigger className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {cameraOptions.map((cam) => (
+                  <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
+            <SelectTrigger className="w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="instantaneous">Instantaneous</SelectItem>
+              <SelectItem value="ensemble">Ensemble</SelectItem>
+            </SelectContent>
+          </Select>
+
           <Button
-            onClick={calibrateVectors}
-            disabled={false}
-            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3"
+            onClick={() => calibrateVectors(vectorScope === 'all', selectedCamera, vectorTypeName)}
+            disabled={calibrating}
+            className="bg-green-600 hover:bg-green-700 text-white"
           >
-            {calibrating ? "Calibrating..." : "Calibrate All Vectors"}
+            {calibrating ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Calibrating...
+              </>
+            ) : (
+              'Calibrate Vectors'
+            )}
           </Button>
+
           <Button
             onClick={setAsActiveMethod}
             disabled={isActive}
-            className={isActive ? "bg-green-600 hover:bg-green-600 text-white px-6 py-3" : ""}
+            className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
             variant={isActive ? "default" : "outline"}
           >
             {isActive ? "Active" : "Set as Active Method"}

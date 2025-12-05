@@ -8,6 +8,25 @@ import { Switch } from "@/components/ui/switch";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 
+// Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
+const AVAILABLE_STATISTICS = {
+  timeAveraged: [
+    { id: "mean_velocity", label: "Mean Velocity" },
+    { id: "mean_vorticity", label: "Mean Vorticity" },
+    { id: "mean_divergence", label: "Mean Divergence" },
+    { id: "reynolds_stress", label: "Reynolds Stress" },
+    { id: "normal_stress", label: "Normal Stress" },
+    { id: "mean_tke", label: "Mean TKE" },
+  ],
+  instantaneous: [
+    { id: "inst_velocity", label: "Inst. Velocity" },
+    { id: "inst_fluctuations", label: "Inst. Fluctuations" },
+    { id: "inst_vorticity", label: "Inst. Vorticity" },
+    { id: "inst_divergence", label: "Inst. Divergence" },
+    { id: "inst_gamma", label: "Inst. Gamma" },
+  ]
+};
+
 // Inline Vector Merging Hook
 const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number) => {
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
@@ -272,11 +291,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const {
     selectedCameras,
     includeMerged,
+    requestedStatistics,
     calculating,
     statisticsJobId,
     showDialog: showStatisticsDialog,
     setSelectedCameras,
     setIncludeMerged,
+    setRequestedStatistics,
     setShowDialog: setShowStatisticsDialog,
     jobStatus: statisticsStatus,
     jobDetails: statisticsDetails,
@@ -1112,6 +1133,81 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
                 {!statisticsJobId && (
                   <div className="space-y-3">
+                    {/* Statistics Selection */}
+                    <div className="space-y-2 bg-white p-2 rounded border border-gray-200">
+                      <label className="text-xs font-medium text-gray-700 block mb-1">Select Statistics:</label>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Time Averaged */}
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Time-Averaged</p>
+                          <div className="space-y-1">
+                            {AVAILABLE_STATISTICS.timeAveraged.map((stat) => (
+                              <label key={stat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-0.5 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={requestedStatistics.includes(stat.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setRequestedStatistics([...requestedStatistics, stat.id]);
+                                    } else {
+                                      setRequestedStatistics(requestedStatistics.filter((id: string) => id !== stat.id));
+                                    }
+                                  }}
+                                  className="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                />
+                                <span className="text-xs text-gray-700">{stat.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Instantaneous */}
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Instantaneous</p>
+                          <div className="space-y-1">
+                            {AVAILABLE_STATISTICS.instantaneous.map((stat) => (
+                              <label key={stat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-0.5 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={requestedStatistics.includes(stat.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setRequestedStatistics([...requestedStatistics, stat.id]);
+                                    } else {
+                                      setRequestedStatistics(requestedStatistics.filter((id: string) => id !== stat.id));
+                                    }
+                                  }}
+                                  className="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                />
+                                <span className="text-xs text-gray-700">{stat.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex justify-end mt-2 pt-1 border-t border-gray-100">
+                         <button
+                            type="button"
+                            className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            onClick={() => setRequestedStatistics([
+                                ...AVAILABLE_STATISTICS.timeAveraged.map(s => s.id),
+                                ...AVAILABLE_STATISTICS.instantaneous.map(s => s.id)
+                            ])}
+                         >
+                            Select All
+                         </button>
+                         <span className="mx-2 text-xs text-gray-300">|</span>
+                         <button
+                            type="button"
+                            className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            onClick={() => setRequestedStatistics([])}
+                         >
+                            Clear
+                         </button>
+                      </div>
+                    </div>
+
                     <div>
                       <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras:</label>
                       <div className="flex flex-wrap gap-2">
@@ -1124,7 +1220,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                                 if (e.target.checked) {
                                   setSelectedCameras([...selectedCameras, String(cam)]);
                                 } else {
-                                  setSelectedCameras(selectedCameras.filter(c => c !== String(cam)));
+                                  setSelectedCameras(selectedCameras.filter((c: string) => c !== String(cam)));
                                 }
                               }}
                               className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"

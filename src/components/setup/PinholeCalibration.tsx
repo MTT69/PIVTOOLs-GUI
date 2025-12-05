@@ -1,21 +1,20 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import React, { useState, useCallback, useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle } from "lucide-react";
-import { usePinholeCalibration } from "@/hooks/usePinholeCalibration";
-import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
+import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
+import { usePinholeCalibration, FrameDetection } from "@/hooks/usePinholeCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 
 interface PinholeCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
   sourcePaths: string[];
-  imageCount?: number;
 }
 
 // Helper to show just the last segment of a path
@@ -30,90 +29,183 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
   updateConfig,
   cameraOptions,
   sourcePaths,
-  imageCount = 1000,
 }) => {
+  // Use the new simplified hook
+  const calibration = usePinholeCalibration(cameraOptions, sourcePaths);
+
   const {
+    // Source selection
     sourcePathIdx,
-    camera,
-    filePattern,
-    patternCols,
-    patternRows,
-    dotSpacingMm,
-    enhanceDots,
-    asymmetric,
-    dt,
-    imageB64,
-    totalImages,
-    gridPoints,
-    showIndices,
-    dewarpedB64,
-    cameraModel,
-    gridData,
-    nativeSize,
-    generating,
-    vectorJobId,
-    planarJobId,
-    loadingResults,
     setSourcePathIdx,
+    camera,
     setCamera,
-    setFilePattern,
+
+    // Image config
+    imageFormat,
+    setImageFormat,
+    imageType,
+    setImageType,
+    numImages,
+    setNumImages,
+    subfolder,
+    setSubfolder,
+
+    // Grid params
+    patternCols,
     setPatternCols,
+    patternRows,
     setPatternRows,
+    dotSpacingMm,
     setDotSpacingMm,
+    enhanceDots,
     setEnhanceDots,
-    setAsymmetric,
+    dt,
     setDt,
-    calibrationStatus,
-    calibrationDetails,
-    vectorStatus,
-    vectorDetails,
+
+    // Validation
+    validation,
+    validating,
+
+    // Single camera job tracking
+    jobStatus,
+    isCalibrating,
+
+    // Multi-camera job tracking
+    multiCameraJobStatus,
+    isMultiCameraCalibrating,
+
+    // Vector calibration job tracking
+    vectorJobStatus,
+    isVectorCalibrating,
+
+    // Model and detections
+    cameraModel,
+    detections,
+    modelLoading,
+    modelLoadError,
+    hasModel,
+
+    // Overlay toggle
+    showOverlay,
+    setShowOverlay,
+
+    // Actions
     generateCameraModel,
+    generateCameraModelAll,
+    loadModel,
     calibrateVectors,
-    loadSavedCalibration,
-  } = usePinholeCalibration(
-    config.calibration?.pinhole || {},
-    updateConfig,
-    cameraOptions,
-    sourcePaths,
-    imageCount
-  );
+  } = calibration;
 
-  // Validate calibration images and get preview
-  const validation = usePinholeValidation(sourcePathIdx, camera, filePattern);
-  const isMacOS = useIsMacOS();
-  const hasUnsupportedFormat = isContainerFormat(filePattern);
+  // Local state
+  const [showImageViewer, setShowImageViewer] = useState(false);
 
-  // Local state for inputs to prevent debouncing issues
-  const [dtInput, setDtInput] = useState(String(dt));
-  const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
+  // Unified scope selector for both model generation and vector calibration
+  // 'all' means all cameras, number means specific camera
+  const [calibrationScope, setCalibrationScope] = useState<'all' | number>('all');
+  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
+
+  // Load calibrationScope from config on mount (from pinhole.camera)
+  React.useEffect(() => {
+    const savedCamera = config.calibration?.pinhole?.camera;
+    if (typeof savedCamera === 'number' && cameraOptions.includes(savedCamera)) {
+      setCalibrationScope(savedCamera);
+    }
+  }, [config.calibration?.pinhole?.camera, cameraOptions]);
+
+  // Load piv_type from config on mount
+  React.useEffect(() => {
+    const pivType = config.calibration?.piv_type;
+    if (pivType === 'instantaneous' || pivType === 'ensemble') {
+      setVectorTypeName(pivType);
+    }
+  }, [config.calibration?.piv_type]);
+
+  // Save scope to config when changed
+  const handleScopeChange = async (value: string) => {
+    const newScope = value === 'all' ? 'all' : Number(value);
+    setCalibrationScope(newScope);
+
+    // When single camera selected, also update the hook's camera state (for generateCameraModel)
+    if (typeof newScope === 'number') {
+      setCamera(newScope);
+      // Save to config
+      try {
+        await fetch('/backend/update_config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            calibration: { pinhole: { camera: newScope } }
+          })
+        });
+      } catch (e) {
+        console.error('Failed to save camera scope:', e);
+      }
+    }
+  };
+
+  // Save piv_type when changed
+  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
+    setVectorTypeName(value);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { piv_type: value }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save piv_type:', e);
+    }
+  };
+
+  // Local input state for debouncing
   const [patternColsInput, setPatternColsInput] = useState(String(patternCols));
   const [patternRowsInput, setPatternRowsInput] = useState(String(patternRows));
+  const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
+  const [dtInput, setDtInput] = useState(String(dt));
 
-  useEffect(() => {
-    setDtInput(String(dt));
-  }, [dt]);
-
-  useEffect(() => {
-    setDotSpacingMmInput(String(dotSpacingMm));
-  }, [dotSpacingMm]);
-
-  useEffect(() => {
+  // Sync local inputs with hook state
+  React.useEffect(() => {
     setPatternColsInput(String(patternCols));
   }, [patternCols]);
 
-  useEffect(() => {
+  React.useEffect(() => {
     setPatternRowsInput(String(patternRows));
   }, [patternRows]);
 
-  const setAsActiveMethod = async () => {
+  React.useEffect(() => {
+    setDotSpacingMmInput(String(dotSpacingMm));
+  }, [dotSpacingMm]);
+
+  React.useEffect(() => {
+    setDtInput(String(dt));
+  }, [dt]);
+
+  // Convert detections to format expected by CalibrationImageViewer
+  const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
+    if (!detections || Object.keys(detections).length === 0) return undefined;
+    const result: Record<number, FrameDetectionData> = {};
+    for (const [key, value] of Object.entries(detections)) {
+      const frameIdx = parseInt(key, 10);
+      if (!isNaN(frameIdx) && value.grid_points) {
+        result[frameIdx] = {
+          grid_points: value.grid_points,
+          reprojection_error: value.reprojection_error,
+        };
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }, [detections]);
+
+  // Set as active calibration method
+  const setAsActiveMethod = useCallback(async () => {
     try {
       const res = await fetch("/backend/update_config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          calibration: {
-            active: "pinhole",
-          },
+          calibration: { active: "pinhole" },
         }),
       });
       const json = await res.json();
@@ -124,52 +216,31 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     } catch (err) {
       console.error("Failed to set active calibration method:", err);
     }
-  };
+  }, [config.calibration, updateConfig]);
 
   const isActive = config.calibration?.active === "pinhole";
 
+  // Check if container format (unsupported on macOS)
+  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
+  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
+
   return (
     <div className="space-y-6">
-      {/* Vector Calibration Status - moved above main card */}
-      {vectorJobId && vectorDetails && (
-        <Card className="mb-4">
-          <CardHeader><CardTitle>Vector Calibration Status</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            <div className="flex items-center gap-2 text-sm">Status: <span className="font-medium">{vectorStatus}</span></div>
-            {(vectorStatus === 'running' || vectorStatus === 'starting') && (
-              <div className="flex items-center gap-2 text-green-600 text-sm">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
-                Vector calibration is running...
-              </div>
-            )}
-            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-              <div className={`h-2 bg-green-600`} style={{ width: `${vectorDetails.progress || 0}%` }}></div>
-            </div>
-            <div className="text-xs text-muted-foreground">Progress: {vectorDetails.progress || 0}% {vectorDetails.processed_frames !== undefined && vectorDetails.total_frames !== undefined && `(Frames: ${vectorDetails.processed_frames}/${vectorDetails.total_frames})`}</div>
-            {vectorStatus === 'completed' && (
-              <div className="mt-2 text-xs text-green-600">
-                Vector calibration completed successfully! All runs with valid data were processed.
-              </div>
-            )}
-            {vectorStatus === 'failed' && vectorDetails.error && (
-              <div className="mt-2 text-xs text-red-600">
-                Error: {vectorDetails.error}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Main Configuration Card */}
       <Card>
         <CardHeader>
           <CardTitle>Pinhole Calibration (Planar)</CardTitle>
+          <CardDescription>
+            Configure and run planar calibration to generate camera model
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-6">
+          {/* Section 1: Source Selection */}
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Source Path</label>
               <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-                <SelectTrigger id="srcpath"><SelectValue placeholder="Pick source path" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Pick source path" /></SelectTrigger>
                 <SelectContent>
                   {sourcePaths.map((p, i) => (
                     <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
@@ -181,115 +252,92 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Camera</label>
               <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-                <SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Select camera" /></SelectTrigger>
                 <SelectContent>
-                  {cameraOptions.map((c, i) => (
-                    <SelectItem key={i} value={String(c)}>{`Camera ${c}`}</SelectItem>
+                  {cameraOptions.map((c) => (
+                    <SelectItem key={c} value={String(c)}>{`Camera ${c}`}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Section 2: Image Configuration */}
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
-              <label className="text-sm font-medium">File Pattern:</label>
+              <label className="text-sm font-medium">Image Type</label>
+              <Select value={imageType} onValueChange={setImageType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
+                  <SelectItem value="cine">Phantom CINE</SelectItem>
+                  <SelectItem value="lavision_set">LaVision SET</SelectItem>
+                  <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Image Format</label>
               <Input
-                value={filePattern}
-                onChange={e => setFilePattern(e.target.value)}
+                value={imageFormat}
+                onChange={e => setImageFormat(e.target.value)}
                 placeholder="calib%05d.tif"
               />
             </div>
             <div>
-              <label className="text-sm font-medium">Pattern Cols:</label>
+              <label className="text-sm font-medium">Number of Images</label>
               <Input
                 type="number"
-                value={patternColsInput}
-                onChange={e => setPatternColsInput(e.target.value)}
-                onBlur={() => setPatternCols(patternColsInput)}
-                min="1"
-                step="1"
+                min={1}
+                value={numImages}
+                onChange={e => setNumImages(Number(e.target.value) || 1)}
               />
             </div>
             <div>
-              <label className="text-sm font-medium">Pattern Rows:</label>
+              <label className="text-sm font-medium">Subfolder (optional)</label>
               <Input
-                type="number"
-                value={patternRowsInput}
-                onChange={e => setPatternRowsInput(e.target.value)}
-                onBlur={() => setPatternRows(patternRowsInput)}
-                min="1"
-                step="1"
+                value={subfolder}
+                onChange={e => setSubfolder(e.target.value)}
+                placeholder="e.g., calibration"
               />
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div>
-              <label className="text-sm font-medium">Dot Spacing (mm):</label>
-              <Input
-                type="number"
-                value={dotSpacingMmInput}
-                onChange={e => setDotSpacingMmInput(e.target.value)}
-                onBlur={() => setDotSpacingMm(dotSpacingMmInput)}
-                step="any"
-                min="0"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Δt (seconds):</label>
-              <Input
-                type="number"
-                value={dtInput}
-                onChange={e => setDtInput(e.target.value)}
-                onBlur={() => setDt(dtInput)}
-                step="any"
-                min="0.001"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium">
-                <input
-                  type="checkbox"
-                  checked={enhanceDots}
-                  onChange={e => setEnhanceDots(e.target.checked)}
-                  className="mr-2"
-                />
-                Enhance Dots
-              </label>
             </div>
           </div>
 
           {/* macOS Warning for Unsupported Formats */}
-          {hasUnsupportedFormat && isMacOS && (
+          {isContainerFormat && isMacOS && (
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle>Unsupported File Format on macOS</AlertTitle>
               <AlertDescription>
                 .set and .im7 container formats require Windows or Linux.
-                These formats are not supported on macOS.
               </AlertDescription>
             </Alert>
           )}
 
-          {/* Calibration Validation */}
-          <ValidationAlert
-            validation={validation}
-            customSuccessMessage={
-              validation.valid
-                ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
-                : undefined
-            }
-          />
+          {/* Section 3: Validation Status */}
+          {validation && (
+            <ValidationAlert
+              validation={{
+                valid: validation.valid,
+                checked: !validating,
+                error: validation.error || null,
+              }}
+              customSuccessMessage={
+                validation.valid
+                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  : undefined
+              }
+            />
+          )}
 
-          {/* Suggested Pattern Button - show when validation fails but a suggestion is available */}
-          {!validation.valid && validation.suggested_pattern && (
+          {/* Suggested Pattern Button */}
+          {validation && !validation.valid && validation.suggested_pattern && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Suggestion:</span>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setFilePattern(validation.suggested_pattern!)}
+                onClick={() => setImageFormat(validation.suggested_pattern!)}
                 className="text-blue-600 border-blue-300 hover:bg-blue-50"
               >
                 Use "{validation.suggested_pattern}"
@@ -297,186 +345,377 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             </div>
           )}
 
-          {/* Calibration Target Preview - only show when validation succeeds */}
-          {validation.valid && validation.first_image_preview && (
-            <Card className="border-green-200 bg-green-50/30">
-              <CardHeader className="py-3">
-                <CardTitle className="text-sm font-medium text-green-800">
-                  Calibration Target Preview
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="py-2">
-                <div className="flex items-start gap-4">
-                  <div className="relative border rounded overflow-hidden bg-white" style={{ maxWidth: "300px" }}>
-                    <img
-                      src={`data:image/png;base64,${validation.first_image_preview}`}
-                      alt="Calibration target preview"
-                      className="w-full h-auto"
-                    />
-                  </div>
-                  <div className="text-xs text-gray-600 space-y-1">
-                    {validation.image_size && (
-                      <div><strong>Size:</strong> {validation.image_size[0]} x {validation.image_size[1]} px</div>
-                    )}
-                    {validation.format_detected && (
-                      <div><strong>Format:</strong> .{validation.format_detected}</div>
-                    )}
-                    {validation.sample_files && validation.sample_files.length > 0 && (
-                      <div>
-                        <strong>Sample files:</strong>
-                        <ul className="mt-1 ml-3 text-gray-500">
-                          {validation.sample_files.slice(0, 3).map((f, i) => (
-                            <li key={i}>{f}</li>
-                          ))}
-                          {validation.sample_files.length > 3 && (
-                            <li>... and {(validation.found_count as number) - 3} more</li>
-                          )}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Calibration Status Indicator */}
-          <div className="mb-2">
-            {calibrationStatus === "running" && (
-              <div className="flex items-center gap-2 text-blue-600 text-sm">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></span>
-                Calibration is running...
+          {/* Section 4: Grid Parameters */}
+          <div className="border-t pt-4">
+            <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <label className="text-sm font-medium">Pattern Cols</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={patternColsInput}
+                  onChange={e => setPatternColsInput(e.target.value)}
+                  onBlur={() => setPatternCols(parseInt(patternColsInput) || 10)}
+                />
               </div>
-            )}
-            {calibrationStatus === "completed" && (
-              <div className="flex items-center gap-2 text-green-600 text-sm">
-                <span className="inline-block w-3 h-3 bg-green-600 rounded-full"></span>
-                Calibration completed!
+              <div>
+                <label className="text-sm font-medium">Pattern Rows</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={patternRowsInput}
+                  onChange={e => setPatternRowsInput(e.target.value)}
+                  onBlur={() => setPatternRows(parseInt(patternRowsInput) || 10)}
+                />
               </div>
-            )}
-            {calibrationStatus === "error" && (
-              <div className="flex items-center gap-2 text-red-600 text-sm">
-                <span className="inline-block w-3 h-3 bg-red-600 rounded-full"></span>
-                Calibration error: {calibrationDetails?.error}
+              <div>
+                <label className="text-sm font-medium">Dot Spacing (mm)</label>
+                <Input
+                  type="number"
+                  step="any"
+                  min={0}
+                  value={dotSpacingMmInput}
+                  onChange={e => setDotSpacingMmInput(e.target.value)}
+                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 28.89)}
+                />
               </div>
-            )}
-            {calibrationStatus === "not_started" && (
-              <div className="flex items-center gap-2 text-gray-400 text-sm">
-                <span className="inline-block w-3 h-3 bg-gray-400 rounded-full"></span>
-                Calibration not started.
+              <div>
+                <label className="text-sm font-medium">Δt (seconds)</label>
+                <Input
+                  type="number"
+                  step="any"
+                  min={0.001}
+                  value={dtInput}
+                  onChange={e => setDtInput(e.target.value)}
+                  onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
+                />
               </div>
-            )}
+            </div>
+            <div className="mt-3">
+              <label className="flex items-center text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enhanceDots}
+                  onChange={e => setEnhanceDots(e.target.checked)}
+                  className="mr-2"
+                />
+                Enhance Dots (for low contrast images)
+              </label>
+            </div>
           </div>
 
-          {/* MAIN BUTTONS */}
-          <div className="border-t pt-4">
-            <div className="flex gap-4 items-center flex-wrap">
+          {/* Section 5: Image Viewer Toggle */}
+          {validation?.valid && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowImageViewer(!showImageViewer)}
+              className="flex items-center gap-2"
+            >
+              {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
+            </Button>
+          )}
+
+          {/* Section 6: Image Viewer with Overlay Support */}
+          {showImageViewer && validation?.valid && (
+            <CalibrationImageViewer
+              backendUrl="/backend"
+              sourcePathIdx={sourcePathIdx}
+              camera={camera}
+              numImages={numImages}
+              calibrationType="pinhole"
+              calibrationParams={{
+                pattern_cols: patternCols,
+                pattern_rows: patternRows,
+                enhance_dots: enhanceDots,
+              }}
+              savedDetections={savedDetections}
+              showSavedOverlay={showOverlay}
+              onSavedOverlayChange={setShowOverlay}
+            />
+          )}
+
+          {/* Section 7: Action Buttons */}
+          <div className="border-t pt-4 space-y-4">
+            {/* Unified Action Row */}
+            <div className="flex gap-2 items-center flex-wrap">
+              <Select value={String(calibrationScope)} onValueChange={handleScopeChange}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Cameras</SelectItem>
+                  {cameraOptions.map((cam) => (
+                    <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Button
-                onClick={generateCameraModel}
-                disabled={generating || vectorStatus === "running" || calibrationStatus === "running"}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3"
+                onClick={() => calibrationScope === 'all' ? generateCameraModelAll() : generateCameraModel()}
+                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
               >
-                {generating ? 'Generating...' : 'Generate Camera Model'}
+                {(isCalibrating || isMultiCameraCalibrating) ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate Model'
+                )}
               </Button>
+
               <Button
-                onClick={loadSavedCalibration}
-                disabled={loadingResults}
+                onClick={loadModel}
+                disabled={modelLoading}
                 variant="outline"
-                className="px-6 py-3"
               >
-                {loadingResults ? 'Loading...' : 'Load Calibration'}
+                {modelLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Loading...
+                  </>
+                ) : (
+                  'Load Saved'
+                )}
               </Button>
+
+              <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
+                <SelectTrigger className="w-[130px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                  <SelectItem value="ensemble">Ensemble</SelectItem>
+                </SelectContent>
+              </Select>
+
               <Button
-                onClick={calibrateVectors}
-                disabled={vectorStatus === "running" || vectorStatus === "starting"}
-                className="bg-green-600 hover:bg-green-700 text-white px-6 py-3"
+                onClick={() => calibrateVectors(calibrationScope === 'all', vectorTypeName)}
+                disabled={!hasModel || isVectorCalibrating}
+                className="bg-green-600 hover:bg-green-700 text-white"
+                title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors"}
               >
-                {vectorStatus === "running" || vectorStatus === "starting" ? 'Calibrating...' : 'Calibrate Vectors'}
+                {isVectorCalibrating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Calibrating...
+                  </>
+                ) : (
+                  'Calibrate Vectors'
+                )}
               </Button>
+
               <Button
                 onClick={setAsActiveMethod}
                 disabled={isActive}
-                className={isActive ? "bg-green-600 hover:bg-green-600 text-white px-6 py-3" : ""}
                 variant={isActive ? "default" : "outline"}
+                className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
               >
-                {isActive ? "Active" : "Set as Active Method"}
+                {isActive ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-1" />
+                    Active
+                  </>
+                ) : (
+                  'Set as Active'
+                )}
               </Button>
             </div>
-            <div className="text-xs text-gray-500 mt-2">
-              <p><strong>Generate Camera Model:</strong> Process all calibration images to create camera models.</p>
-              <p><strong>Load Calibration:</strong> Load previously generated calibration results without recomputing.</p>
-              <p><strong>Calibrate Vectors:</strong> Use camera model to calibrate PIV vectors.</p>
-            </div>
+
+            {modelLoadError && (
+              <div className="text-sm text-red-600 flex items-center gap-1">
+                <AlertTriangle className="h-4 w-4" />
+                {modelLoadError}
+              </div>
+            )}
+
+            {/* Job Progress */}
+            {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-blue-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <strong>Camera Model Generation:</strong>
+                  <span className="capitalize">{jobStatus.status}</span>
+                </div>
+                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+                  <div
+                    className="h-2 bg-blue-600 transition-all"
+                    style={{ width: `${jobStatus.progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Progress: {jobStatus.progress?.toFixed(0) || 0}%
+                  {jobStatus.processed_images !== undefined && (
+                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images}</span>
+                  )}
+                  {jobStatus.valid_images !== undefined && jobStatus.valid_images > 0 && (
+                    <span> | Valid: {jobStatus.valid_images}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Job Completed */}
+            {jobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Camera model generation completed successfully!
+              </div>
+            )}
+
+            {/* Job Failed */}
+            {jobStatus?.status === 'failed' && (
+              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Error: {jobStatus.error || 'Calibration failed'}
+              </div>
+            )}
+
+            {/* Multi-Camera Job Progress */}
+            {multiCameraJobStatus && (multiCameraJobStatus.status === 'running' || multiCameraJobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-blue-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <strong>Multi-Camera Model Generation:</strong>
+                  <span className="capitalize">{multiCameraJobStatus.status}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Processing camera {multiCameraJobStatus.current_camera}
+                  {multiCameraJobStatus.total_cameras > 0 && (
+                    <span> ({multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras} completed)</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Multi-Camera Job Completed */}
+            {multiCameraJobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Multi-camera model generation completed! ({multiCameraJobStatus.processed_cameras} cameras)
+              </div>
+            )}
+
+            {/* Vector Calibration Progress */}
+            {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-green-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+                  <strong>Vector Calibration:</strong>
+                  <span className="capitalize">{vectorJobStatus.status}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Processing camera {vectorJobStatus.current_camera}
+                  {vectorJobStatus.total_cameras > 0 && (
+                    <span> ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Vector Calibration Completed */}
+            {vectorJobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
+              </div>
+            )}
+
+            {/* Vector Calibration Failed */}
+            {vectorJobStatus?.status === 'failed' && (
+              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Image Display Section - Show grid visualization if available */}
-      {loadingResults && (
-        <div className="flex items-center justify-center py-8">
-          <span className="animate-spin inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full"></span>
-          <span className="ml-3 text-blue-600 text-sm">Loading calibration results...</span>
-        </div>
-      )}
-      {gridData && gridData.grid_png && !loadingResults && (
-        <div className="grid lg:grid-cols-2 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Grid Visualization (Detected Indices)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="relative border rounded inline-block">
-                <img
-                  src={`data:image/png;base64,${gridData.grid_png}`}
-                  alt="Grid visualization"
-                  style={{ maxWidth: "512px", width: "100%" }}
-                />
-                <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs">
-                  Calibration Model ({totalImages} images found)
+      {/* Section 8: Camera Model Results */}
+      {hasModel && cameraModel && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Camera Model Results</CardTitle>
+            <CardDescription>
+              Calibration model for Camera {camera}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Camera Matrix */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
+                <div className="font-mono text-xs bg-muted p-2 rounded">
+                  {cameraModel.camera_matrix?.map((row: number[], i: number) => (
+                    <div key={i}>[{row.map(v => v.toFixed(2)).join(', ')}]</div>
+                  ))}
                 </div>
               </div>
-              {gridPoints.length > 0 && (
-                <div className="text-xs text-gray-600 mt-2">
-                  Grid points detected: {gridPoints.length}
+
+              {/* Intrinsic Parameters */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Focal Length (fx):</span>
+                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Focal Length (fy):</span>
+                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Principal Point (cx):</span>
+                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Principal Point (cy):</span>
+                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                  </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-          {/* Consolidated Camera Metrics Panel */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Camera Metrics</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-xs space-y-2">
-                {gridData && (
-                  <>
-                    <div><b>Reprojection Error (overall):</b> {gridData.reprojection_error?.toFixed(3)} px</div>
-                    <div><b>Mean |x| Error:</b> {gridData.reprojection_error_x_mean?.toFixed(3)} px</div>
-                    <div><b>Mean |y| Error:</b> {gridData.reprojection_error_y_mean?.toFixed(3)} px</div>
-                    <div><b>Pattern Size:</b> {gridData.pattern_size?.join(' x ')}</div>
-                    <div><b>Dot Spacing:</b> {gridData.dot_spacing_mm} mm</div>
-                    <div><b>Estimated Pixels per mm:</b> {gridData.pixels_per_mm ? gridData.pixels_per_mm.toFixed(3) : 'N/A'}</div>
-                    <div><b>Image Name:</b> {gridData.original_filename}</div>
-                    <div><b>Timestamp:</b> {gridData.timestamp}</div>
-                  </>
-                )}
-                {cameraModel && (
-                  <>
-                    <div><b>Camera Matrix:</b></div>
-                    {cameraModel.camera_matrix && cameraModel.camera_matrix.map((row: number[], i: number) => (
-                      <div key={i}>[{row.map(v => v.toFixed(3)).join(', ')}]</div>
-                    ))}
-                    <div><b>Focal Length:</b> fx={cameraModel.focal_length?.[0]?.toFixed(1)}, fy={cameraModel.focal_length?.[1]?.toFixed(1)}</div>
-                    <div><b>Principal Point:</b> cx={cameraModel.principal_point?.[0]?.toFixed(1)}, cy={cameraModel.principal_point?.[1]?.toFixed(1)}</div>
-                    <div><b>Distortion Coeffs:</b> [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(4)).join(', ')}]</div>
-                    <div><b>Reprojection Error:</b> {cameraModel.reprojection_error?.toFixed(3)} px</div>
-                  </>
-                )}
               </div>
-            </CardContent>
-          </Card>
-        </div>
+
+              {/* Distortion Coefficients */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
+                <div className="font-mono text-xs bg-muted p-2 rounded">
+                  [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(6)).join(', ')}]
+                </div>
+              </div>
+
+              {/* Calibration Quality */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">RMS Error:</span>
+                    <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Images Used:</span>
+                    <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Detection Summary */}
+            {detections && Object.keys(detections).length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <h4 className="text-sm font-semibold mb-2">Detection Summary</h4>
+                <p className="text-sm text-muted-foreground">
+                  {Object.keys(detections).length} frames with detected grid points.
+                  {showOverlay ? ' Toggle overlay in image viewer to visualize.' : ' Enable overlay in image viewer to visualize.'}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

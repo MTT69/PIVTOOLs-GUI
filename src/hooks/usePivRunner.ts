@@ -16,6 +16,7 @@ interface PivRunnerSettings {
   lowerLimit: string;
   upperLimit: string;
   showStatusImage: boolean;
+  activePaths: number[];  // Indices of source/base path pairs to process
 }
 
 /**
@@ -162,6 +163,7 @@ export function usePivRunner(settings: PivRunnerSettings) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourcePathIdx: settingsRef.current.sourcePathIdx,
+          active_paths: settingsRef.current.activePaths,
         }),
       });
       if (!response.ok) throw new Error(`Failed to start PIV: ${response.statusText}`);

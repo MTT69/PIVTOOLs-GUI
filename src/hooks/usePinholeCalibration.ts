@@ -1,480 +1,595 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
-export interface PinholeConfig {
-  source_path_idx?: number;
-  camera?: number;
-  image_index?: number;
-  file_pattern?: string;
-  pattern_cols?: number;
-  pattern_rows?: number;
-  dot_spacing_mm?: number;
-  enhance_dots?: boolean;
-  asymmetric?: boolean;
-  dt?: number;
+/**
+ * Detection data for a single frame
+ */
+export interface FrameDetection {
+  grid_points: [number, number][];
+  reprojection_error?: number;
 }
 
-export interface PinholeCalibrationState {
-  sourcePathIdx: number;
-  camera: number;
-  imageIndex: string;
-  filePattern: string;
-  patternCols: string;
-  patternRows: string;
-  dotSpacingMm: string;
-  enhanceDots: boolean;
-  asymmetric: boolean;
-  dt: string;
+/**
+ * Camera model from calibration
+ */
+export interface CameraModel {
+  camera_matrix: number[][];
+  dist_coeffs: number[];
+  focal_length: [number, number];
+  principal_point: [number, number];
+  reprojection_error: number;
+  num_images_used: number;
+}
+
+/**
+ * Validation result from backend
+ */
+export interface ValidationResult {
+  valid: boolean;
+  found_count: number | 'container';
+  expected_count?: number;
+  sample_files?: string[];
+  first_image_preview?: string;
+  image_size?: [number, number];
+  camera_path?: string;
+  format_detected?: string;
+  container_format?: boolean;
+  error?: string;
+  suggested_pattern?: string;
+}
+
+/**
+ * Job status from backend
+ */
+export interface JobStatus {
+  status: 'starting' | 'running' | 'completed' | 'failed';
+  progress: number;
+  processed_images: number;
+  valid_images: number;
+  total_images: number;
+  elapsed_time?: number;
+  estimated_remaining?: number;
+  error?: string;
+}
+
+/**
+ * Multi-camera job status
+ */
+export interface MultiCameraJobStatus {
+  status: 'starting' | 'running' | 'completed' | 'failed';
+  processed_cameras: number;
+  total_cameras: number;
+  current_camera?: number;
+  camera_results?: Record<number, { status: string; error?: string }>;
+  camera_progress?: Record<number, { current: number; total: number; message?: string }>;
+  elapsed_time?: number;
+  error?: string;
 }
 
 /**
  * Hook for managing pinhole calibration state and operations.
- * @param config The pinhole section from calibration config.
- * @param updateConfig Function to update the calibration config.
- * @param cameraOptions Array of available camera numbers.
- * @param sourcePaths Array of available source paths.
- * @param imageCount Number of images to process.
+ *
+ * Simplified API:
+ * - Parameters are saved to config.yaml via /backend/calibration/config
+ * - Validation via /backend/calibration/planar/validate
+ * - Calibration via /backend/calibration/planar/generate_model
+ * - Model loading via /backend/calibration/planar/model
  */
 export function usePinholeCalibration(
-  config: PinholeConfig = {},
-  updateConfig: (path: string[], value: any) => void,
   cameraOptions: number[],
   sourcePaths: string[],
-  imageCount: number = 1000
 ) {
-  // --- State Initialization ---
-  const initialSourcePathIdx = config.source_path_idx ?? 0;
-  const validSourcePathIdx = initialSourcePathIdx < sourcePaths.length ? initialSourcePathIdx : 0;
-  const [sourcePathIdx, setSourcePathIdx] = useState<number>(validSourcePathIdx);
-  const [camera, setCamera] = useState<number>(config.camera ?? 1);
-  const [imageIndex, setImageIndex] = useState<string>(config.image_index !== undefined ? String(config.image_index) : "0");
-  const [filePattern, setFilePattern] = useState<string>(config.file_pattern ?? "calib%05d.tif");
-  const [patternCols, setPatternCols] = useState<string>(config.pattern_cols !== undefined ? String(config.pattern_cols) : "10");
-  const [patternRows, setPatternRows] = useState<string>(config.pattern_rows !== undefined ? String(config.pattern_rows) : "10");
-  const [dotSpacingMm, setDotSpacingMm] = useState<string>(config.dot_spacing_mm !== undefined ? String(config.dot_spacing_mm) : "28.89");
-  const [enhanceDots, setEnhanceDots] = useState<boolean>(config.enhance_dots ?? true);
-  const [asymmetric, setAsymmetric] = useState<boolean>(config.asymmetric ?? false);
-  const [dt, setDt] = useState<string>(config.dt !== undefined ? String(config.dt) : "1.0");
+  // Source selection
+  const [sourcePathIdx, setSourcePathIdx] = useState(0);
+  const [camera, setCamera] = useState(1);
 
-  // --- Display States ---
-  const [imageB64, setImageB64] = useState<string | null>(null);
-  const [totalImages, setTotalImages] = useState<number>(0);
-  const [gridPoints, setGridPoints] = useState<[number, number][]>([]);
-  const [showIndices, setShowIndices] = useState<boolean>(true);
-  const [dewarpedB64, setDewarpedB64] = useState<string | null>(null);
-  const [cameraModel, setCameraModel] = useState<any>(null);
-  const [gridData, setGridData] = useState<any>(null);
-  const [nativeSize, setNativeSize] = useState<{ w: number; h: number }>({ w: 1024, h: 1024 });
-  const [generating, setGenerating] = useState<boolean>(false);
+  // Image config (saved to config)
+  const [imageFormat, setImageFormat] = useState('calib%05d.tif');
+  const [imageType, setImageType] = useState('standard');
+  const [numImages, setNumImages] = useState(10);
+  const [subfolder, setSubfolder] = useState('');
+
+  // Grid params (saved to config)
+  const [patternCols, setPatternCols] = useState(10);
+  const [patternRows, setPatternRows] = useState(10);
+  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [enhanceDots, setEnhanceDots] = useState(true);
+  const [asymmetric, setAsymmetric] = useState(false);
+  const [dt, setDt] = useState(1.0);
+
+  // Validation state
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validating, setValidating] = useState(false);
+
+  // Job tracking
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+
+  // Model and detections
+  const [cameraModel, setCameraModel] = useState<CameraModel | null>(null);
+  const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+
+  // Overlay toggle
+  const [showOverlay, setShowOverlay] = useState(true);
+
+  // Multi-camera job tracking
+  const [multiCameraJobId, setMultiCameraJobId] = useState<string | null>(null);
+  const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);
+
+  // Vector calibration job tracking
   const [vectorJobId, setVectorJobId] = useState<string | null>(null);
-  const [planarJobId, setPlanarJobId] = useState<string | null>(null);
-  const [loadingResults, setLoadingResults] = useState<boolean>(false);
+  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
 
-  // --- Refs for Debouncing ---
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs for debouncing and polling
+  const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const multiCameraPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // --- Sync UI state with config when config changes ---
+  // Load config on mount
   useEffect(() => {
-    const configSourcePathIdx = config.source_path_idx ?? 0;
-    const validIdx = configSourcePathIdx < sourcePaths.length ? configSourcePathIdx : 0;
-    setSourcePathIdx(validIdx);
-    setCamera(config.camera ?? 1);
-    setImageIndex(config.image_index !== undefined ? String(config.image_index) : "0");
-    setFilePattern(config.file_pattern ?? "calib%05d.tif");
-    setPatternCols(config.pattern_cols !== undefined ? String(config.pattern_cols) : "10");
-    setPatternRows(config.pattern_rows !== undefined ? String(config.pattern_rows) : "10");
-    setDotSpacingMm(config.dot_spacing_mm !== undefined ? String(config.dot_spacing_mm) : "28.89");
-    setEnhanceDots(config.enhance_dots ?? true);
-    setAsymmetric(config.asymmetric ?? false);
-    setDt(config.dt !== undefined ? String(config.dt) : "1.0");
-  }, [config, sourcePaths.length]);
-
-  // --- Debounced config update ---
-  useEffect(() => {
-    const valid = Number.isFinite(sourcePathIdx) &&
-      imageIndex !== "" && !isNaN(Number(imageIndex)) &&
-      patternCols !== "" && !isNaN(Number(patternCols)) &&
-      patternRows !== "" && !isNaN(Number(patternRows)) &&
-      dotSpacingMm !== "" && !isNaN(Number(dotSpacingMm)) &&
-      dt !== "" && !isNaN(Number(dt));
-
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(async () => {
-      if (!valid) return;
-      const newConfig = {
-        source_path_idx: sourcePathIdx,
-        camera,
-        image_index: Number(imageIndex),
-        file_pattern: filePattern,
-        pattern_cols: Number(patternCols),
-        pattern_rows: Number(patternRows),
-        dot_spacing_mm: Number(dotSpacingMm),
-        enhance_dots: enhanceDots,
-        asymmetric: asymmetric,
-        dt: Number(dt),
-      };
-      const payload = {
-        calibration: {
-          pinhole: newConfig,
-        },
-      };
+    const loadConfig = async () => {
       try {
-        const res = await fetch("/backend/update_config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Failed to save pinhole config");
-        if (json.updated?.calibration?.pinhole) {
-          updateConfig(["calibration", "pinhole"], json.updated.calibration.pinhole);
+        // Load calibration image settings
+        const calRes = await fetch('/backend/calibration/config');
+        if (calRes.ok) {
+          const calData = await calRes.json();
+          if (calData.image_format) setImageFormat(calData.image_format);
+          if (calData.image_type) setImageType(calData.image_type);
+          if (calData.num_images) setNumImages(calData.num_images);
+          if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
         }
-      } catch (err) {
-        console.error("Failed to save pinhole config:", err);
+
+        // Load pinhole-specific settings
+        const cfgRes = await fetch('/backend/config');
+        if (cfgRes.ok) {
+          const cfgData = await cfgRes.json();
+          const pinhole = cfgData.calibration?.pinhole || {};
+          if (pinhole.pattern_cols) setPatternCols(pinhole.pattern_cols);
+          if (pinhole.pattern_rows) setPatternRows(pinhole.pattern_rows);
+          if (pinhole.dot_spacing_mm) setDotSpacingMm(pinhole.dot_spacing_mm);
+          if (pinhole.enhance_dots !== undefined) setEnhanceDots(pinhole.enhance_dots);
+          if (pinhole.asymmetric !== undefined) setAsymmetric(pinhole.asymmetric);
+          if (pinhole.dt) setDt(pinhole.dt);
+        }
+      } catch (e) {
+        console.error('Failed to load config:', e);
+      }
+    };
+    loadConfig();
+  }, []);
+
+  // Save config (debounced)
+  const saveConfig = useCallback(() => {
+    if (configDebounceRef.current) {
+      clearTimeout(configDebounceRef.current);
+    }
+
+    configDebounceRef.current = setTimeout(async () => {
+      try {
+        // Save calibration image settings
+        await fetch('/backend/calibration/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_format: imageFormat,
+            image_type: imageType,
+            num_images: numImages,
+            subfolder: subfolder,
+          }),
+        });
+
+        // Save pinhole-specific settings
+        await fetch('/backend/update_config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            calibration: {
+              pinhole: {
+                pattern_cols: patternCols,
+                pattern_rows: patternRows,
+                dot_spacing_mm: dotSpacingMm,
+                enhance_dots: enhanceDots,
+                asymmetric: asymmetric,
+                dt: dt,
+              },
+            },
+          }),
+        });
+      } catch (e) {
+        console.error('Failed to save config:', e);
       }
     }, 500);
+  }, [imageFormat, imageType, numImages, subfolder, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
+
+  // Auto-save when params change
+  useEffect(() => {
+    saveConfig();
+  }, [saveConfig]);
+
+  // Validate images (debounced)
+  const validateImages = useCallback(async () => {
+    if (validationDebounceRef.current) {
+      clearTimeout(validationDebounceRef.current);
+    }
+
+    validationDebounceRef.current = setTimeout(async () => {
+      setValidating(true);
+      try {
+        const res = await fetch('/backend/calibration/planar/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_path_idx: sourcePathIdx,
+            camera: camera,
+          }),
+        });
+
+        const data = await res.json();
+        setValidation(data);
+      } catch (e) {
+        console.error('Validation failed:', e);
+        setValidation({
+          valid: false,
+          found_count: 0,
+          error: String(e),
+        });
+      } finally {
+        setValidating(false);
+      }
+    }, 500);
+  }, [sourcePathIdx, camera]);
+
+  // Auto-validate on param changes
+  useEffect(() => {
+    validateImages();
+  }, [validateImages, imageFormat, numImages, subfolder, imageType]);
+
+  // Generate camera model
+  const generateCameraModel = useCallback(async () => {
+    try {
+      const res = await fetch('/backend/calibration/planar/generate_model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          camera: camera,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.job_id) {
+        setJobId(data.job_id);
+        setJobStatus({ status: 'starting', progress: 0, processed_images: 0, valid_images: 0, total_images: 0 });
+      } else {
+        console.error('Failed to start job:', data.error);
+      }
+    } catch (e) {
+      console.error('Failed to start calibration:', e);
+    }
+  }, [sourcePathIdx, camera]);
+
+  // Poll job status
+  useEffect(() => {
+    if (!jobId) {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      return;
+    }
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/backend/calibration/planar/job/${jobId}`);
+        const data = await res.json();
+
+        if (res.ok) {
+          setJobStatus(data);
+
+          // Stop polling if completed or failed
+          if (data.status === 'completed' || data.status === 'failed') {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+
+            // Auto-load model on completion
+            if (data.status === 'completed') {
+              setTimeout(() => loadModel(), 500);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to poll job status:', e);
+      }
+    };
+
+    // Initial poll
+    pollStatus();
+
+    // Start polling interval
+    pollIntervalRef.current = setInterval(pollStatus, 500);
 
     return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
-  }, [sourcePathIdx, camera, imageIndex, filePattern, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt, updateConfig]);
+  }, [jobId]);
 
-  // --- Ensure valid camera selection when cameraOptions change ---
+  // Load saved model
+  const loadModel = useCallback(async () => {
+    setModelLoading(true);
+    setModelLoadError(null);
+    try {
+      const res = await fetch(
+        `/backend/calibration/planar/model?source_path_idx=${sourcePathIdx}&camera=${camera}`
+      );
+      const data = await res.json();
+
+      if (res.ok && data.exists) {
+        setCameraModel(data.camera_model);
+        setDetections(data.detections || {});
+        setModelLoadError(null);
+        console.log(`Loaded model with ${Object.keys(data.detections || {}).length} detections`);
+      } else {
+        console.log('No saved model found');
+        setCameraModel(null);
+        setDetections({});
+        setModelLoadError(`No camera model found for Camera ${camera}. Generate a model first.`);
+      }
+    } catch (e) {
+      console.error('Failed to load model:', e);
+      setModelLoadError(`Failed to load model: ${e}`);
+    } finally {
+      setModelLoading(false);
+    }
+  }, [sourcePathIdx, camera]);
+
+  // Generate camera model for all cameras
+  const generateCameraModelAll = useCallback(async () => {
+    try {
+      const res = await fetch('/backend/calibration/planar/generate_model_all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.job_id) {
+        setMultiCameraJobId(data.job_id);
+        setMultiCameraJobStatus({
+          status: 'starting',
+          processed_cameras: 0,
+          total_cameras: data.cameras?.length || 0,
+        });
+      } else {
+        console.error('Failed to start multi-camera job:', data.error);
+      }
+    } catch (e) {
+      console.error('Failed to start multi-camera calibration:', e);
+    }
+  }, [sourcePathIdx]);
+
+  // Vector calibration for single or all cameras
+  const calibrateVectors = useCallback(async (
+    forAllCameras: boolean = false,
+    typeName: string = 'instantaneous'
+  ) => {
+    try {
+      const body: Record<string, unknown> = {
+        source_path_idx: sourcePathIdx,
+        type_name: typeName,
+      };
+
+      if (forAllCameras) {
+        body.cameras = cameraOptions;
+      } else {
+        body.camera = camera;
+      }
+
+      const res = await fetch('/backend/calibration/vectors/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (data.job_id) {
+        setVectorJobId(data.job_id);
+        setVectorJobStatus({
+          status: 'starting',
+          processed_cameras: 0,
+          total_cameras: data.cameras?.length || 1,
+        });
+      } else {
+        console.error('Failed to start vector calibration:', data.error);
+      }
+    } catch (e) {
+      console.error('Vector calibration error:', e);
+    }
+  }, [sourcePathIdx, camera, cameraOptions]);
+
+  // Ensure valid camera selection
   useEffect(() => {
     if (cameraOptions.length > 0 && !cameraOptions.includes(camera)) {
       setCamera(cameraOptions[0]);
     }
   }, [cameraOptions, camera]);
 
-  // --- Status hooks ---
-  const useCalibrationStatus = (sourcePathIdx: number, camera: number) => {
-    const [status, setStatus] = useState<string>("not_started");
-    const [details, setDetails] = useState<any>(null);
-
-    useEffect(() => {
-      // Don't poll - only check status when explicitly needed
-      // This prevents unnecessary API calls every 2 seconds
-      return () => {}; // No-op cleanup
-    }, [sourcePathIdx, camera]);
-    return { status, details };
-  };
-
-  const useVectorCalibrationStatus = (jobId: string | null) => {
-    const [status, setStatus] = useState<string>("not_started");
-    const [details, setDetails] = useState<any>(null);
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
-
-    useEffect(() => {
-      if (!jobId) {
-        setStatus("not_started");
-        setDetails(null);
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-        return;
+  // Poll multi-camera job status
+  useEffect(() => {
+    if (!multiCameraJobId) {
+      if (multiCameraPollRef.current) {
+        clearInterval(multiCameraPollRef.current);
+        multiCameraPollRef.current = null;
       }
+      return;
+    }
 
-      let active = true;
-      const fetchStatus = async () => {
-        try {
-          const res = await fetch(`/backend/calibration/vectors/status/${jobId}`);
-          const data = await res.json();
-          if (active) {
-            setStatus(data.status || "not_started");
-            setDetails(data);
-            
-            // Stop polling if completed or failed
-            if (data.status === "completed" || data.status === "failed" || data.progress >= 100) {
-              if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-              }
-            } else if ((data.status === "running" || data.status === "starting") && !intervalRef.current) {
-              // Start polling only if running/starting and not already polling
-              intervalRef.current = setInterval(fetchStatus, 500); // Poll every 500ms like PIV runner
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/backend/calibration/planar/job/${multiCameraJobId}`);
+        const data = await res.json();
+
+        if (res.ok) {
+          setMultiCameraJobStatus(data);
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            if (multiCameraPollRef.current) {
+              clearInterval(multiCameraPollRef.current);
+              multiCameraPollRef.current = null;
             }
-          }
-        } catch {
-          if (active) {
-            setStatus("not_started");
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current);
-              intervalRef.current = null;
+            // Reload model after completion
+            if (data.status === 'completed') {
+              setTimeout(() => loadModel(), 500);
             }
           }
         }
-      };
-      
-      // Initial fetch
-      fetchStatus();
-      
-      return () => {
-        active = false;
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      };
-    }, [jobId]);
-    return { status, details };
-  };
+      } catch (e) {
+        console.error('Failed to poll multi-camera job status:', e);
+      }
+    };
 
-  // --- Get status ---
-  const { status: calibrationStatus, details: calibrationDetails } = useCalibrationStatus(sourcePathIdx, camera);
-  const { status: vectorStatus, details: vectorDetails } = useVectorCalibrationStatus(vectorJobId);
+    pollStatus();
+    multiCameraPollRef.current = setInterval(pollStatus, 500);
 
-  // --- Helper function to load results for current image ---
-  const loadResultsForCurrentImage = async () => {
-    setLoadingResults(true);
-    try {
-      console.log(`Loading calibration results for image index ${imageIndex}...`);
-      const compResponse = await fetch('/backend/calibration/planar/compute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          image_index: imageIndex,
-          file_pattern: filePattern,
-          pattern_cols: patternCols,
-          pattern_rows: patternRows,
-          dot_spacing_mm: dotSpacingMm,
-          enhance_dots: enhanceDots,
-          asymmetric: asymmetric,
-          dt: dt
-        })
-      });
+    return () => {
+      if (multiCameraPollRef.current) {
+        clearInterval(multiCameraPollRef.current);
+        multiCameraPollRef.current = null;
+      }
+    };
+  }, [multiCameraJobId, loadModel]);
 
-      const compData = await compResponse.json();
+  // Poll vector job status
+  useEffect(() => {
+    if (!vectorJobId) {
+      if (vectorPollRef.current) {
+        clearInterval(vectorPollRef.current);
+        vectorPollRef.current = null;
+      }
+      return;
+    }
 
-      if (compResponse.ok) {
-        console.log('Raw response data:', compData);
-        if (compData.results?.grid_data) {
-          console.log('Setting grid data:', compData.results.grid_data);
-          setGridData(compData.results.grid_data);
-          setGridPoints(compData.results.grid_data.grid_points || []);
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/backend/calibration/vectors/status/${vectorJobId}`);
+        const data = await res.json();
 
-          // Check if grid PNG is available
-          if (compData.results.grid_data.grid_png) {
-            console.log('Grid PNG found in response');
-          } else {
-            console.log('No grid PNG in response');
+        if (res.ok) {
+          setVectorJobStatus(data);
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            if (vectorPollRef.current) {
+              clearInterval(vectorPollRef.current);
+              vectorPollRef.current = null;
+            }
           }
         }
-        if (compData.results?.camera_model) {
-          console.log('Setting camera model:', compData.results.camera_model);
-          setCameraModel(compData.results.camera_model);
-        }
-        if (compData.results?.dewarped_image) {
-          setDewarpedB64(compData.results.dewarped_image);
-        }
-        console.log('Calibration results loaded successfully');
-      } else {
-        console.error('Error in response:', compData);
+      } catch (e) {
+        console.error('Failed to poll vector job status:', e);
       }
-    } catch (e: any) {
-      console.error(`Error loading results: ${e.message}`);
-    } finally {
-      setLoadingResults(false);
-    }
-  };
+    };
 
-  // --- Generate camera model ---
-  const generateCameraModel = async () => {
-    setGenerating(true);
-    setLoadingResults(true); // Show spinner immediately
-    try {
-      // First load and process the current image to show results
-      const imageResponse = await fetch(`/backend/calibration/planar/get_image?source_path_idx=${sourcePathIdx}&camera=${camera}&image_index=${imageIndex}&file_pattern=${encodeURIComponent(filePattern)}`);
-      if (imageResponse.status === 404) {
-        alert('Calibration image not found. (File or folder does not exist)');
-        setGenerating(false);
-        return;
+    pollStatus();
+    vectorPollRef.current = setInterval(pollStatus, 500);
+
+    return () => {
+      if (vectorPollRef.current) {
+        clearInterval(vectorPollRef.current);
+        vectorPollRef.current = null;
       }
-      const imageData = await imageResponse.json();
-      if (imageResponse.ok) {
-        setImageB64(imageData.image);
-        setNativeSize({ w: imageData.width, h: imageData.height });
-        setTotalImages(imageData.total_images);
-        // Start batch processing
-        const response = await fetch('/backend/calibration/planar/calibrate_all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            camera: camera,
-            file_pattern: filePattern,
-            pattern_cols: patternCols,
-            pattern_rows: patternRows,
-            dot_spacing_mm: dotSpacingMm,
-            enhance_dots: enhanceDots,
-            asymmetric: asymmetric,
-            dt: dt
-          })
-        });
-        const result = await response.json();
-        if (response.ok && result.job_id) {
-          setPlanarJobId(result.job_id);
-          // Poll job status until completed, then load results
-          const pollForCompletion = () => {
-            const interval = setInterval(async () => {
-              try {
-                const statusResponse = await fetch(`/backend/calibration/planar/calibrate_all/status/${result.job_id}`);
-                const statusData = await statusResponse.json();
-                if (statusData.status === 'completed') {
-                  clearInterval(interval);
-                  setTimeout(() => {
-                    loadResultsForCurrentImage();
-                  }, 1000);
-                } else if (statusData.status === 'failed' || statusData.status === 'error') {
-                  clearInterval(interval);
-                  console.error('Calibration failed:', statusData.error);
-                }
-              } catch (e) {
-                console.log('Error polling planar calibration job:', e);
-              }
-            }, 2000);
-          };
-          pollForCompletion();
-        } else {
-          throw new Error(result.error || 'Failed to start camera model generation');
-        }
-      } else {
-        throw new Error(imageData.error || 'Failed to load image');
-      }
-    } catch (e: any) {
-      console.error(`Error starting camera model generation: ${e.message}`);
-    } finally {
-      setGenerating(false);
-      // Do not setLoadingResults(false) here; let loadResultsForCurrentImage handle it
-    }
-  };
+    };
+  }, [vectorJobId]);
 
-  // --- Load saved calibration results (without recomputing) ---
-  const loadSavedCalibration = async () => {
-    setLoadingResults(true);
-    try {
-      const res = await fetch(
-        `/backend/calibration/planar/load_results?source_path_idx=${sourcePathIdx}&camera=${camera}&image_index=${imageIndex}`
-      );
-      const data = await res.json();
-
-      if (res.ok && data.exists) {
-        if (data.results?.grid_data) {
-          setGridData(data.results.grid_data);
-          setGridPoints(data.results.grid_data.grid_points || []);
-        }
-        if (data.results?.camera_model) {
-          setCameraModel(data.results.camera_model);
-        }
-        if (data.results?.dewarped_image) {
-          setDewarpedB64(data.results.dewarped_image);
-        }
-        console.log('Loaded saved calibration results');
-        return true;
-      } else {
-        console.log('No saved calibration results found');
-        return false;
-      }
-    } catch (e: any) {
-      console.error(`Error loading saved calibration: ${e.message}`);
-      return false;
-    } finally {
-      setLoadingResults(false);
-    }
-  };
-
-  // --- Calibrate vectors ---
-  const calibrateVectors = async () => {
-    try {
-      const response = await fetch('/backend/calibration/vectors/calibrate_all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          model_index: imageIndex,
-          dt: dt,
-          image_count: imageCount,
-          vector_pattern: "%05d.mat",
-          type_name: "instantaneous"
-        })
-      });
-
-      const result = await response.json();
-
-      if (response.ok) {
-        console.log(`Vector calibration started using model ${result.model_used}!`);
-        setVectorJobId(result.job_id);
-      } else {
-        throw new Error(result.error || 'Failed to start vector calibration');
-      }
-    } catch (e: any) {
-      console.error(`Error starting vector calibration: ${e.message}`);
-    }
-  };
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+      if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (multiCameraPollRef.current) clearInterval(multiCameraPollRef.current);
+      if (vectorPollRef.current) clearInterval(vectorPollRef.current);
+    };
+  }, []);
 
   return {
-    // State
+    // Source selection
     sourcePathIdx,
-    camera,
-    imageIndex,
-    filePattern,
-    patternCols,
-    patternRows,
-    dotSpacingMm,
-    enhanceDots,
-    asymmetric,
-    dt,
-    imageB64,
-    totalImages,
-    gridPoints,
-    showIndices,
-    dewarpedB64,
-    cameraModel,
-    gridData,
-    nativeSize,
-    generating,
-    vectorJobId,
-    planarJobId,
-    loadingResults,
-
-    // Setters
     setSourcePathIdx,
+    camera,
     setCamera,
-    setImageIndex,
-    setFilePattern,
-    setPatternCols,
-    setPatternRows,
-    setDotSpacingMm,
-    setEnhanceDots,
-    setAsymmetric,
-    setDt,
-    setImageB64,
-    setTotalImages,
-    setGridPoints,
-    setShowIndices,
-    setDewarpedB64,
-    setCameraModel,
-    setGridData,
-    setNativeSize,
-    setGenerating,
-    setVectorJobId,
-    setPlanarJobId,
-    setLoadingResults,
 
-    // Computed
-    calibrationStatus,
-    calibrationDetails,
-    vectorStatus,
-    vectorDetails,
-    cameraOptions,
-    sourcePaths,
+    // Image config
+    imageFormat,
+    setImageFormat,
+    imageType,
+    setImageType,
+    numImages,
+    setNumImages,
+    subfolder,
+    setSubfolder,
+
+    // Grid params
+    patternCols,
+    setPatternCols,
+    patternRows,
+    setPatternRows,
+    dotSpacingMm,
+    setDotSpacingMm,
+    enhanceDots,
+    setEnhanceDots,
+    asymmetric,
+    setAsymmetric,
+    dt,
+    setDt,
+
+    // Validation
+    validation,
+    validating,
+    validateImages,
+
+    // Single camera job tracking
+    jobId,
+    jobStatus,
+    isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
+
+    // Multi-camera job tracking
+    multiCameraJobId,
+    multiCameraJobStatus,
+    isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
+
+    // Vector calibration job tracking
+    vectorJobId,
+    vectorJobStatus,
+    isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
+
+    // Model and detections
+    cameraModel,
+    detections,
+    modelLoading,
+    modelLoadError,
+    hasModel: cameraModel !== null,
+
+    // Overlay toggle
+    showOverlay,
+    setShowOverlay,
 
     // Actions
     generateCameraModel,
+    generateCameraModelAll,
+    loadModel,
     calibrateVectors,
-    loadResultsForCurrentImage,
-    loadSavedCalibration,
+
+    // Options (passthrough)
+    cameraOptions,
+    sourcePaths,
   };
 }

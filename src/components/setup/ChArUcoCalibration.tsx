@@ -1,10 +1,16 @@
 "use client";
-import React from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
+import { useChArUcoCalibration, ARUCO_DICTS, FrameDetection } from "@/hooks/useChArUcoCalibration";
+import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
+import { useToast } from "@/components/ui/use-toast";
+import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -29,7 +35,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const {
     sourcePathIdx,
     camera,
-    filePattern,
     squaresH,
     squaresV,
     squareSize,
@@ -39,13 +44,24 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     dt,
     calibrating,
     jobId,
-    validationResult,
-    validating,
-    detectionPreview,
-    detecting,
+
+    // Model and detections (like pinhole)
+    cameraModel,
+    detections,
+    modelLoading,
+    modelLoadError,
+    hasModel,
+
+    // Overlay toggle
+    showOverlay,
+    setShowOverlay,
+
+    // Vector calibration job tracking
+    vectorJobStatus,
+    isVectorCalibrating,
+
     setSourcePathIdx,
     setCamera,
-    setFilePattern,
     setSquaresH,
     setSquaresV,
     setSquareSize,
@@ -55,16 +71,184 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setDt,
     jobStatus,
     jobDetails,
-    validateImages,
-    detectInImage,
     startCalibration,
     calibrateAllCameras,
+    loadModel,
+    calibrateVectors,
   } = useChArUcoCalibration(
     config.calibration?.charuco || {},
     updateConfig,
     cameraOptions,
     sourcePaths
   );
+
+  // Calibration image settings state (unified from calibration block)
+  const [showImageViewer, setShowImageViewer] = useState(false);
+  const [imageFormat, setImageFormat] = useState("calib%05d.tif");
+  const [imageType, setImageType] = useState("standard");
+  const [numImages, setNumImages] = useState<string | number>(10);
+  const [calibrationSubfolder, setCalibrationSubfolder] = useState("");
+  const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
+
+  // Unified scope selector for both model generation and vector calibration
+  // 'all' means all cameras, number means specific camera
+  const [calibrationScope, setCalibrationScope] = useState<'all' | number>('all');
+  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
+
+  // Toast notifications
+  const { toast } = useToast();
+
+  // Load calibrationScope from config on mount (from charuco.camera)
+  useEffect(() => {
+    const savedCamera = config.calibration?.charuco?.camera;
+    if (typeof savedCamera === 'number' && cameraOptions.includes(savedCamera)) {
+      setCalibrationScope(savedCamera);
+    }
+  }, [config.calibration?.charuco?.camera, cameraOptions]);
+
+  // Load piv_type from config on mount
+  useEffect(() => {
+    const pivType = config.calibration?.piv_type;
+    if (pivType === 'instantaneous' || pivType === 'ensemble') {
+      setVectorTypeName(pivType);
+    }
+  }, [config.calibration?.piv_type]);
+
+  // Save scope to config when changed
+  const handleScopeChange = async (value: string) => {
+    const newScope = value === 'all' ? 'all' : Number(value);
+    setCalibrationScope(newScope);
+
+    // When single camera selected, also update the hook's camera state
+    if (typeof newScope === 'number') {
+      setCamera(newScope);
+      // Save to config
+      try {
+        await fetch('/backend/update_config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            calibration: { charuco: { camera: newScope } }
+          })
+        });
+      } catch (e) {
+        console.error('Failed to save camera scope:', e);
+      }
+    }
+  };
+
+  // Save piv_type when changed
+  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
+    setVectorTypeName(value);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { piv_type: value }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save piv_type:', e);
+    }
+  };
+
+  // Automatic validation using unified validation hook (same as Pinhole)
+  // Pass numImages and subfolder to trigger revalidation when they change
+  const validation = usePinholeValidation(
+    sourcePathIdx,
+    camera,
+    imageFormat,
+    typeof numImages === 'number' ? numImages : parseInt(String(numImages)) || 10,
+    calibrationSubfolder
+  );
+  const isMacOS = useIsMacOS();
+  const hasUnsupportedFormat = isContainerFormat(imageFormat);
+
+  // Convert detections to format expected by CalibrationImageViewer
+  const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
+    if (!detections || Object.keys(detections).length === 0) return undefined;
+    const result: Record<number, FrameDetectionData> = {};
+    for (const [key, value] of Object.entries(detections)) {
+      const frameIdx = parseInt(key, 10);
+      if (!isNaN(frameIdx) && value.grid_points) {
+        result[frameIdx] = {
+          grid_points: value.grid_points,
+          reprojection_error: value.reprojection_error,
+        };
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }, [detections]);
+
+  // Load calibration config on mount
+  useEffect(() => {
+    const loadCalibrationConfig = async () => {
+      try {
+        const res = await fetch("/backend/calibration/config");
+        const json = await res.json();
+        if (res.ok) {
+          setImageFormat(json.image_format || "calib%05d.tif");
+          setImageType(json.image_type || "standard");
+          setNumImages(json.num_images || 10);
+          setCalibrationSubfolder(json.subfolder || "");
+        }
+      } catch (e) {
+        console.error("Failed to load calibration config:", e);
+      }
+    };
+    loadCalibrationConfig();
+  }, []);
+
+  // Show toast notification when model load error occurs
+  useEffect(() => {
+    if (modelLoadError) {
+      toast({
+        title: "Camera Model Error",
+        description: modelLoadError,
+        variant: "destructive",
+      });
+    }
+  }, [modelLoadError, toast]);
+
+  // Show toast notification when vector calibration fails
+  useEffect(() => {
+    if (vectorJobStatus?.status === 'failed') {
+      toast({
+        title: "Vector Calibration Failed",
+        description: vectorJobStatus.error || "Unknown error occurred",
+        variant: "destructive",
+      });
+    }
+  }, [vectorJobStatus?.status, vectorJobStatus?.error, toast]);
+
+  // Show toast notification when camera model calibration fails
+  useEffect(() => {
+    if (jobStatus === 'failed' || jobStatus === 'error') {
+      toast({
+        title: "Camera Model Calibration Failed",
+        description: jobDetails?.error || "Calibration failed",
+        variant: "destructive",
+      });
+    }
+  }, [jobStatus, jobDetails?.error, toast]);
+
+  // Save calibration config when settings change
+  const saveCalibrationConfig = useCallback(async (updates: Record<string, any>) => {
+    try {
+      const res = await fetch("/backend/calibration/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) {
+        const json = await res.json();
+        console.error("Failed to save calibration config:", json.error);
+      }
+    } catch (e) {
+      console.error("Failed to save calibration config:", e);
+    }
+  }, []);
 
   const setAsActiveMethod = async () => {
     try {
@@ -90,85 +274,95 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const isActive = config.calibration?.active === "charuco";
 
   return (
+    <div className="space-y-6">
     <Card>
-      {/* Progress display if job is running */}
-      {jobId && jobDetails && (
-        <div className="mb-4 p-4 border rounded bg-blue-50">
-          <div className="flex items-center gap-2 text-sm mb-2">
-            <strong>ChArUco Calibration Progress:</strong>
-            <span className="font-medium">{jobStatus}</span>
-          </div>
-          {(jobStatus === 'running' || jobStatus === 'starting') && (
-            <div className="flex items-center gap-2 text-green-600 text-sm">
-              <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
-              Processing images...
-            </div>
-          )}
-          <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-            <div className="h-2 bg-green-600" style={{ width: `${jobDetails.progress || 0}%` }}></div>
-          </div>
-          <div className="text-xs text-muted-foreground mt-1">
-            Progress: {jobDetails.progress || 0}%
-            {jobDetails.valid_images !== undefined && (
-              <span> | Valid images: {jobDetails.valid_images}</span>
-            )}
-          </div>
-          {jobStatus === 'completed' && (
-            <div className="mt-2 text-xs text-green-600">
-              Calibration completed!
-              {jobDetails.rms_error && (
-                <span> RMS error: {Number(jobDetails.rms_error).toFixed(4)} pixels</span>
-              )}
-            </div>
-          )}
-          {jobStatus === 'failed' && jobDetails.error && (
-            <div className="mt-2 text-xs text-red-600">
-              Error: {jobDetails.error}
-            </div>
-          )}
-        </div>
-      )}
-
       <CardHeader>
         <CardTitle>ChArUco Board Calibration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Source Path */}
-        <div>
-          <label className="block text-xs font-medium">Source Path</label>
-          <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-            <SelectTrigger><SelectValue placeholder="Pick source path" /></SelectTrigger>
-            <SelectContent>
-              {sourcePaths.map((p, i) => (
-                <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Source Path and Camera - 2-col grid like Pinhole */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium">Source Path</label>
+            <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
+              <SelectTrigger><SelectValue placeholder="Pick source path" /></SelectTrigger>
+              <SelectContent>
+                {sourcePaths.map((p, i) => (
+                  <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Camera</label>
+            <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
+              <SelectTrigger><SelectValue placeholder="Pick camera" /></SelectTrigger>
+              <SelectContent>
+                {cameraOptions.map((c) => (
+                  <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        {/* Camera */}
-        <div>
-          <label className="block text-xs font-medium">Camera</label>
-          <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-            <SelectTrigger><SelectValue placeholder="Pick camera" /></SelectTrigger>
-            <SelectContent>
-              {cameraOptions.map((c) => (
-                <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* File Pattern */}
-        <div>
-          <label className="block text-xs font-medium">File Pattern</label>
-          <Input
-            type="text"
-            value={filePattern}
-            onChange={e => setFilePattern(e.target.value)}
-            placeholder="*.tif"
-          />
-          <p className="text-xs text-muted-foreground mt-1">Glob pattern for calibration images (e.g., *.tif, charuco_*.png)</p>
+        {/* Calibration Image Settings */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-xs font-medium">Image Type</label>
+            <Select
+              value={imageType}
+              onValueChange={v => {
+                setImageType(v);
+                saveCalibrationConfig({ image_type: v });
+              }}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
+                <SelectItem value="cine">Phantom CINE</SelectItem>
+                <SelectItem value="lavision_set">LaVision SET</SelectItem>
+                <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Number of Images</label>
+            <Input
+              type="number"
+              min={1}
+              value={numImages}
+              onChange={e => {
+                const val = e.target.value;
+                setNumImages(val === '' ? '' : Number(val));
+              }}
+              onBlur={() => {
+                const finalVal = numImages === '' || Number(numImages) < 1 ? 10 : Number(numImages);
+                setNumImages(finalVal);
+                saveCalibrationConfig({ num_images: finalVal });
+              }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Image Format</label>
+            <Input
+              type="text"
+              value={imageFormat}
+              onChange={e => setImageFormat(e.target.value)}
+              onBlur={() => saveCalibrationConfig({ image_format: imageFormat })}
+              placeholder="calib%05d.tif"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Calibration Subfolder</label>
+            <Input
+              value={calibrationSubfolder}
+              onChange={e => setCalibrationSubfolder(e.target.value)}
+              onBlur={() => saveCalibrationConfig({ subfolder: calibrationSubfolder })}
+              placeholder="(optional)"
+            />
+          </div>
         </div>
 
         {/* Board Parameters */}
@@ -258,106 +452,333 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           </div>
         </div>
 
-        {/* Validation Section */}
-        <div className="border-t pt-4 mt-4">
-          <h4 className="font-medium text-sm mb-2">Image Validation</h4>
-          <div className="flex gap-2">
+        {/* macOS Warning for Unsupported Formats */}
+        {hasUnsupportedFormat && isMacOS && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Unsupported File Format on macOS</AlertTitle>
+            <AlertDescription>
+              .set and .im7 container formats require Windows or Linux.
+              These formats are not supported on macOS.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Calibration Validation - automatic, same as Pinhole */}
+        <ValidationAlert
+          validation={validation}
+          customSuccessMessage={
+            validation.valid
+              ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
+              : undefined
+          }
+        />
+
+        {/* Suggested Pattern Button - show when validation fails but a suggestion is available */}
+        {!validation.valid && validation.suggested_pattern && (
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-600">Suggestion:</span>
             <Button
-              onClick={validateImages}
-              disabled={validating}
               variant="outline"
               size="sm"
+              onClick={() => {
+                setImageFormat(validation.suggested_pattern!);
+                saveCalibrationConfig({ image_format: validation.suggested_pattern });
+              }}
+              className="text-blue-600 border-blue-300 hover:bg-blue-50"
             >
-              {validating ? "Validating..." : "Validate Images"}
+              Use "{validation.suggested_pattern}"
             </Button>
+          </div>
+        )}
+
+        {/* Calibration Image Viewer Button */}
+        {validation.valid && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowImageViewer(!showImageViewer)}
+            className="flex items-center gap-2"
+          >
+            {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
+          </Button>
+        )}
+
+        {/* Calibration Image Viewer */}
+        {showImageViewer && validation.valid && (
+          <CalibrationImageViewer
+            backendUrl="/backend"
+            sourcePathIdx={sourcePathIdx}
+            camera={camera}
+            numImages={typeof numImages === 'number' ? numImages : 10}
+            calibrationType="charuco"
+            calibrationParams={{
+              squares_h: parseInt(squaresH) || 10,
+              squares_v: parseInt(squaresV) || 9,
+              square_length: parseFloat(squareSize) * 1000 || 30,  // Convert to mm
+              marker_length: (parseFloat(squareSize) * parseFloat(markerRatio) * 1000) || 15,
+              aruco_dict: arucoDict,
+            }}
+            onFrameChange={setCurrentViewerFrame}
+            savedDetections={savedDetections}
+            showSavedOverlay={showOverlay}
+            onSavedOverlayChange={setShowOverlay}
+          />
+        )}
+
+        {/* Action Buttons */}
+        <div className="border-t pt-4 space-y-4">
+          {/* Unified Action Row */}
+          <div className="flex gap-2 items-center flex-wrap">
+            <Select value={String(calibrationScope)} onValueChange={handleScopeChange}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Cameras</SelectItem>
+                {cameraOptions.map((cam) => (
+                  <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Button
-              onClick={() => detectInImage(0)}
-              disabled={detecting}
-              variant="outline"
-              size="sm"
+              onClick={() => calibrationScope === 'all' ? calibrateAllCameras() : startCalibration()}
+              disabled={calibrating || !validation.valid}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
             >
-              {detecting ? "Detecting..." : "Detect in First Image"}
+              {calibrating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                'Generate Model'
+              )}
+            </Button>
+
+            <Button
+              onClick={loadModel}
+              disabled={modelLoading}
+              variant="outline"
+            >
+              {modelLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                'Load Saved'
+              )}
+            </Button>
+
+            <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
+              <SelectTrigger className="w-[130px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                <SelectItem value="ensemble">Ensemble</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Button
+              onClick={() => calibrateVectors(calibrationScope === 'all', vectorTypeName)}
+              disabled={!hasModel || isVectorCalibrating}
+              className="bg-green-600 hover:bg-green-700 text-white"
+              title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors"}
+            >
+              {isVectorCalibrating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Calibrating...
+                </>
+              ) : (
+                'Calibrate Vectors'
+              )}
+            </Button>
+
+            <Button
+              onClick={setAsActiveMethod}
+              disabled={isActive}
+              variant={isActive ? "default" : "outline"}
+              className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
+            >
+              {isActive ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                  Active
+                </>
+              ) : (
+                'Set as Active'
+              )}
             </Button>
           </div>
 
-          {validationResult && (
-            <div className={`mt-2 p-2 rounded text-xs ${validationResult.valid ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-              {validationResult.valid ? (
-                <>
-                  <span className="font-medium">Found {validationResult.found_count} images</span>
-                  {validationResult.sample_files && (
-                    <div className="mt-1 text-xs opacity-75">
-                      {validationResult.sample_files.slice(0, 3).join(", ")}
-                      {validationResult.sample_files.length > 3 && "..."}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <span>{validationResult.error || "Validation failed"}</span>
+          {modelLoadError && (
+            <div className="text-sm text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4" />
+              {modelLoadError}
+            </div>
+          )}
+        </div>
+
+        {/* Progress display - shows when job is running */}
+        {jobId && jobDetails && (
+          <div className="mt-4 p-3 border rounded bg-green-50">
+            <div className="flex items-center gap-2 text-sm mb-2">
+              <strong>ChArUco Calibration Progress:</strong>
+              <span className="font-medium capitalize">{jobStatus}</span>
+            </div>
+            {(jobStatus === 'running' || jobStatus === 'starting') && (
+              <div className="flex items-center gap-2 text-green-600 text-sm mb-2">
+                <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
+                Processing images...
+              </div>
+            )}
+            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+              <div className="h-2 bg-green-600 transition-all" style={{ width: `${jobDetails.progress || 0}%` }}></div>
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Progress: {jobDetails.progress || 0}%
+              {jobDetails.valid_images !== undefined && (
+                <span> | Valid images: {jobDetails.valid_images}</span>
               )}
             </div>
-          )}
+            {jobStatus === 'completed' && (
+              <div className="mt-2 text-xs text-green-600">
+                Calibration completed!
+                {jobDetails.rms_error && (
+                  <span> RMS error: {Number(jobDetails.rms_error).toFixed(4)} pixels</span>
+                )}
+              </div>
+            )}
+            {(jobStatus === 'failed' || jobStatus === 'error') && (
+              <div className="mt-2 text-xs text-red-600">
+                Error: {jobDetails.error || 'Calibration failed'}
+              </div>
+            )}
+          </div>
+        )}
 
-          {detectionPreview && (
-            <div className={`mt-2 p-2 rounded text-xs ${detectionPreview.found ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700'}`}>
-              {detectionPreview.found ? (
-                <>
-                  <span className="font-medium">Detected {detectionPreview.corner_count} corners</span>
-                  {detectionPreview.marker_count !== undefined && (
-                    <span> ({detectionPreview.marker_count} markers)</span>
-                  )}
-                </>
-              ) : (
-                <span>{detectionPreview.message || detectionPreview.error || "Detection failed"}</span>
+        {/* Vector Calibration Progress */}
+        {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (
+          <div className="mt-4 p-3 border rounded bg-green-50">
+            <div className="flex items-center gap-2 text-sm mb-2">
+              <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+              <strong>Vector Calibration:</strong>
+              <span className="capitalize">{vectorJobStatus.status}</span>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Processing camera {vectorJobStatus.current_camera}
+              {vectorJobStatus.total_cameras > 0 && (
+                <span> ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)</span>
               )}
             </div>
-          )}
+          </div>
+        )}
 
-          {detectionPreview?.detection_preview && (
-            <div className="mt-2">
-              <img
-                src={`data:image/png;base64,${detectionPreview.detection_preview}`}
-                alt="Detection preview"
-                className="max-w-full border rounded"
-              />
-            </div>
-          )}
-        </div>
+        {/* Vector Calibration Completed */}
+        {vectorJobStatus?.status === 'completed' && (
+          <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+            <CheckCircle2 className="h-4 w-4 inline mr-2" />
+            Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
+          </div>
+        )}
 
-        {/* Calibration Buttons */}
-        <div className="flex gap-2 pt-4 border-t">
-          <Button
-            onClick={startCalibration}
-            disabled={calibrating}
-            className="bg-green-600 hover:bg-green-700 text-white"
-          >
-            {calibrating ? "Calibrating..." : "Calibrate Camera"}
-          </Button>
-          {cameraOptions.length > 1 && (
-            <Button
-              onClick={calibrateAllCameras}
-              disabled={calibrating}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {calibrating ? "Calibrating..." : "Calibrate All Cameras"}
-            </Button>
-          )}
-          <Button
-            onClick={setAsActiveMethod}
-            disabled={isActive}
-            className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
-            variant={isActive ? "default" : "outline"}
-          >
-            {isActive ? "Active" : "Set as Active Method"}
-          </Button>
-        </div>
+        {/* Vector Calibration Failed */}
+        {vectorJobStatus?.status === 'failed' && (
+          <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+            <AlertTriangle className="h-4 w-4 inline mr-2" />
+            Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
+          </div>
+        )}
 
-        <div className="text-xs text-gray-500 mt-2">
-          ChArUco calibration uses ArUco markers combined with a chessboard pattern.<br />
-          It aggregates corner detections across multiple images for robust camera calibration.<br />
-          The output camera model is compatible with the Vector Calibrator.
-        </div>
       </CardContent>
     </Card>
+
+    {/* Camera Model Results Card */}
+    {hasModel && cameraModel && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Camera Model Results</CardTitle>
+          <CardDescription>
+            ChArUco calibration model for Camera {camera}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Camera Matrix */}
+            <div>
+              <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
+              <div className="font-mono text-xs bg-muted p-2 rounded">
+                {cameraModel.camera_matrix?.map((row: number[], i: number) => (
+                  <div key={i}>[{row.map(v => v.toFixed(2)).join(', ')}]</div>
+                ))}
+              </div>
+            </div>
+
+            {/* Intrinsic Parameters */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Focal Length (fx):</span>
+                  <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Focal Length (fy):</span>
+                  <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Principal Point (cx):</span>
+                  <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Principal Point (cy):</span>
+                  <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Distortion Coefficients */}
+            <div>
+              <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
+              <div className="font-mono text-xs bg-muted p-2 rounded">
+                [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(6)).join(', ')}]
+              </div>
+            </div>
+
+            {/* Calibration Quality */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-muted-foreground">RMS Error:</span>
+                  <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Images Used:</span>
+                  <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Detection Summary */}
+          {detections && Object.keys(detections).length > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <h4 className="text-sm font-semibold mb-2">Detection Summary</h4>
+              <p className="text-sm text-muted-foreground">
+                {Object.keys(detections).length} frames with detected ChArUco corners.
+                {showOverlay ? ' Toggle overlay in image viewer to visualize.' : ' Enable overlay in image viewer to visualize.'}
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )}
+    </div>
   );
 };

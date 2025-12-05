@@ -173,6 +173,11 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   ) => {
     setSavingMeta("Saving...");
     const effectiveImageType = nextImageType || imageType;
+
+    // Generate default camera_numbers array based on camera count
+    const camCount = Number(nextNumCameras) || 1;
+    const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
+
     const payload = {
       images: {
         num_images: nextNumImages === "" ? null : Number(nextNumImages),
@@ -183,7 +188,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         image_type: effectiveImageType,
       },
       paths: {
-        camera_count: Number(nextNumCameras),
+        camera_count: camCount,
+        camera_numbers: cameraNumbers,
         camera_subfolders: nextCameraSubfolders,
       },
     };

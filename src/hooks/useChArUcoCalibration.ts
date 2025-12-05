@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export interface ChArUcoConfig {
   source_path_idx?: number;
   camera?: number;
-  file_pattern?: string;
+  // file_pattern removed - uses unified calibration.image_format
   squares_h?: number;
   squares_v?: number;
   square_size?: number;
@@ -13,10 +13,34 @@ export interface ChArUcoConfig {
   dt?: number;
 }
 
+/**
+ * Detection data for a single frame
+ */
+export interface FrameDetection {
+  grid_points: [number, number][];
+  corner_ids?: number[];
+  reprojection_error?: number;
+}
+
+/**
+ * Camera model from ChArUco calibration
+ */
+export interface CameraModel {
+  camera_matrix: number[][];
+  dist_coeffs: number[];
+  focal_length: [number, number];
+  principal_point: [number, number];
+  reprojection_error: number;
+  num_images_used: number;
+  rvecs?: number[][];
+  tvecs?: number[][];
+  dot_spacing_mm?: number;
+}
+
 export interface ChArUcoCalibrationState {
   sourcePathIdx: number;
   camera: number;
-  filePattern: string;
+  // filePattern removed - uses unified calibration.image_format
   squaresH: string;
   squaresV: string;
   squareSize: string;
@@ -26,6 +50,20 @@ export interface ChArUcoCalibrationState {
   dt: string;
   calibrating: boolean;
   jobId: string | null;
+}
+
+/**
+ * Multi-camera job status
+ */
+export interface MultiCameraJobStatus {
+  status: 'starting' | 'running' | 'completed' | 'failed';
+  processed_cameras: number;
+  total_cameras: number;
+  current_camera?: number;
+  camera_results?: Record<number, { status: string; error?: string }>;
+  camera_progress?: Record<number, { current: number; total: number; message?: string }>;
+  elapsed_time?: number;
+  error?: string;
 }
 
 // Available ArUco dictionaries
@@ -60,7 +98,7 @@ export function useChArUcoCalibration(
   // --- State Initialization ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(config.source_path_idx ?? 0);
   const [camera, setCamera] = useState<number>(config.camera ?? 1);
-  const [filePattern, setFilePattern] = useState<string>(config.file_pattern ?? "*.tif");
+  // Note: filePattern removed - uses unified calibration.image_format from config via backend
   const [squaresH, setSquaresH] = useState<string>(config.squares_h !== undefined ? String(config.squares_h) : "10");
   const [squaresV, setSquaresV] = useState<string>(config.squares_v !== undefined ? String(config.squares_v) : "9");
   const [squareSize, setSquareSize] = useState<string>(config.square_size !== undefined ? String(config.square_size) : "0.03");
@@ -71,22 +109,34 @@ export function useChArUcoCalibration(
   const [calibrating, setCalibrating] = useState<boolean>(false);
   const [jobId, setJobId] = useState<string | null>(null);
 
-  // Validation state
-  const [validationResult, setValidationResult] = useState<any>(null);
-  const [validating, setValidating] = useState<boolean>(false);
+  // Note: validationResult and validating state removed - use usePinholeValidation hook in component instead
 
-  // Detection preview
-  const [detectionPreview, setDetectionPreview] = useState<any>(null);
-  const [detecting, setDetecting] = useState<boolean>(false);
+  // Camera model and detections (like pinhole)
+  const [cameraModel, setCameraModel] = useState<CameraModel | null>(null);
+  const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+
+  // Overlay toggle
+  const [showOverlay, setShowOverlay] = useState(true);
+
+  // Load results state (kept for backwards compat)
+  const [loadingResults, setLoadingResults] = useState<boolean>(false);
+  const [calibrationResults, setCalibrationResults] = useState<any>(null);
+
+  // Vector calibration job tracking
+  const [vectorJobId, setVectorJobId] = useState<string | null>(null);
+  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
 
   // --- Refs for Debouncing ---
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- Sync state with config changes ---
   useEffect(() => {
     setSourcePathIdx(config.source_path_idx ?? 0);
     setCamera(config.camera ?? 1);
-    setFilePattern(config.file_pattern ?? "*.tif");
+    // Note: filePattern removed - uses unified calibration.image_format
     setSquaresH(config.squares_h !== undefined ? String(config.squares_h) : "10");
     setSquaresV(config.squares_v !== undefined ? String(config.squares_v) : "9");
     setSquareSize(config.square_size !== undefined ? String(config.square_size) : "0.03");
@@ -113,16 +163,16 @@ export function useChArUcoCalibration(
         !isNaN(squareSizeNum) && squareSize !== "" &&
         !isNaN(markerRatioNum) && markerRatio !== "" &&
         !isNaN(minCornersNum) && minCorners !== "" &&
-        !isNaN(dtNum) && dt !== "" &&
-        filePattern !== "";
+        !isNaN(dtNum) && dt !== "";
 
       if (valid) {
+        // Note: file_pattern is NOT saved here - it's managed by the unified
+        // calibration.image_format setting via CalibrationImageConfig
         const payload = {
           calibration: {
             charuco: {
               source_path_idx: sourcePathIdx,
               camera: camera,
-              file_pattern: filePattern,
               squares_h: squaresHNum,
               squares_v: squaresVNum,
               square_size: squareSizeNum,
@@ -152,7 +202,7 @@ export function useChArUcoCalibration(
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [sourcePathIdx, camera, filePattern, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, updateConfig]);
+  }, [sourcePathIdx, camera, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, updateConfig]);
 
   // --- Job status hook ---
   const useJobStatus = (jobId: string | null) => {
@@ -211,57 +261,10 @@ export function useChArUcoCalibration(
 
   const { status: jobStatus, details: jobDetails } = useJobStatus(jobId);
 
-  // --- Validate images ---
-  const validateImages = async () => {
-    setValidating(true);
-    try {
-      const response = await fetch('/backend/calibration/charuco/validate_images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          file_pattern: filePattern,
-        })
-      });
-      const result = await response.json();
-      setValidationResult(result);
-    } catch (e: any) {
-      console.error(`Error validating images: ${e.message}`);
-      setValidationResult({ valid: false, error: e.message });
-    } finally {
-      setValidating(false);
-    }
-  };
+  // Note: validateImages function removed - use usePinholeValidation hook in component instead
+  // The unified validation endpoint at /backend/calibration/validate_images uses config.calibration.image_format
 
-  // --- Detect in single image ---
-  const detectInImage = async (imageIndex: number = 0) => {
-    setDetecting(true);
-    try {
-      const response = await fetch('/backend/calibration/charuco/detect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          image_index: imageIndex,
-          file_pattern: filePattern,
-          squares_h: Number(squaresH),
-          squares_v: Number(squaresV),
-          square_size: Number(squareSize),
-          marker_ratio: Number(markerRatio),
-          aruco_dict: arucoDict,
-        })
-      });
-      const result = await response.json();
-      setDetectionPreview(result);
-    } catch (e: any) {
-      console.error(`Error detecting ChArUco: ${e.message}`);
-      setDetectionPreview({ found: false, error: e.message });
-    } finally {
-      setDetecting(false);
-    }
-  };
+  // Note: detectInImage function removed - use overlay from saved model instead
 
   // --- Start calibration ---
   const startCalibration = async () => {
@@ -273,7 +276,7 @@ export function useChArUcoCalibration(
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           camera: camera,
-          file_pattern: filePattern,
+          // file_pattern removed - backend uses unified calibration.image_format from config
           squares_h: Number(squaresH),
           squares_v: Number(squaresV),
           square_size: Number(squareSize),
@@ -306,7 +309,7 @@ export function useChArUcoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
-          file_pattern: filePattern,
+          // file_pattern removed - backend uses unified calibration.image_format from config
           squares_h: Number(squaresH),
           squares_v: Number(squaresV),
           square_size: Number(squareSize),
@@ -330,11 +333,163 @@ export function useChArUcoCalibration(
     }
   };
 
+  // --- Vector calibration for single or all cameras ---
+  const calibrateVectors = useCallback(async (
+    forAllCameras: boolean = false,
+    typeName: string = 'instantaneous'
+  ) => {
+    try {
+      const body: Record<string, unknown> = {
+        source_path_idx: sourcePathIdx,
+        type_name: typeName,
+      };
+
+      if (forAllCameras) {
+        body.cameras = cameraOptions;
+      } else {
+        body.camera = camera;
+      }
+
+      const res = await fetch('/backend/calibration/vectors/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (data.job_id) {
+        setVectorJobId(data.job_id);
+        setVectorJobStatus({
+          status: 'starting',
+          processed_cameras: 0,
+          total_cameras: data.cameras?.length || 1,
+        });
+      } else {
+        console.error('Failed to start vector calibration:', data.error);
+      }
+    } catch (e) {
+      console.error('Vector calibration error:', e);
+    }
+  }, [sourcePathIdx, camera, cameraOptions]);
+
+  // --- Load saved camera model and detections ---
+  const loadModel = useCallback(async () => {
+    setModelLoading(true);
+    setLoadingResults(true);
+    setModelLoadError(null);
+    try {
+      const res = await fetch(
+        `/backend/calibration/charuco/load_results?source_path_idx=${sourcePathIdx}&camera=${camera}`
+      );
+      const data = await res.json();
+
+      if (res.ok && data.exists) {
+        // Set camera model
+        setCameraModel(data.camera_model);
+
+        // Convert frames array to detections record
+        // Backend returns: frames: [{ frame_index, corners, corner_ids }, ...]
+        const detectionsMap: Record<string, FrameDetection> = {};
+        if (data.frames) {
+          for (const frame of data.frames) {
+            detectionsMap[String(frame.frame_index)] = {
+              // Map corners to grid_points for CalibrationImageViewer compatibility
+              grid_points: frame.corners || [],
+              corner_ids: frame.corner_ids,
+            };
+          }
+        }
+        setDetections(detectionsMap);
+
+        // Also set calibrationResults for backwards compatibility
+        setCalibrationResults(data);
+        setModelLoadError(null);
+
+        console.log(`Loaded ChArUco model with ${Object.keys(detectionsMap).length} detections`);
+        return true;
+      } else {
+        console.log('No saved ChArUco calibration results found');
+        setCameraModel(null);
+        setDetections({});
+        setModelLoadError(`No camera model found for Camera ${camera}. Generate a model first.`);
+        return false;
+      }
+    } catch (e: any) {
+      console.error(`Error loading ChArUco calibration: ${e.message}`);
+      setModelLoadError(`Failed to load model: ${e.message}`);
+      return false;
+    } finally {
+      setModelLoading(false);
+      setLoadingResults(false);
+    }
+  }, [sourcePathIdx, camera]);
+
+  // Auto-load model after calibration completes
+  useEffect(() => {
+    if (jobStatus === 'completed') {
+      // Small delay to ensure backend has finished writing files
+      const timer = setTimeout(() => {
+        loadModel();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [jobStatus, loadModel]);
+
+  // Poll vector job status
+  useEffect(() => {
+    if (!vectorJobId) {
+      if (vectorPollRef.current) {
+        clearInterval(vectorPollRef.current);
+        vectorPollRef.current = null;
+      }
+      return;
+    }
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`/backend/calibration/vectors/status/${vectorJobId}`);
+        const data = await res.json();
+
+        if (res.ok) {
+          setVectorJobStatus(data);
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            if (vectorPollRef.current) {
+              clearInterval(vectorPollRef.current);
+              vectorPollRef.current = null;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to poll vector job status:', e);
+      }
+    };
+
+    pollStatus();
+    vectorPollRef.current = setInterval(pollStatus, 500);
+
+    return () => {
+      if (vectorPollRef.current) {
+        clearInterval(vectorPollRef.current);
+        vectorPollRef.current = null;
+      }
+    };
+  }, [vectorJobId]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      if (vectorPollRef.current) clearInterval(vectorPollRef.current);
+    };
+  }, []);
+
+  // Note: Reactive validation useEffect removed - use usePinholeValidation hook in component instead
+
   return {
     // State
     sourcePathIdx,
     camera,
-    filePattern,
     squaresH,
     squaresV,
     squareSize,
@@ -344,15 +499,28 @@ export function useChArUcoCalibration(
     dt,
     calibrating,
     jobId,
-    validationResult,
-    validating,
-    detectionPreview,
-    detecting,
+    loadingResults,
+    calibrationResults,
+
+    // Model and detections (like pinhole)
+    cameraModel,
+    detections,
+    modelLoading,
+    modelLoadError,
+    hasModel: cameraModel !== null,
+
+    // Overlay toggle
+    showOverlay,
+    setShowOverlay,
+
+    // Vector calibration job tracking
+    vectorJobId,
+    vectorJobStatus,
+    isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
 
     // Setters
     setSourcePathIdx,
     setCamera,
-    setFilePattern,
     setSquaresH,
     setSquaresV,
     setSquareSize,
@@ -368,9 +536,9 @@ export function useChArUcoCalibration(
     sourcePaths,
 
     // Actions
-    validateImages,
-    detectInImage,
     startCalibration,
     calibrateAllCameras,
+    loadModel,
+    calibrateVectors,
   };
 }

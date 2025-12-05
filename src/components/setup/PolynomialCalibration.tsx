@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 
 interface PolynomialCalibrationProps {
   config: any;
@@ -22,56 +24,159 @@ const basename = (p: string) => {
 };
 
 const POLYNOMIAL_TERMS = [
-  { id: "const", label: <span>1</span> },
-  { id: "s", label: <span><i>s</i></span> },
-  { id: "s2", label: <span><i>s</i><sup>2</sup></span> },
-  { id: "s3", label: <span><i>s</i><sup>3</sup></span> },
-  { id: "t", label: <span><i>t</i></span> },
-  { id: "t2", label: <span><i>t</i><sup>2</sup></span> },
-  { id: "t3", label: <span><i>t</i><sup>3</sup></span> },
-  { id: "st", label: <span><i>st</i></span> },
-  { id: "s2t", label: <span><i>s</i><sup>2</sup><i>t</i></span> },
-  { id: "st2", label: <span><i>s</i><i>t</i><sup>2</sup></span> },
+  { id: "const", label: <span>1</span>, index: 0 },
+  { id: "s", label: <span><i>s</i></span>, index: 1 },
+  { id: "s2", label: <span><i>s</i><sup>2</sup></span>, index: 2 },
+  { id: "s3", label: <span><i>s</i><sup>3</sup></span>, index: 3 },
+  { id: "t", label: <span><i>t</i></span>, index: 4 },
+  { id: "t2", label: <span><i>t</i><sup>2</sup></span>, index: 5 },
+  { id: "t3", label: <span><i>t</i><sup>3</sup></span>, index: 6 },
+  { id: "st", label: <span><i>st</i></span>, index: 7 },
+  { id: "s2t", label: <span><i>s</i><sup>2</sup><i>t</i></span>, index: 8 },
+  { id: "st2", label: <span><i>s</i><i>t</i><sup>2</sup></span>, index: 9 },
 ];
 
-const TERM_SUFFIX_MAPPING: Record<string, string> = {
-  "o": "const",
-  "s": "s",
-  "s2": "s2",
-  "s3": "s3",
-  "t": "t",
-  "t2": "t2",
-  "t3": "t3",
-  "st": "st",
-  "s2t": "s2t",
-  "st2": "st2"
+const TERM_SUFFIX_MAPPING: Record<string, number> = {
+  "o": 0,
+  "s": 1,
+  "s2": 2,
+  "s3": 3,
+  "t": 4,
+  "t2": 5,
+  "t3": 6,
+  "st": 7,
+  "s2t": 8,
+  "st2": 9
 };
+
+// Camera params structure matching config.yaml
+interface CameraParams {
+  origin: { x: number; y: number };
+  normalisation: { nx: number; ny: number };
+  mm_per_pixel: number;
+  coefficients_x: number[];
+  coefficients_y: number[];
+}
 
 export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
-  imageCount = 1000,
 }) => {
-  const [coefficients, setCoefficients] = useState<Record<string, { dx: Record<string, string>, dy: Record<string, string> }>>({});
-  const [cameraParams, setCameraParams] = useState<Record<number, { s_o: string, t_o: string, nx: string, ny: string }>>({});
-  const [mmPerPixel, setMmPerPixel] = useState<Record<number, number>>({});
+  // Camera params in the new config structure
+  const [cameraParams, setCameraParams] = useState<Record<number, CameraParams>>({});
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
   const [calibrating, setCalibrating] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<string>("not_started");
   const [jobDetails, setJobDetails] = useState<any>(null);
 
+  // Scope selector and XML validation
+  const [calibrationScope, setCalibrationScope] = useState<'current' | 'all'>('all');
+  const [selectedCamera, setSelectedCamera] = useState<number>(cameraOptions[0] || 1);
+  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
+  const [xmlValidation, setXmlValidation] = useState<{valid: boolean, error?: string, cameras?: string[]} | null>(null);
+  const [validatingXml, setValidatingXml] = useState(false);
+
   // Initialize state from config
   useEffect(() => {
     const polyConfig = config.calibration?.polynomial || {};
-    setCoefficients(polyConfig.coefficients || {});
-    setCameraParams(polyConfig.cameraParams || {});
+    const cameras = polyConfig.cameras || {};
+
+    // Convert config cameras to our state format
+    const params: Record<number, CameraParams> = {};
+    Object.entries(cameras).forEach(([camIdStr, camData]: [string, any]) => {
+      const camId = parseInt(camIdStr, 10);
+      if (isNaN(camId)) return;
+
+      params[camId] = {
+        origin: camData.origin || { x: 0, y: 0 },
+        normalisation: camData.normalisation || { nx: 512, ny: 384 },
+        mm_per_pixel: camData.mm_per_pixel || 0,
+        coefficients_x: camData.coefficients_x || Array(10).fill(0),
+        coefficients_y: camData.coefficients_y || Array(10).fill(0),
+      };
+    });
+
+    setCameraParams(params);
     setSourcePathIdx(polyConfig.source_path_idx ?? 0);
   }, [config]);
 
-  // Fetch XML calibration data
+  // Update selected camera when options change
+  useEffect(() => {
+    if (cameraOptions.length > 0 && !cameraOptions.includes(selectedCamera)) {
+      setSelectedCamera(cameraOptions[0]);
+    }
+  }, [cameraOptions, selectedCamera]);
+
+  // Load piv_type from config on mount
+  useEffect(() => {
+    const pivType = config.calibration?.piv_type;
+    if (pivType === 'instantaneous' || pivType === 'ensemble') {
+      setVectorTypeName(pivType);
+    }
+  }, [config.calibration?.piv_type]);
+
+  // Save piv_type when changed
+  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
+    setVectorTypeName(value);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { piv_type: value }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save piv_type:', e);
+    }
+  };
+
+  // Validate XML on source path change
+  useEffect(() => {
+    const validateXml = async () => {
+      setValidatingXml(true);
+      try {
+        const res = await fetch('/backend/calibration_poly/validate_xml', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: sourcePathIdx })
+        });
+        const data = await res.json();
+        setXmlValidation(data);
+      } catch (e) {
+        setXmlValidation({ valid: false, error: 'Failed to validate XML' });
+      } finally {
+        setValidatingXml(false);
+      }
+    };
+    validateXml();
+  }, [sourcePathIdx]);
+
+  // Save camera params to config
+  const saveCameraToConfig = async (camId: number, params: CameraParams) => {
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: {
+            polynomial: {
+              cameras: {
+                [camId]: params
+              }
+            }
+          }
+        })
+      });
+    } catch (e) {
+      console.error(`Failed to save camera ${camId} params:`, e);
+    }
+  };
+
+  // Fetch XML calibration data and save to config
   useEffect(() => {
     const fetchXmlData = async () => {
       try {
@@ -81,225 +186,193 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
           body: JSON.stringify({ source_path_idx: sourcePathIdx })
         });
         const data = await response.json();
-        
+
         if (data.status === 'success' && data.cameras) {
-          const newCoefficients: Record<string, { dx: Record<string, string>, dy: Record<string, string> }> = {};
-          const newCameraParams: Record<number, { s_o: string, t_o: string, nx: string, ny: string }> = {};
-          const newMmPerPixel: Record<number, number> = {};
-          
+          const newCameraParams: Record<number, CameraParams> = {};
+
           Object.entries(data.cameras).forEach(([camIdStr, camData]: [string, any]) => {
              const match = camIdStr.match(/\d+/);
              if (!match) return;
              const camNum = parseInt(match[0], 10);
-             
-             if (!cameraOptions.includes(camNum)) return;
-             
-             // Extract params
-             if (camData.origin && camData.normalisation) {
-                 newCameraParams[camNum] = {
-                     s_o: String(camData.origin.s_o),
-                     t_o: String(camData.origin.t_o),
-                     nx: String(camData.normalisation.nx),
-                     ny: String(camData.normalisation.ny)
-                 };
-             }
 
-             if (camData.mm_per_pixel) {
-                 newMmPerPixel[camNum] = camData.mm_per_pixel;
-             }
-             
+             if (!cameraOptions.includes(camNum)) return;
+
+             // Extract origin
+             const origin = {
+               x: camData.origin?.s_o ?? camData.origin?.x ?? 0,
+               y: camData.origin?.t_o ?? camData.origin?.y ?? 0,
+             };
+
+             // Extract normalisation
+             const normalisation = {
+               nx: camData.normalisation?.nx ?? 512,
+               ny: camData.normalisation?.ny ?? 384,
+             };
+
+             // Extract mm_per_pixel
+             const mm_per_pixel = camData.mm_per_pixel || 0;
+
+             // Convert coefficients from dict {a_o, a_s, ...} to array [10]
+             const coefficients_x: number[] = Array(10).fill(0);
+             const coefficients_y: number[] = Array(10).fill(0);
+
              const coeffsA = camData.coefficients_a || {};
              const coeffsB = camData.coefficients_b || {};
-             
-             const mappedDx: Record<string, string> = {};
-             const mappedDy: Record<string, string> = {};
-             
+
              Object.entries(coeffsA).forEach(([key, val]) => {
                 const suffix = key.split('_').slice(1).join('_');
-                const termId = TERM_SUFFIX_MAPPING[suffix];
-                if (termId) mappedDx[termId] = String(val);
+                const idx = TERM_SUFFIX_MAPPING[suffix];
+                if (idx !== undefined) coefficients_x[idx] = Number(val);
              });
 
              Object.entries(coeffsB).forEach(([key, val]) => {
                 const suffix = key.split('_').slice(1).join('_');
-                const termId = TERM_SUFFIX_MAPPING[suffix];
-                if (termId) mappedDy[termId] = String(val);
+                const idx = TERM_SUFFIX_MAPPING[suffix];
+                if (idx !== undefined) coefficients_y[idx] = Number(val);
              });
-             
-             if (Object.keys(mappedDx).length > 0 || Object.keys(mappedDy).length > 0) {
-                 newCoefficients[camNum] = { dx: mappedDx, dy: mappedDy };
-             }
+
+             newCameraParams[camNum] = {
+               origin,
+               normalisation,
+               mm_per_pixel,
+               coefficients_x,
+               coefficients_y,
+             };
           });
-          
-          if (Object.keys(newCameraParams).length > 0) {
-              setCameraParams(prev => {
-                  let hasChanges = false;
-                  for (const [camId, params] of Object.entries(newCameraParams)) {
-                      if (!prev[Number(camId)]) {
-                          hasChanges = true;
-                          break;
-                      }
-                      if (JSON.stringify(prev[Number(camId)]) !== JSON.stringify(params)) {
-                          hasChanges = true;
-                          break;
-                      }
-                  }
-                  if (hasChanges) {
-                      const updated = { ...prev, ...newCameraParams };
-                      updateConfig(["calibration", "polynomial", "cameraParams"], updated);
-                      return updated;
-                  }
-                  return prev;
-              });
-          }
 
-          if (Object.keys(newMmPerPixel).length > 0) {
-              setMmPerPixel(prev => ({ ...prev, ...newMmPerPixel }));
-          }
-          
-          if (Object.keys(newCoefficients).length > 0) {
-              setCoefficients(prev => {
-                  // Check for changes to avoid infinite loops
-                  let hasChanges = false;
-                  for (const [camId, coeffs] of Object.entries(newCoefficients)) {
-                      if (!prev[camId]) {
-                          hasChanges = true;
-                          break;
-                      }
-                      if (JSON.stringify(prev[camId]) !== JSON.stringify(coeffs)) {
-                          hasChanges = true;
-                          break;
-                      }
-                  }
+          // Update local state
+          setCameraParams(prev => {
+            const updated = { ...prev };
+            let hasChanges = false;
 
-                  if (hasChanges) {
-                      const updated = { ...prev, ...newCoefficients };
-                      updateConfig(["calibration", "polynomial", "coefficients"], updated);
-                      return updated;
-                  }
-                  return prev;
-              });
-          }
+            for (const [camIdStr, params] of Object.entries(newCameraParams)) {
+              const camId = parseInt(camIdStr, 10);
+              if (JSON.stringify(updated[camId]) !== JSON.stringify(params)) {
+                updated[camId] = params;
+                hasChanges = true;
+                // Save to config
+                saveCameraToConfig(camId, params);
+              }
+            }
+
+            return hasChanges ? updated : prev;
+          });
         }
       } catch (e) {
         console.error("Failed to load polynomial XML:", e);
       }
     };
-    
+
     fetchXmlData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourcePathIdx, JSON.stringify(cameraOptions)]);
 
   // Handle coefficient change
-  const handleCoefficientChange = (camId: number, axis: 'dx' | 'dy', termId: string, value: string) => {
-    const camCoeffs = coefficients[camId] || { dx: {}, dy: {} };
-    const axisCoeffs = camCoeffs[axis] || {};
-    const newAxisCoeffs = { ...axisCoeffs, [termId]: value };
-    const newCamCoeffs = { ...camCoeffs, [axis]: newAxisCoeffs };
-    const newCoefficients = { ...coefficients, [camId]: newCamCoeffs };
-    setCoefficients(newCoefficients);
-    
-    // Update config
-    updateConfig(["calibration", "polynomial", "coefficients"], newCoefficients);
+  const handleCoefficientChange = (camId: number, axis: 'x' | 'y', index: number, value: string) => {
+    setCameraParams(prev => {
+      const cam = prev[camId] || {
+        origin: { x: 0, y: 0 },
+        normalisation: { nx: 512, ny: 384 },
+        mm_per_pixel: 0,
+        coefficients_x: Array(10).fill(0),
+        coefficients_y: Array(10).fill(0),
+      };
+
+      const coeffs = axis === 'x' ? [...cam.coefficients_x] : [...cam.coefficients_y];
+      coeffs[index] = parseFloat(value) || 0;
+
+      const updated = {
+        ...cam,
+        [axis === 'x' ? 'coefficients_x' : 'coefficients_y']: coeffs,
+      };
+
+      // Save to config
+      saveCameraToConfig(camId, updated);
+
+      return { ...prev, [camId]: updated };
+    });
   };
 
-  // Handle param change
-  const handleParamChange = (camId: number, field: keyof { s_o: string, t_o: string, nx: string, ny: string }, value: string) => {
+  // Handle param change (origin, normalisation)
+  const handleParamChange = (camId: number, field: 'origin_x' | 'origin_y' | 'nx' | 'ny', value: string) => {
     setCameraParams(prev => {
-        const currentCam = prev[camId] || { s_o: "", t_o: "", nx: "", ny: "" };
-        const updatedCam = { ...currentCam, [field]: value };
-        const updated = { ...prev, [camId]: updatedCam };
-        updateConfig(["calibration", "polynomial", "cameraParams"], updated);
-        return updated;
+      const cam = prev[camId] || {
+        origin: { x: 0, y: 0 },
+        normalisation: { nx: 512, ny: 384 },
+        mm_per_pixel: 0,
+        coefficients_x: Array(10).fill(0),
+        coefficients_y: Array(10).fill(0),
+      };
+
+      let updated: CameraParams;
+      if (field === 'origin_x') {
+        updated = { ...cam, origin: { ...cam.origin, x: parseFloat(value) || 0 } };
+      } else if (field === 'origin_y') {
+        updated = { ...cam, origin: { ...cam.origin, y: parseFloat(value) || 0 } };
+      } else if (field === 'nx') {
+        updated = { ...cam, normalisation: { ...cam.normalisation, nx: parseFloat(value) || 1 } };
+      } else {
+        updated = { ...cam, normalisation: { ...cam.normalisation, ny: parseFloat(value) || 1 } };
+      }
+
+      // Save to config
+      saveCameraToConfig(camId, updated);
+
+      return { ...prev, [camId]: updated };
     });
   };
 
   // Check if all cameras have coefficients
   const allPopulated = cameraOptions.length > 0 && cameraOptions.every(camId => {
-    const camCoeffs = coefficients[camId];
-    if (!camCoeffs) return false;
-    return ['dx', 'dy'].every(axis => {
-        const axisCoeffs = camCoeffs[axis as 'dx' | 'dy'];
-        if (!axisCoeffs) return false;
-        return POLYNOMIAL_TERMS.every(term => {
-            const val = axisCoeffs[term.id];
-            return val && val.trim().length > 0;
-        });
-    });
+    const cam = cameraParams[camId];
+    if (!cam) return false;
+    // Check that at least some coefficients are non-zero
+    return cam.coefficients_x.some(c => c !== 0) || cam.coefficients_y.some(c => c !== 0);
   });
 
   const calibrateVectors = async () => {
-    if (!allPopulated) return;
     setCalibrating(true);
-    
-    const termToIndex: Record<string, number> = {
-        "const": 0, "s": 1, "s2": 2, "s3": 3,
-        "t": 4, "t2": 5, "t3": 6,
-        "st": 7, "s2t": 8, "st2": 9
-    };
 
     try {
-      // We need to launch a job for each camera
-      // For now, we'll just track the last job ID for progress, 
-      // or we could improve the backend to handle multiple cameras in one request.
-      // But the requirement is to connect to the new endpoint which takes one camera.
-      
-      const dt = config.piv_parameters?.dt || 1.0;
-
-      for (const camId of cameraOptions) {
-          const camCoeffs = coefficients[camId];
-          const params = cameraParams[camId];
-          const mm = mmPerPixel[camId] || 1.0;
-          
-          if (!camCoeffs || !params) continue;
-
-          // Map coefficients to indices
-          const dx_coeff: Record<string, number> = {};
-          const dy_coeff: Record<string, number> = {};
-          
-          Object.entries(camCoeffs.dx).forEach(([key, val]) => {
-              if (termToIndex[key] !== undefined) {
-                  dx_coeff[String(termToIndex[key])] = parseFloat(val);
-              }
-          });
-          
-          Object.entries(camCoeffs.dy).forEach(([key, val]) => {
-              if (termToIndex[key] !== undefined) {
-                  dy_coeff[String(termToIndex[key])] = parseFloat(val);
-              }
-          });
-
-          const payload = {
+      if (calibrationScope === 'all') {
+        // Use the multi-camera endpoint
+        const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors_all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             source_path_idx: sourcePathIdx,
-            camera: camId,
-            dt: dt,
-            mm_per_pixel: mm,
-            dx_coeff: dx_coeff,
-            dy_coeff: dy_coeff,
-            x_origin: parseFloat(params.s_o),
-            y_origin: parseFloat(params.t_o),
-            nx: parseFloat(params.nx),
-            ny: parseFloat(params.ny),
-            num_images: imageCount,
-            type_name: "instantaneous" // or make this configurable
-          };
+            type_name: vectorTypeName
+          })
+        });
 
-          const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          
-          const result = await response.json();
-          if (response.ok) {
-            console.log(`Polynomial calibration started for Camera ${camId}! Job ID: ${result.job_id}`);
-            // We only track the last one for now in the UI
-            setJobId(result.job_id);
-          } else {
-            console.error(result.error || `Failed to start polynomial calibration for Camera ${camId}`);
-          }
+        const result = await response.json();
+        if (response.ok) {
+          console.log(`Polynomial calibration started for all cameras! Job ID: ${result.job_id}`);
+          setJobId(result.job_id);
+        } else {
+          console.error(result.error || 'Failed to start polynomial calibration');
+        }
+      } else {
+        // Single camera mode - backend reads coefficients from config
+        const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_path_idx: sourcePathIdx,
+            camera: selectedCamera,
+            type_name: vectorTypeName
+          })
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+          console.log(`Polynomial calibration started for Camera ${selectedCamera}! Job ID: ${result.job_id}`);
+          setJobId(result.job_id);
+        } else {
+          console.error(result.error || `Failed to start polynomial calibration for Camera ${selectedCamera}`);
+        }
       }
-      
+
     } catch (e: any) {
       console.error(`Error starting polynomial calibration: ${e.message}`);
     } finally {
@@ -366,17 +439,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex justify-between items-center">
-            <span>Polynomial Calibration</span>
-            <Button 
-                variant={isActive ? "default" : "outline"}
-                size="sm"
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-            >
-                {isActive ? "Active Method" : "Set as Active Method"}
-            </Button>
-        </CardTitle>
+        <CardTitle>Polynomial Calibration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Progress Display */}
@@ -397,12 +460,12 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
             </div>
             <div className="text-xs text-muted-foreground mt-1">
                 Progress: {jobDetails.progress || 0}%
-                {jobDetails.processed_files !== undefined && jobDetails.total_files !== undefined &&
-                ` (Files: ${jobDetails.processed_files}/${jobDetails.total_files})`}
+                {jobDetails.processed_frames !== undefined && jobDetails.total_frames !== undefined &&
+                ` (Frames: ${jobDetails.processed_frames}/${jobDetails.total_frames})`}
             </div>
             {jobStatus === 'completed' && (
                 <div className="mt-2 text-xs text-green-600">
-                Calibration completed! Processed {jobDetails.processed_files} files.
+                Calibration completed! Processed {jobDetails.successful_frames || jobDetails.processed_frames} files.
                 </div>
             )}
             </div>
@@ -432,44 +495,53 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         </div>
 
         <div className="space-y-6">
-          {cameraOptions.map((camId) => (
+          {cameraOptions.map((camId) => {
+            const cam = cameraParams[camId] || {
+              origin: { x: 0, y: 0 },
+              normalisation: { nx: 512, ny: 384 },
+              mm_per_pixel: 0,
+              coefficients_x: Array(10).fill(0),
+              coefficients_y: Array(10).fill(0),
+            };
+
+            return (
             <div key={camId} className="space-y-3 border p-4 rounded-md">
               <Label className="text-base font-semibold">Camera {camId} Coefficients</Label>
-              
+
               {/* Equations Display */}
               <div className="bg-slate-50 p-4 rounded border mb-4 font-mono text-sm space-y-2">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                           <div className="font-semibold text-muted-foreground mb-1">Normalized Coordinates:</div>
                           <div className="flex items-center gap-1 mb-1">
-                              <span>s(x&apos;) = 2 · (x&apos; - </span>
-                              <Input 
-                                className="h-6 w-20 px-1 text-center bg-white" 
+                              <span>s(x&apos;) = 2 &middot; (x&apos; - </span>
+                              <Input
+                                className="h-6 w-20 px-1 text-center bg-white"
                                 placeholder="s_o"
-                                value={cameraParams[camId]?.s_o || ""}
-                                onChange={(e) => handleParamChange(camId, 's_o', e.target.value)}
+                                value={cam.origin.x || ""}
+                                onChange={(e) => handleParamChange(camId, 'origin_x', e.target.value)}
                               />
                               <span>) / </span>
-                              <Input 
-                                className="h-6 w-20 px-1 text-center bg-white" 
+                              <Input
+                                className="h-6 w-20 px-1 text-center bg-white"
                                 placeholder="n_x"
-                                value={cameraParams[camId]?.nx || ""}
+                                value={cam.normalisation.nx || ""}
                                 onChange={(e) => handleParamChange(camId, 'nx', e.target.value)}
                               />
                           </div>
                           <div className="flex items-center gap-1">
-                              <span>t(y&apos;) = 2 · (y&apos; - </span>
-                              <Input 
-                                className="h-6 w-20 px-1 text-center bg-white" 
+                              <span>t(y&apos;) = 2 &middot; (y&apos; - </span>
+                              <Input
+                                className="h-6 w-20 px-1 text-center bg-white"
                                 placeholder="t_o"
-                                value={cameraParams[camId]?.t_o || ""}
-                                onChange={(e) => handleParamChange(camId, 't_o', e.target.value)}
+                                value={cam.origin.y || ""}
+                                onChange={(e) => handleParamChange(camId, 'origin_y', e.target.value)}
                               />
                               <span>) / </span>
-                              <Input 
-                                className="h-6 w-20 px-1 text-center bg-white" 
+                              <Input
+                                className="h-6 w-20 px-1 text-center bg-white"
                                 placeholder="n_y"
-                                value={cameraParams[camId]?.ny || ""}
+                                value={cam.normalisation.ny || ""}
                                 onChange={(e) => handleParamChange(camId, 'ny', e.target.value)}
                               />
                           </div>
@@ -501,8 +573,8 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
                                 <div className="flex items-center gap-1">
                                     <Input
                                       placeholder="0.0"
-                                      value={((coefficients[camId] || {}).dx || {})[term.id] || ""}
-                                      onChange={(e) => handleCoefficientChange(camId, 'dx', term.id, e.target.value)}
+                                      value={cam.coefficients_x[term.index] || ""}
+                                      onChange={(e) => handleCoefficientChange(camId, 'x', term.index, e.target.value)}
                                       className="h-8 w-20 font-mono text-sm text-right"
                                     />
                                     <Label className="text-sm">
@@ -537,8 +609,8 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
                                 <div className="flex items-center gap-1">
                                     <Input
                                       placeholder="0.0"
-                                      value={((coefficients[camId] || {}).dy || {})[term.id] || ""}
-                                      onChange={(e) => handleCoefficientChange(camId, 'dy', term.id, e.target.value)}
+                                      value={cam.coefficients_y[term.index] || ""}
+                                      onChange={(e) => handleCoefficientChange(camId, 'y', term.index, e.target.value)}
                                       className="h-8 w-20 font-mono text-sm text-right"
                                     />
                                     <Label className="text-sm">
@@ -557,16 +629,107 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
               </div>
 
             </div>
-          ))}
+          )})}
         </div>
 
-        <Button 
-            onClick={calibrateVectors} 
-            disabled={!allPopulated || calibrating || jobStatus === 'running'}
-            className="w-full"
-        >
-            {calibrating ? "Starting..." : "Calibrate All Vectors"}
-        </Button>
+        {/* XML Validation Status */}
+        {validatingXml && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Validating Calibration.xml...
+          </div>
+        )}
+
+        {xmlValidation && !validatingXml && (
+          xmlValidation.valid ? (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertTitle className="text-green-800">Calibration.xml Found</AlertTitle>
+              <AlertDescription className="text-green-700">
+                Found {xmlValidation.cameras?.length || 0} camera(s) in XML
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>XML Not Found</AlertTitle>
+              <AlertDescription>{xmlValidation.error}</AlertDescription>
+            </Alert>
+          )
+        )}
+
+        {/* Calibration Controls */}
+        <div className="flex gap-2 items-center flex-wrap">
+          <span className="text-sm font-medium text-muted-foreground">Calibrate Vectors:</span>
+          <Select value={calibrationScope} onValueChange={(v) => setCalibrationScope(v as 'current' | 'all')}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Cameras</SelectItem>
+              <SelectItem value="current">Single Camera</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {calibrationScope === 'current' && (
+            <Select value={String(selectedCamera)} onValueChange={(v) => setSelectedCamera(Number(v))}>
+              <SelectTrigger className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {cameraOptions.map((cam) => (
+                  <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
+            <SelectTrigger className="w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="instantaneous">Instantaneous</SelectItem>
+              <SelectItem value="ensemble">Ensemble</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Button
+              onClick={calibrateVectors}
+              disabled={
+                !xmlValidation?.valid ||
+                calibrating ||
+                jobStatus === 'running' ||
+                (calibrationScope === 'current' && !allPopulated)
+              }
+              className="bg-green-600 hover:bg-green-700 text-white"
+          >
+              {calibrating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Calibrating...
+                </>
+              ) : (
+                'Calibrate'
+              )}
+          </Button>
+
+          <Button
+            onClick={setAsActiveMethod}
+            disabled={isActive}
+            className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
+            variant={isActive ? "default" : "outline"}
+          >
+            {isActive ? (
+              <>
+                <CheckCircle2 className="h-4 w-4 mr-1" />
+                Active
+              </>
+            ) : (
+              'Set as Active'
+            )}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

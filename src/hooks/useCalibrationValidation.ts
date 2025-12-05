@@ -23,6 +23,7 @@ export interface PinholeValidationResult {
   valid: boolean;
   checked: boolean;
   found_count: number | 'container';
+  expected_count: number;
   file_pattern: string;
   camera_path: string;
   sample_files: string[];
@@ -56,18 +57,23 @@ export interface StereoValidationResult {
  * @param sourcePathIdx - Index of the source path in config
  * @param camera - Camera number (1-based)
  * @param filePattern - File pattern for calibration images
+ * @param numImages - Number of expected images (optional, triggers revalidation when changed)
+ * @param subfolder - Calibration subfolder (optional, triggers revalidation when changed)
  * @param enabled - Whether to enable validation (default: true)
  */
 export function usePinholeValidation(
   sourcePathIdx: number,
   camera: number,
   filePattern: string,
+  numImages: number = 10,
+  subfolder: string = '',
   enabled: boolean = true
 ): PinholeValidationResult {
   const [validation, setValidation] = useState<PinholeValidationResult>({
     valid: false,
     checked: false,
     found_count: 0,
+    expected_count: 10,
     file_pattern: filePattern,
     camera_path: '',
     sample_files: [],
@@ -79,22 +85,14 @@ export function usePinholeValidation(
   });
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastValidatedRef = useRef<string>('');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentParamsRef = useRef({ sourcePathIdx, camera, filePattern, numImages, subfolder });
+
+  // Always keep currentParamsRef up to date with latest values
+  currentParamsRef.current = { sourcePathIdx, camera, filePattern, numImages, subfolder };
 
   useEffect(() => {
     if (!enabled) {
-      return;
-    }
-
-    // Create validation key from critical config
-    const validationKey = JSON.stringify({
-      sourcePathIdx,
-      camera,
-      filePattern,
-    });
-
-    // Skip if nothing changed
-    if (validationKey === lastValidatedRef.current) {
       return;
     }
 
@@ -109,14 +107,17 @@ export function usePinholeValidation(
       return;
     }
 
-    lastValidatedRef.current = validationKey;
-
     // Clear any pending validation
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
 
-    // Set pending state
+    // Abort any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // Set pending state immediately
     setValidation(prev => ({
       ...prev,
       valid: false,
@@ -124,33 +125,57 @@ export function usePinholeValidation(
       error: 'Validating...',
     }));
 
-    // Validate after short delay (debounce)
+    // Validate after debounce delay - only run when user stops typing
     timerRef.current = setTimeout(async () => {
+      // Create new abort controller for this request
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
+      // Capture current values at execution time (not schedule time)
+      const params = currentParamsRef.current;
+
       try {
-        const res = await fetch('/backend/calibration/planar/validate_images', {
+        // Use unified calibration validation endpoint
+        // Pass all parameters directly so validation uses current values, not stale config
+        const res = await fetch('/backend/calibration/validate_images', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            camera,
-            file_pattern: filePattern,
+            source_path_idx: params.sourcePathIdx,
+            camera: params.camera,
+            image_format: params.filePattern,
+            num_images: params.numImages,
+            subfolder: params.subfolder,
           }),
+          signal: abortController.signal,
         });
 
+        // Check if aborted before processing response
+        if (abortController.signal.aborted) {
+          return;
+        }
+
         const json = await res.json();
+
+        // Double-check we're still processing the current params
+        // (in case another request was started while we were parsing JSON)
+        if (abortController.signal.aborted) {
+          return;
+        }
 
         if (res.ok) {
           setValidation({
             valid: json.valid,
             checked: true,
             found_count: json.found_count,
-            file_pattern: json.file_pattern,
+            expected_count: json.expected_count || 10,
+            file_pattern: json.image_format || params.filePattern,
             camera_path: json.camera_path,
             sample_files: json.sample_files || [],
             first_image_preview: json.first_image_preview,
             image_size: json.image_size,
             format_detected: json.format_detected,
-            container_format: json.container_format || false,
+            container_format: json.container_format || json.is_container_format || false,
             error: json.error,
             suggested_pattern: json.suggested_pattern || null,
           });
@@ -163,6 +188,10 @@ export function usePinholeValidation(
           }));
         }
       } catch (e: any) {
+        // Ignore abort errors
+        if (e.name === 'AbortError') {
+          return;
+        }
         setValidation(prev => ({
           ...prev,
           valid: false,
@@ -176,8 +205,11 @@ export function usePinholeValidation(
       if (timerRef.current) {
         clearTimeout(timerRef.current);
       }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
-  }, [sourcePathIdx, camera, filePattern, enabled]);
+  }, [sourcePathIdx, camera, filePattern, numImages, subfolder, enabled]);
 
   return validation;
 }
@@ -210,23 +242,14 @@ export function useStereoValidation(
   });
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastValidatedRef = useRef<string>('');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentParamsRef = useRef({ sourcePathIdx, cam1, cam2, filePattern });
+
+  // Always keep currentParamsRef up to date with latest values
+  currentParamsRef.current = { sourcePathIdx, cam1, cam2, filePattern };
 
   useEffect(() => {
     if (!enabled) {
-      return;
-    }
-
-    // Create validation key from critical config
-    const validationKey = JSON.stringify({
-      sourcePathIdx,
-      cam1,
-      cam2,
-      filePattern,
-    });
-
-    // Skip if nothing changed
-    if (validationKey === lastValidatedRef.current) {
       return;
     }
 
@@ -241,14 +264,17 @@ export function useStereoValidation(
       return;
     }
 
-    lastValidatedRef.current = validationKey;
-
     // Clear any pending validation
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
 
-    // Set pending state
+    // Abort any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // Set pending state immediately
     setValidation(prev => ({
       ...prev,
       valid: false,
@@ -256,27 +282,45 @@ export function useStereoValidation(
       error: 'Validating...',
     }));
 
-    // Validate after short delay (debounce)
+    // Validate after debounce delay - only run when user stops typing
     timerRef.current = setTimeout(async () => {
+      // Create new abort controller for this request
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
+      // Capture current values at execution time (not schedule time)
+      const params = currentParamsRef.current;
+
       try {
         const res = await fetch('/backend/stereo/calibration/validate_images', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            cam1,
-            cam2,
-            file_pattern: filePattern,
+            source_path_idx: params.sourcePathIdx,
+            cam1: params.cam1,
+            cam2: params.cam2,
+            file_pattern: params.filePattern,
           }),
+          signal: abortController.signal,
         });
 
+        // Check if aborted before processing response
+        if (abortController.signal.aborted) {
+          return;
+        }
+
         const json = await res.json();
+
+        // Double-check we're still processing the current params
+        if (abortController.signal.aborted) {
+          return;
+        }
 
         if (res.ok) {
           setValidation({
             valid: json.valid,
             checked: true,
-            camera_pair: json.camera_pair || [cam1, cam2],
+            camera_pair: json.camera_pair || [params.cam1, params.cam2],
             file_pattern: json.file_pattern,
             container_format: json.container_format || false,
             cameras: json.cameras || {},
@@ -292,6 +336,10 @@ export function useStereoValidation(
           }));
         }
       } catch (e: any) {
+        // Ignore abort errors
+        if (e.name === 'AbortError') {
+          return;
+        }
         setValidation(prev => ({
           ...prev,
           valid: false,
@@ -304,6 +352,9 @@ export function useStereoValidation(
     return () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
     };
   }, [sourcePathIdx, cam1, cam2, filePattern, enabled]);

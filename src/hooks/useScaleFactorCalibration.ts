@@ -168,19 +168,31 @@ export function useScaleFactorCalibration(
   const { status: scaleFactorJobStatus, details: scaleFactorJobDetails } = useScaleFactorJobStatus(scaleFactorJobId);
 
   // --- Calibration function ---
-  const calibrateVectors = async () => {
+  // Note: dt and px_per_mm are read from config by the backend (saved via auto-save above)
+  // Supports single camera or all cameras via forAllCameras parameter
+  const calibrateVectors = async (
+    forAllCameras: boolean = true,
+    selectedCamera: number = cameraOptions[0] || 1,
+    typeName: string = 'instantaneous'
+  ) => {
     setCalibrating(true);
     try {
+      const body: Record<string, unknown> = {
+        source_path_idx: sourcePathIdx,
+        image_count: imageCount,
+        type_name: typeName,
+      };
+
+      if (forAllCameras) {
+        body.cameras = cameraOptions;
+      } else {
+        body.camera = selectedCamera;
+      }
+
       const response = await fetch('/backend/calibration/scale_factor/calibrate_vectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          dt: Number(dt),
-          px_per_mm: Number(pxPerMm),
-          image_count: imageCount,
-          type_name: "instantaneous"
-        })
+        body: JSON.stringify(body)
       });
       const result = await response.json();
       if (response.ok) {

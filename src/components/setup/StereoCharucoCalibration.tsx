@@ -6,11 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
-import { useStereoCalibration, StereoFrameDetection } from "@/hooks/useStereoCalibration";
+import { useStereoCharucoCalibration, StereoCharucoFrameDetection, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 
-interface StereoCalibrationProps {
+interface StereoCharucoCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
@@ -24,14 +24,14 @@ const basename = (p: string) => {
   return parts.filter(Boolean).pop() || p;
 };
 
-export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
+export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
-  // Use the stereo calibration hook
-  const calibration = useStereoCalibration(cameraOptions, sourcePaths);
+  // Use the stereo ChArUco calibration hook
+  const calibration = useStereoCharucoCalibration(cameraOptions, sourcePaths);
 
   const {
     // Source selection
@@ -56,15 +56,19 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     subfolder,
     setSubfolder,
 
-    // Grid params
-    patternCols,
-    setPatternCols,
-    patternRows,
-    setPatternRows,
-    dotSpacingMm,
-    setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
+    // ChArUco board params
+    squaresH,
+    setSquaresH,
+    squaresV,
+    setSquaresV,
+    squareSize,
+    setSquareSize,
+    markerRatio,
+    setMarkerRatio,
+    arucoDict,
+    setArucoDict,
+    minCorners,
+    setMinCorners,
     dt,
     setDt,
 
@@ -132,7 +136,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          calibration: { active: "stereo" },
+          calibration: { active: "stereo_charuco" },
         }),
       });
       const json = await res.json();
@@ -145,26 +149,36 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     }
   };
 
-  const isActive = config.calibration?.active === "stereo";
+  const isActive = config.calibration?.active === "stereo_charuco";
 
   // Local input state for debouncing
-  const [patternColsInput, setPatternColsInput] = useState(String(patternCols));
-  const [patternRowsInput, setPatternRowsInput] = useState(String(patternRows));
-  const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
+  const [squaresHInput, setSquaresHInput] = useState(String(squaresH));
+  const [squaresVInput, setSquaresVInput] = useState(String(squaresV));
+  const [squareSizeInput, setSquareSizeInput] = useState(String(squareSize));
+  const [markerRatioInput, setMarkerRatioInput] = useState(String(markerRatio));
+  const [minCornersInput, setMinCornersInput] = useState(String(minCorners));
   const [dtInput, setDtInput] = useState(String(dt));
 
   // Sync local inputs with hook state
   React.useEffect(() => {
-    setPatternColsInput(String(patternCols));
-  }, [patternCols]);
+    setSquaresHInput(String(squaresH));
+  }, [squaresH]);
 
   React.useEffect(() => {
-    setPatternRowsInput(String(patternRows));
-  }, [patternRows]);
+    setSquaresVInput(String(squaresV));
+  }, [squaresV]);
 
   React.useEffect(() => {
-    setDotSpacingMmInput(String(dotSpacingMm));
-  }, [dotSpacingMm]);
+    setSquareSizeInput(String(squareSize));
+  }, [squareSize]);
+
+  React.useEffect(() => {
+    setMarkerRatioInput(String(markerRatio));
+  }, [markerRatio]);
+
+  React.useEffect(() => {
+    setMinCornersInput(String(minCorners));
+  }, [minCorners]);
 
   React.useEffect(() => {
     setDtInput(String(dt));
@@ -196,9 +210,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
       {/* Main Configuration Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Stereo Pinhole Calibration</CardTitle>
+          <CardTitle>Stereo ChArUco Calibration</CardTitle>
           <CardDescription>
-            Configure and run stereo calibration for 3D velocity reconstruction
+            Configure and run stereo ChArUco calibration for 3D velocity reconstruction
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -327,39 +341,79 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Section 4: Grid Parameters */}
+          {/* Section 4: ChArUco Board Parameters */}
           <div className="border-t pt-4">
-            <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
+            <h3 className="text-sm font-semibold mb-3">ChArUco Board Parameters</h3>
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
-                <label className="text-sm font-medium">Pattern Cols</label>
+                <label className="text-sm font-medium">Squares Horizontal</label>
                 <Input
                   type="number"
-                  min={1}
-                  value={patternColsInput}
-                  onChange={e => setPatternColsInput(e.target.value)}
-                  onBlur={() => setPatternCols(parseInt(patternColsInput) || 10)}
+                  min={3}
+                  value={squaresHInput}
+                  onChange={e => setSquaresHInput(e.target.value)}
+                  onBlur={() => setSquaresH(parseInt(squaresHInput) || 10)}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium">Pattern Rows</label>
+                <label className="text-sm font-medium">Squares Vertical</label>
                 <Input
                   type="number"
-                  min={1}
-                  value={patternRowsInput}
-                  onChange={e => setPatternRowsInput(e.target.value)}
-                  onBlur={() => setPatternRows(parseInt(patternRowsInput) || 10)}
+                  min={3}
+                  value={squaresVInput}
+                  onChange={e => setSquaresVInput(e.target.value)}
+                  onBlur={() => setSquaresV(parseInt(squaresVInput) || 9)}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium">Dot Spacing (mm)</label>
+                <label className="text-sm font-medium">Square Size (m)</label>
                 <Input
                   type="number"
                   step="any"
-                  min={0}
-                  value={dotSpacingMmInput}
-                  onChange={e => setDotSpacingMmInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 28.89)}
+                  min={0.001}
+                  value={squareSizeInput}
+                  onChange={e => setSquareSizeInput(e.target.value)}
+                  onBlur={() => setSquareSize(parseFloat(squareSizeInput) || 0.03)}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Marker Ratio</label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min={0.1}
+                  max={1.0}
+                  value={markerRatioInput}
+                  onChange={e => setMarkerRatioInput(e.target.value)}
+                  onBlur={() => setMarkerRatio(parseFloat(markerRatioInput) || 0.5)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 5: Detection Parameters */}
+          <div className="border-t pt-4">
+            <h3 className="text-sm font-semibold mb-3">Detection Parameters</h3>
+            <div className="grid md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-sm font-medium">ArUco Dictionary</label>
+                <Select value={arucoDict} onValueChange={setArucoDict}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ARUCO_DICTS.map(d => (
+                      <SelectItem key={d} value={d}>{d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Min Corners</label>
+                <Input
+                  type="number"
+                  min={4}
+                  value={minCornersInput}
+                  onChange={e => setMinCornersInput(e.target.value)}
+                  onBlur={() => setMinCorners(parseInt(minCornersInput) || 6)}
                 />
               </div>
               <div>
@@ -374,20 +428,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 />
               </div>
             </div>
-            <div className="mt-3">
-              <label className="flex items-center text-sm font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enhanceDots}
-                  onChange={e => setEnhanceDots(e.target.checked)}
-                  className="mr-2"
-                />
-                Enhance Dots (for low contrast images)
-              </label>
-            </div>
           </div>
 
-          {/* Section 5: Image Viewer Toggle */}
+          {/* Section 6: Image Viewer Toggle */}
           {validation?.valid && (
             <div className="flex items-center gap-4">
               <Button
@@ -426,18 +469,20 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Section 6: Image Viewer with Overlay Support */}
+          {/* Section 7: Image Viewer with Overlay Support */}
           {showImageViewer && validation?.valid && (
             <CalibrationImageViewer
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
               numImages={numImages}
-              calibrationType="stereo"
+              calibrationType="stereo-charuco"
               calibrationParams={{
-                pattern_cols: patternCols,
-                pattern_rows: patternRows,
-                enhance_dots: enhanceDots,
+                squares_h: squaresH,
+                squares_v: squaresV,
+                square_size: squareSize,
+                marker_ratio: markerRatio,
+                aruco_dict: arucoDict,
               }}
               stereoParams={{ cam1, cam2 }}
               savedDetections={savedDetections}
@@ -446,7 +491,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             />
           )}
 
-          {/* Section 7: Action Buttons */}
+          {/* Section 8: Action Buttons */}
           <div className="border-t pt-4">
             <div className="flex gap-3 items-center flex-wrap">
               {/* Generate Stereo Model */}
@@ -532,7 +577,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               <div className="mt-4 p-3 border rounded bg-blue-50">
                 <div className="flex items-center gap-2 text-sm mb-2">
                   <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  <strong>Stereo Calibration:</strong>
+                  <strong>Stereo ChArUco Calibration:</strong>
                   <span className="capitalize">{jobStatus.stage || jobStatus.status}</span>
                 </div>
                 <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
@@ -557,7 +602,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {jobStatus?.status === 'completed' && (
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Stereo calibration completed successfully!
+                Stereo ChArUco calibration completed successfully!
                 {jobStatus.stereo_rms_error && (
                   <span className="ml-2">RMS: {jobStatus.stereo_rms_error.toFixed(4)} px</span>
                 )}
@@ -568,7 +613,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {jobStatus?.status === 'failed' && (
               <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
                 <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Error: {jobStatus.error || 'Stereo calibration failed'}
+                Error: {jobStatus.error || 'Stereo ChArUco calibration failed'}
               </div>
             )}
 
@@ -617,11 +662,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
         </CardContent>
       </Card>
 
-      {/* Section 8: Stereo Model Results */}
+      {/* Section 9: Stereo Model Results */}
       {hasModel && stereoModel && (
         <Card>
           <CardHeader>
-            <CardTitle>Stereo Model Results</CardTitle>
+            <CardTitle>Stereo ChArUco Model Results</CardTitle>
             <CardDescription>
               Stereo calibration for Cameras {cam1} and {cam2}
             </CardDescription>

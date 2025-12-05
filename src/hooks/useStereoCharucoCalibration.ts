@@ -1,16 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Detection data for a single stereo frame
+ * Detection data for a single stereo ChArUco frame
  */
-export interface StereoFrameDetection {
+export interface StereoCharucoFrameDetection {
   grid_points: [number, number][];
+  corner_ids?: number[];
 }
 
 /**
- * Stereo camera model from calibration
+ * Stereo camera model from ChArUco calibration
  */
-export interface StereoModel {
+export interface StereoCharucoModel {
   // Camera 1 intrinsics
   camera_matrix_1: number[][];
   dist_coeffs_1: number[];
@@ -70,9 +71,9 @@ export interface StereoValidationResult {
 }
 
 /**
- * Stereo calibration job status
+ * Stereo ChArUco calibration job status
  */
-export interface StereoJobStatus {
+export interface StereoCharucoJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   progress: number;
   stage?: string;
@@ -93,7 +94,7 @@ export interface StereoJobStatus {
 /**
  * Stereo reconstruction job status
  */
-export interface StereoReconstructJobStatus {
+export interface StereoCharucoReconstructJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   progress: number;
   processed_frames: number;
@@ -103,17 +104,33 @@ export interface StereoReconstructJobStatus {
   error?: string;
 }
 
+// Available ArUco dictionaries
+export const ARUCO_DICTS = [
+  "DICT_4X4_50",
+  "DICT_4X4_100",
+  "DICT_4X4_250",
+  "DICT_4X4_1000",
+  "DICT_5X5_50",
+  "DICT_5X5_100",
+  "DICT_5X5_250",
+  "DICT_5X5_1000",
+  "DICT_6X6_50",
+  "DICT_6X6_100",
+  "DICT_6X6_250",
+  "DICT_6X6_1000",
+];
+
 /**
- * Hook for managing stereo pinhole calibration state and operations.
+ * Hook for managing stereo ChArUco calibration state and operations.
  *
- * Stereo API:
+ * Stereo ChArUco API:
  * - Parameters saved to config.yaml via /backend/calibration/config and /backend/update_config
- * - Validation via /backend/calibration/stereo/pinhole/validate
- * - Calibration via /backend/calibration/stereo/pinhole/generate_model
- * - Model loading via /backend/calibration/stereo/pinhole/model
- * - 3D reconstruction via /backend/calibration/stereo/pinhole/reconstruct
+ * - Validation via /backend/calibration/stereo/charuco/validate
+ * - Calibration via /backend/calibration/stereo/charuco/generate_model
+ * - Model loading via /backend/calibration/stereo/charuco/model
+ * - 3D reconstruction via /backend/calibration/stereo/charuco/reconstruct
  */
-export function useStereoCalibration(
+export function useStereoCharucoCalibration(
   cameraOptions: number[],
   sourcePaths: string[],
 ) {
@@ -128,11 +145,13 @@ export function useStereoCalibration(
   const [numImages, setNumImages] = useState(10);
   const [subfolder, setSubfolder] = useState('');
 
-  // Grid params (saved to config.calibration.stereo)
-  const [patternCols, setPatternCols] = useState(10);
-  const [patternRows, setPatternRows] = useState(10);
-  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
-  const [enhanceDots, setEnhanceDots] = useState(true);
+  // ChArUco board params (saved to config.calibration.stereo_charuco)
+  const [squaresH, setSquaresH] = useState(10);
+  const [squaresV, setSquaresV] = useState(9);
+  const [squareSize, setSquareSize] = useState(0.03);
+  const [markerRatio, setMarkerRatio] = useState(0.5);
+  const [arucoDict, setArucoDict] = useState('DICT_4X4_1000');
+  const [minCorners, setMinCorners] = useState(6);
   const [dt, setDt] = useState(1.0);
 
   // Validation state
@@ -141,16 +160,16 @@ export function useStereoCalibration(
 
   // Calibration job tracking
   const [jobId, setJobId] = useState<string | null>(null);
-  const [jobStatus, setJobStatus] = useState<StereoJobStatus | null>(null);
+  const [jobStatus, setJobStatus] = useState<StereoCharucoJobStatus | null>(null);
 
   // Reconstruction job tracking
   const [reconstructJobId, setReconstructJobId] = useState<string | null>(null);
-  const [reconstructJobStatus, setReconstructJobStatus] = useState<StereoReconstructJobStatus | null>(null);
+  const [reconstructJobStatus, setReconstructJobStatus] = useState<StereoCharucoReconstructJobStatus | null>(null);
 
-  // Model and detections
-  const [stereoModel, setStereoModel] = useState<StereoModel | null>(null);
-  const [detectionsCam1, setDetectionsCam1] = useState<Record<string, StereoFrameDetection>>({});
-  const [detectionsCam2, setDetectionsCam2] = useState<Record<string, StereoFrameDetection>>({});
+  // Model and detections (with corner_ids for ChArUco)
+  const [stereoModel, setStereoModel] = useState<StereoCharucoModel | null>(null);
+  const [detectionsCam1, setDetectionsCam1] = useState<Record<string, StereoCharucoFrameDetection>>({});
+  const [detectionsCam2, setDetectionsCam2] = useState<Record<string, StereoCharucoFrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
 
   // Overlay toggle
@@ -179,16 +198,18 @@ export function useStereoCalibration(
           if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
         }
 
-        // Load stereo-specific settings
+        // Load ChArUco-specific settings from charuco section
         const cfgRes = await fetch('/backend/config');
         if (cfgRes.ok) {
           const cfgData = await cfgRes.json();
-          const stereo = cfgData.calibration?.stereo || {};
-          if (stereo.pattern_cols) setPatternCols(stereo.pattern_cols);
-          if (stereo.pattern_rows) setPatternRows(stereo.pattern_rows);
-          if (stereo.dot_spacing_mm) setDotSpacingMm(stereo.dot_spacing_mm);
-          if (stereo.enhance_dots !== undefined) setEnhanceDots(stereo.enhance_dots);
-          if (stereo.dt) setDt(stereo.dt);
+          const charuco = cfgData.calibration?.charuco || {};
+          if (charuco.squares_h) setSquaresH(charuco.squares_h);
+          if (charuco.squares_v) setSquaresV(charuco.squares_v);
+          if (charuco.square_size) setSquareSize(charuco.square_size);
+          if (charuco.marker_ratio) setMarkerRatio(charuco.marker_ratio);
+          if (charuco.aruco_dict) setArucoDict(charuco.aruco_dict);
+          if (charuco.min_corners) setMinCorners(charuco.min_corners);
+          if (charuco.dt) setDt(charuco.dt);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -217,17 +238,19 @@ export function useStereoCalibration(
           }),
         });
 
-        // Save stereo-specific settings
+        // Save ChArUco-specific settings
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
-              stereo: {
-                pattern_cols: patternCols,
-                pattern_rows: patternRows,
-                dot_spacing_mm: dotSpacingMm,
-                enhance_dots: enhanceDots,
+              charuco: {
+                squares_h: squaresH,
+                squares_v: squaresV,
+                square_size: squareSize,
+                marker_ratio: markerRatio,
+                aruco_dict: arucoDict,
+                min_corners: minCorners,
                 dt: dt,
               },
             },
@@ -237,7 +260,7 @@ export function useStereoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -253,7 +276,7 @@ export function useStereoCalibration(
     validationDebounceRef.current = setTimeout(async () => {
       setValidating(true);
       try {
-        const res = await fetch('/backend/calibration/stereo/pinhole/validate', {
+        const res = await fetch('/backend/calibration/stereo/charuco/validate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -266,7 +289,7 @@ export function useStereoCalibration(
         const data = await res.json();
         setValidation(data);
       } catch (e) {
-        console.error('Stereo validation failed:', e);
+        console.error('Stereo ChArUco validation failed:', e);
         setValidation({
           valid: false,
           cam1: { valid: false, found_count: 0, error: String(e) },
@@ -285,10 +308,10 @@ export function useStereoCalibration(
     validateImages();
   }, [validateImages, imageFormat, numImages, subfolder, imageType]);
 
-  // Generate stereo model
+  // Generate stereo ChArUco model
   const generateStereoModel = useCallback(async () => {
     try {
-      const res = await fetch('/backend/calibration/stereo/pinhole/generate_model', {
+      const res = await fetch('/backend/calibration/stereo/charuco/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -309,10 +332,10 @@ export function useStereoCalibration(
           total_pairs: 0,
         });
       } else {
-        console.error('Failed to start stereo job:', data.error);
+        console.error('Failed to start stereo ChArUco job:', data.error);
       }
     } catch (e) {
-      console.error('Failed to start stereo calibration:', e);
+      console.error('Failed to start stereo ChArUco calibration:', e);
     }
   }, [sourcePathIdx, cam1, cam2]);
 
@@ -328,7 +351,7 @@ export function useStereoCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/stereo/pinhole/job/${jobId}`);
+        const res = await fetch(`/backend/calibration/stereo/charuco/job/${jobId}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -348,7 +371,7 @@ export function useStereoCalibration(
           }
         }
       } catch (e) {
-        console.error('Failed to poll stereo job status:', e);
+        console.error('Failed to poll stereo ChArUco job status:', e);
       }
     };
 
@@ -366,12 +389,12 @@ export function useStereoCalibration(
     };
   }, [jobId]);
 
-  // Load saved stereo model
+  // Load saved stereo ChArUco model
   const loadModel = useCallback(async () => {
     setModelLoading(true);
     try {
       const res = await fetch(
-        `/backend/calibration/stereo/pinhole/model?source_path_idx=${sourcePathIdx}&cam1=${cam1}&cam2=${cam2}`
+        `/backend/calibration/stereo/charuco/model?source_path_idx=${sourcePathIdx}&cam1=${cam1}&cam2=${cam2}`
       );
       const data = await res.json();
 
@@ -379,15 +402,15 @@ export function useStereoCalibration(
         setStereoModel(data.stereo_model);
         setDetectionsCam1(data.detections_cam1 || {});
         setDetectionsCam2(data.detections_cam2 || {});
-        console.log(`Loaded stereo model with ${Object.keys(data.detections_cam1 || {}).length} cam1 detections, ${Object.keys(data.detections_cam2 || {}).length} cam2 detections`);
+        console.log(`Loaded stereo ChArUco model with ${Object.keys(data.detections_cam1 || {}).length} cam1 detections, ${Object.keys(data.detections_cam2 || {}).length} cam2 detections`);
       } else {
-        console.log('No saved stereo model found');
+        console.log('No saved stereo ChArUco model found');
         setStereoModel(null);
         setDetectionsCam1({});
         setDetectionsCam2({});
       }
     } catch (e) {
-      console.error('Failed to load stereo model:', e);
+      console.error('Failed to load stereo ChArUco model:', e);
     } finally {
       setModelLoading(false);
     }
@@ -396,7 +419,7 @@ export function useStereoCalibration(
   // Reconstruct 3D vectors
   const reconstructVectors = useCallback(async (typeName: string = 'instantaneous') => {
     try {
-      const res = await fetch('/backend/calibration/stereo/pinhole/reconstruct', {
+      const res = await fetch('/backend/calibration/stereo/charuco/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -437,7 +460,7 @@ export function useStereoCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/stereo/pinhole/reconstruct/status/${reconstructJobId}`);
+        const res = await fetch(`/backend/calibration/stereo/charuco/reconstruct/status/${reconstructJobId}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -525,15 +548,19 @@ export function useStereoCalibration(
     subfolder,
     setSubfolder,
 
-    // Grid params
-    patternCols,
-    setPatternCols,
-    patternRows,
-    setPatternRows,
-    dotSpacingMm,
-    setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
+    // ChArUco board params
+    squaresH,
+    setSquaresH,
+    squaresV,
+    setSquaresV,
+    squareSize,
+    setSquareSize,
+    markerRatio,
+    setMarkerRatio,
+    arucoDict,
+    setArucoDict,
+    minCorners,
+    setMinCorners,
     dt,
     setDt,
 
