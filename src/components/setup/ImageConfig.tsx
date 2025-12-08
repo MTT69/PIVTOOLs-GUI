@@ -686,6 +686,16 @@ export default function ImageConfig({ config, updateConfig, validation, sections
               <CardDescription>Define the naming conventions for your raw images and vector output files</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {imageType === "lavision_set" ? (
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertTitle>LaVision .set Files</AlertTitle>
+                  <AlertDescription>
+                    For .set files, enter the full path to each .set file in Source Paths (e.g., <code>/data/experiment.set</code>).
+                    No filename pattern is needed. Masks will be stored in a <code>*_data</code> subfolder next to each .set file.
+                  </AlertDescription>
+                </Alert>
+              ) : (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <Label className="font-semibold">Raw Image Pattern{timeResolved ? "" : "s"}</Label>
@@ -751,6 +761,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   </p>
                 </div>
               </div>
+              )}
               <div>
                 <Label className="font-semibold">Vector Pattern</Label>
                 <Input

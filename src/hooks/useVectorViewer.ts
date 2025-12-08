@@ -766,11 +766,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     const xPercent = (px - bbox.left) / bbox.width;
     const yPercent = (py - bbox.top) / bbox.height;
     try {
+      const { varSource, varName } = parseVarType(type);
       const params = new URLSearchParams();
       params.set("base_path", effectiveDir);
       params.set("camera", String(camera));
       params.set("frame", String(index));
-      params.set("var", type);
+      params.set("var", varName);
+      params.set("var_source", varSource);
       params.set("run", String(run));
       params.set("merged", merged ? "1" : "0");
       params.set("x_percent", xPercent.toString());
@@ -844,12 +846,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       const basePath = effectiveDir;
       if (!basePath) throw new Error("Please provide a base path");
+      const { varSource, varName } = parseVarType(type);
       const fetchCorner = async (xPercent: number, yPercent: number) => {
         const params = new URLSearchParams();
         params.set("base_path", basePath);
         params.set("camera", String(camera));
         params.set("frame", String(index));
-        params.set("var", type);
+        params.set("var", varName);
+        params.set("var_source", varSource);
         params.set("run", String(run));
         params.set("merged", merged ? "1" : "0");
         params.set("x_percent", xPercent.toString());
@@ -891,11 +895,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     if (pendingFetchRef.current) return;
     pendingFetchRef.current = true;
     const endpoint = meanMode ? "get_stats_value_at_position" : "get_vector_at_position";
+    const { varSource, varName } = parseVarType(type);
     const params = new URLSearchParams();
     params.set("base_path", effectiveDir);
     params.set("camera", String(camera));
     params.set("frame", String(index));
-    params.set("var", type);
+    params.set("var", varName);
+    params.set("var_source", varSource);
     params.set("run", String(run));
     params.set("merged", merged ? "1" : "0");
     params.set("x_percent", xPercent.toString());

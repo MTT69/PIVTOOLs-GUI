@@ -53,6 +53,10 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     setSubfolder,
     useCameraSubfolders,
     setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+    pathOrder,
+    setPathOrder,
 
     // Grid params
     patternCols,
@@ -326,6 +330,61 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                   : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
                 }
               </p>
+            </div>
+          )}
+
+          {/* Camera Subfolders & Path Order */}
+          {cameraOptions.length > 1 && (
+            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
+              <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
+
+              {/* Path Order Selector */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Path Order</label>
+                <Select value={pathOrder} onValueChange={setPathOrder}>
+                  <SelectTrigger className="w-[280px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
+                    <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {pathOrder === "calibration_first"
+                    ? `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${subfolder || 'calibration'}/${cameraSubfolders[0] || 'camera1'}/`
+                    : `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${cameraSubfolders[0] || 'Cam1'}/${subfolder || 'calibration'}/`
+                  }
+                </p>
+              </div>
+
+              {/* Custom Camera Subfolder Names */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {cameraOptions.map((cam, idx) => (
+                    <div key={cam}>
+                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
+                      <Input
+                        placeholder={`Cam${cam}`}
+                        value={cameraSubfolders[idx] || ''}
+                        onChange={e => {
+                          const newSubfolders = [...cameraSubfolders];
+                          // Ensure array is long enough
+                          while (newSubfolders.length < cameraOptions.length) {
+                            newSubfolders.push('');
+                          }
+                          newSubfolders[idx] = e.target.value;
+                          setCameraSubfolders(newSubfolders);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

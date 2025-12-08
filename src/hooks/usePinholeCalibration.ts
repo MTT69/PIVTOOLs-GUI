@@ -88,6 +88,8 @@ export function usePinholeCalibration(
   const [numImages, setNumImages] = useState(10);
   const [subfolder, setSubfolder] = useState('');
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [pathOrder, setPathOrder] = useState('camera_first');
 
   // Grid params (saved to config)
   const [patternCols, setPatternCols] = useState(10);
@@ -142,6 +144,8 @@ export function usePinholeCalibration(
           if (calData.num_images) setNumImages(calData.num_images);
           if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
           if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
+          if (calData.camera_subfolders !== undefined) setCameraSubfolders(calData.camera_subfolders);
+          if (calData.path_order !== undefined) setPathOrder(calData.path_order);
         }
 
         // Load pinhole-specific settings
@@ -181,6 +185,8 @@ export function usePinholeCalibration(
             num_images: numImages,
             subfolder: subfolder,
             use_camera_subfolders: useCameraSubfolders,
+            camera_subfolders: cameraSubfolders,
+            path_order: pathOrder,
           }),
         });
 
@@ -205,7 +211,7 @@ export function usePinholeCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -541,6 +547,10 @@ export function usePinholeCalibration(
     setSubfolder,
     useCameraSubfolders,
     setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+    pathOrder,
+    setPathOrder,
 
     // Grid params
     patternCols,

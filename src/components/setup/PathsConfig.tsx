@@ -74,9 +74,13 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Source Directories</CardTitle>
+            <CardTitle>{config.images?.image_type === "lavision_set" ? "Source Files" : "Source Directories"}</CardTitle>
             <CardDescription>
-              Locations where your raw image sequences are stored. These directories will be searched for image files matching your patterns.
+              {config.images?.image_type === "lavision_set" ? (
+                <>Full paths to your .set files. Each .set file contains all cameras and frames. Masks will be stored in <code className="bg-muted px-1">*_data</code> subfolders.</>
+              ) : (
+                <>Locations where your raw image sequences are stored. These directories will be searched for image files matching your patterns.</>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -84,8 +88,8 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
               {sourceDirs.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Folder className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p className="text-sm">No source directories configured</p>
-                  <p className="text-xs mt-1">Click the button below to add your first source directory</p>
+                  <p className="text-sm">No source {config.images?.image_type === "lavision_set" ? "files" : "directories"} configured</p>
+                  <p className="text-xs mt-1">Click the button below to add your first source {config.images?.image_type === "lavision_set" ? "file" : "directory"}</p>
                 </div>
               ) : (
                 sourceDirs.map((dir, index) => (
@@ -99,7 +103,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                           setSourceDirs(newSourceDirs);
                         }}
                         onBlur={() => postUpdatePaths(baseDirs, sourceDirs)}
-                        placeholder="/path/to/your/raw/images/"
+                        placeholder={config.images?.image_type === "lavision_set" ? "/path/to/your/data.set" : "/path/to/your/raw/images/"}
                         className="font-mono min-h-[60px] resize-y"
                         rows={1}
                         style={{
@@ -112,6 +116,11 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                           target.style.height = target.scrollHeight + 'px';
                         }}
                       />
+                      {config.images?.image_type === "lavision_set" && dir && dir.endsWith('.set') && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Storage: <code className="bg-muted px-1">{dir.replace(/\.set$/, '_data/')}</code>
+                        </p>
+                      )}
                     </div>
                     <Button
                       variant="ghost"
@@ -136,7 +145,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                 }}
                 className="flex items-center gap-2 w-full hover:bg-soton-blue hover:text-white transition-colors"
               >
-                <Plus className="h-4 w-4" /> Add Source Directory
+                <Plus className="h-4 w-4" /> Add Source {config.images?.image_type === "lavision_set" ? "File" : "Directory"}
               </Button>
             </div>
           </CardContent>
