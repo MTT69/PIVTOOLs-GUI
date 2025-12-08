@@ -894,7 +894,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
     if (pendingFetchRef.current) return;
     pendingFetchRef.current = true;
-    const endpoint = meanMode ? "get_stats_value_at_position" : "get_vector_at_position";
+    // Use get_vector_at_position for all sources - it handles var_source parameter
     const { varSource, varName } = parseVarType(type);
     const params = new URLSearchParams();
     params.set("base_path", effectiveDir);
@@ -923,7 +923,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("ylim_max", String(Number(ylimMax)));
     }
 
-    const url = `${backendUrl}/plot/${endpoint}?${params.toString()}`;
+    const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
     fetch(url)
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
       .then(({ ok, json }) => {
@@ -932,7 +932,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -1202,7 +1202,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       });
       const result = await response.json();
       if (result.success) {
-        setAppliedTransforms(prev => [...prev, transformation]);
+        // Use the backend's simplified transformation list
+        setAppliedTransforms(result.pending_transformations || []);
         // Reload the image
         await handleRender();
       } else {

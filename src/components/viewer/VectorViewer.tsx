@@ -547,17 +547,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       Merged Ensemble (Mean)
                     </SelectItem>
                   )}
-                  {/* Statistics - only for calibrated instantaneous */}
-                  {availableDataSources.statistics.exists && (
-                    <SelectItem value="statistics">
-                      Mean Statistics
-                    </SelectItem>
-                  )}
-                  {availableDataSources.merged_statistics?.exists && cameraOptions.length > 1 && (
-                    <SelectItem value="merged_statistics">
-                      Merged Mean Statistics
-                    </SelectItem>
-                  )}
+                  {/* Mean Statistics removed - now accessible via Variable dropdown with mean: prefix */}
                   {/* Show message if nothing available */}
                   {!availableDataSources.calibrated_instantaneous.exists &&
                    !availableDataSources.uncalibrated_instantaneous.exists &&
@@ -890,7 +880,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         {varVal != null && (
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium text-gray-600 uppercase">
-                              {type}:
+                              {type.includes(':') ? type.split(':').slice(1).join(':') : type}:
                             </span>
                             <span className="font-mono text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border">
                               {varVal.toFixed(3)}
