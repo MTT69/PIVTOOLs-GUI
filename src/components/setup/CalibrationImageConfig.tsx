@@ -25,6 +25,8 @@ export interface CalibrationConfig {
   zero_based_indexing: boolean;
   use_camera_subfolders: boolean;
   is_container_format: boolean;
+  camera_subfolders: string[];
+  path_order: string;
 }
 
 interface ValidationResult {
@@ -54,6 +56,8 @@ export default function CalibrationImageConfig({
   const [zeroBasedIndexing, setZeroBasedIndexing] = useState(false);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(true);
   const [isContainerFormat, setIsContainerFormat] = useState(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [pathOrder, setPathOrder] = useState("camera_first");
 
   // Validation state
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -74,6 +78,8 @@ export default function CalibrationImageConfig({
         setZeroBasedIndexing(json.zero_based_indexing || false);
         setUseCameraSubfolders(json.use_camera_subfolders ?? true);
         setIsContainerFormat(json.is_container_format || false);
+        setCameraSubfolders(json.camera_subfolders || []);
+        setPathOrder(json.path_order || "camera_first");
       }
     } catch (e) {
       console.error("Failed to load calibration config:", e);
@@ -102,6 +108,8 @@ export default function CalibrationImageConfig({
         if (json.zero_based_indexing !== undefined) setZeroBasedIndexing(json.zero_based_indexing);
         if (json.use_camera_subfolders !== undefined) setUseCameraSubfolders(json.use_camera_subfolders);
         if (json.is_container_format !== undefined) setIsContainerFormat(json.is_container_format);
+        if (json.camera_subfolders !== undefined) setCameraSubfolders(json.camera_subfolders);
+        if (json.path_order !== undefined) setPathOrder(json.path_order);
 
         setSaveStatus("Saved");
 
@@ -113,6 +121,8 @@ export default function CalibrationImageConfig({
           zero_based_indexing: json.zero_based_indexing,
           use_camera_subfolders: json.use_camera_subfolders,
           is_container_format: json.is_container_format,
+          camera_subfolders: json.camera_subfolders,
+          path_order: json.path_order,
         });
 
         // Re-validate after save
@@ -330,6 +340,64 @@ export default function CalibrationImageConfig({
               : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
             }
           </p>
+        )}
+
+        {/* Path Order - only show when using camera subfolders */}
+        {(useCameraSubfolders || imageType === "standard") && (
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label htmlFor="calib-path-order">Path Structure</Label>
+              <Select
+                value={pathOrder}
+                onValueChange={(value) => {
+                  setPathOrder(value);
+                  saveConfig({ path_order: value });
+                }}
+              >
+                <SelectTrigger id="calib-path-order" className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
+                  <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Controls whether camera folders appear before or after the calibration subfolder
+              </p>
+            </div>
+
+            {/* Custom Camera Subfolder Name */}
+            <div>
+              <Label htmlFor="calib-camera-subfolder">Camera Subfolder Name (Camera {camera})</Label>
+              <Input
+                id="calib-camera-subfolder"
+                value={cameraSubfolders[camera - 1] || ""}
+                onChange={e => {
+                  const newSubfolders = [...cameraSubfolders];
+                  // Ensure array is long enough
+                  while (newSubfolders.length < camera) {
+                    newSubfolders.push("");
+                  }
+                  newSubfolders[camera - 1] = e.target.value;
+                  setCameraSubfolders(newSubfolders);
+                }}
+                onBlur={() => {
+                  // Clean up empty trailing entries
+                  const cleaned = [...cameraSubfolders];
+                  while (cleaned.length < camera) {
+                    cleaned.push("");
+                  }
+                  saveConfig({ camera_subfolders: cleaned });
+                }}
+                className="mt-1"
+                placeholder={`Cam${camera}`}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave empty to use default &quot;Cam{camera}&quot;. Examples: &quot;camera{camera}&quot;, &quot;View{camera}&quot;
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Validation Status */}

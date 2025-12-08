@@ -1473,15 +1473,111 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </div>
                   )}
 
-                  {/* Individual transform buttons */}
+                  {/* Geometric transforms */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm font-semibold text-gray-700 mr-2">Apply to current frame:</label>
+                    <label className="text-sm font-semibold text-gray-700 mr-2">Geometric:</label>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_ccw')}>Rotate Left</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('rotate_90_cw')}>Rotate Right</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_lr')}>Flip Horizontal</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_ud')}>Flip Vertical</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('swap_ux_uy')}>Swap UX/UY</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux_uy')}>Invert UX/UY</Button>
+                  </div>
+
+                  {/* Scale Velocities */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200">
+                    <label className="text-sm font-semibold text-gray-700 mr-2">Scale Velocities:</label>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('scale_velocity:1000')}>
+                      ×1000 (m/s→mm/s)
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('scale_velocity:0.001')}>
+                      ×0.001 (mm/s→m/s)
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        id="velocity-scale-custom"
+                        type="number"
+                        step="any"
+                        placeholder="Custom factor"
+                        className="w-32 h-8 text-sm"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const input = e.currentTarget as HTMLInputElement;
+                            const factor = parseFloat(input.value);
+                            if (!isNaN(factor) && factor !== 0) {
+                              applyTransformation(`scale_velocity:${factor}`);
+                              input.value = '';
+                            } else {
+                              alert('Please enter a non-zero number');
+                            }
+                          }
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.getElementById('velocity-scale-custom') as HTMLInputElement;
+                          const factor = parseFloat(input.value);
+                          if (!isNaN(factor) && factor !== 0) {
+                            applyTransformation(`scale_velocity:${factor}`);
+                            input.value = '';
+                          } else {
+                            alert('Please enter a non-zero number');
+                          }
+                        }}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Scale Coordinates */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200">
+                    <label className="text-sm font-semibold text-gray-700 mr-2">Scale Coordinates:</label>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('scale_coords:1000')}>
+                      ×1000 (m→mm)
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('scale_coords:0.001')}>
+                      ×0.001 (mm→m)
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Input
+                        id="coords-scale-custom"
+                        type="number"
+                        step="any"
+                        placeholder="Custom factor"
+                        className="w-32 h-8 text-sm"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const input = e.currentTarget as HTMLInputElement;
+                            const factor = parseFloat(input.value);
+                            if (!isNaN(factor) && factor !== 0) {
+                              applyTransformation(`scale_coords:${factor}`);
+                              input.value = '';
+                            } else {
+                              alert('Please enter a non-zero number');
+                            }
+                          }
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.getElementById('coords-scale-custom') as HTMLInputElement;
+                          const factor = parseFloat(input.value);
+                          if (!isNaN(factor) && factor !== 0) {
+                            applyTransformation(`scale_coords:${factor}`);
+                            input.value = '';
+                          } else {
+                            alert('Please enter a non-zero number');
+                          }
+                        }}
+                      >
+                        Apply
+                      </Button>
+                    </div>
                   </div>
 
                   {/* Apply to all frames buttons */}

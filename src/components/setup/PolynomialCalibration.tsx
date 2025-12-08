@@ -153,7 +153,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
 
       setValidatingXml(true);
       try {
-        const res = await fetch('/backend/calibration_poly/validate_xml', {
+        const res = await fetch('/backend/calibration/polynomial/validate_xml', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -229,7 +229,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   const loadXmlToConfig = async () => {
     setLoadingXml(true);
     try {
-      const res = await fetch('/backend/calibration_poly/load_xml_to_config', {
+      const res = await fetch('/backend/calibration/polynomial/load_xml_to_config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -258,7 +258,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
 
     const fetchXmlData = async () => {
       try {
-        const response = await fetch('/backend/calibration_poly/read_xml', {
+        const response = await fetch('/backend/calibration/polynomial/read_xml', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -417,7 +417,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     try {
       if (calibrationScope === 'all') {
         // Use the multi-camera endpoint
-        const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors_all', {
+        const response = await fetch('/backend/calibration/polynomial/calibrate_all', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -435,7 +435,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         }
       } else {
         // Single camera mode - backend reads coefficients from config
-        const response = await fetch('/backend/calibration_poly/polynomial_calibrate_vectors', {
+        const response = await fetch('/backend/calibration/polynomial/calibrate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -472,7 +472,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     let active = true;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/backend/calibration/polynomial/status/${jobId}`);
+        const res = await fetch(`/backend/calibration/polynomial/job/${jobId}`);
         const data = await res.json();
         if (active) {
             setJobStatus(data.status || "not_started");
