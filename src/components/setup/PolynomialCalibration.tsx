@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 
 interface PolynomialCalibrationProps {
   config: any;
@@ -79,6 +80,11 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   const [xmlValidation, setXmlValidation] = useState<{valid: boolean, error?: string, cameras?: string[]} | null>(null);
   const [validatingXml, setValidatingXml] = useState(false);
 
+  // XML path and use_xml flag
+  const [xmlPath, setXmlPath] = useState<string>('');
+  const [useXml, setUseXml] = useState<boolean>(true);
+  const [loadingXml, setLoadingXml] = useState(false);
+
   // Initialize state from config
   useEffect(() => {
     const polyConfig = config.calibration?.polynomial || {};
@@ -101,6 +107,8 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
 
     setCameraParams(params);
     setSourcePathIdx(polyConfig.source_path_idx ?? 0);
+    setXmlPath(polyConfig.xml_path ?? '');
+    setUseXml(polyConfig.use_xml ?? true);
   }, [config]);
 
   // Update selected camera when options change
@@ -134,15 +142,24 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     }
   };
 
-  // Validate XML on source path change
+  // Validate XML on path change
   useEffect(() => {
     const validateXml = async () => {
+      // Only validate if useXml is enabled and we have a path
+      if (!useXml) {
+        setXmlValidation(null);
+        return;
+      }
+
       setValidatingXml(true);
       try {
         const res = await fetch('/backend/calibration_poly/validate_xml', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path_idx: sourcePathIdx })
+          body: JSON.stringify({
+            xml_path: xmlPath || undefined,
+            source_path_idx: sourcePathIdx
+          })
         });
         const data = await res.json();
         setXmlValidation(data);
@@ -153,7 +170,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
       }
     };
     validateXml();
-  }, [sourcePathIdx]);
+  }, [xmlPath, sourcePathIdx, useXml]);
 
   // Save camera params to config
   const saveCameraToConfig = async (camId: number, params: CameraParams) => {
@@ -176,14 +193,78 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
     }
   };
 
-  // Fetch XML calibration data and save to config
+  // Handle xmlPath change - save to config
+  const handleXmlPathChange = async (value: string) => {
+    setXmlPath(value);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { polynomial: { xml_path: value } }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save xml_path:', e);
+    }
+  };
+
+  // Handle useXml change - save to config
+  const handleUseXmlChange = async (checked: boolean) => {
+    setUseXml(checked);
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { polynomial: { use_xml: checked } }
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save use_xml:', e);
+    }
+  };
+
+  // Load XML to config (manual button)
+  const loadXmlToConfig = async () => {
+    setLoadingXml(true);
+    try {
+      const res = await fetch('/backend/calibration_poly/load_xml_to_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          xml_path: xmlPath || undefined,
+          source_path_idx: sourcePathIdx
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        // Reload config to get updated camera params
+        window.location.reload();
+      } else {
+        console.error('Failed to load XML:', data.error);
+      }
+    } catch (e) {
+      console.error('Failed to load XML to config:', e);
+    } finally {
+      setLoadingXml(false);
+    }
+  };
+
+  // Auto-fetch XML calibration data when path changes (if useXml is true)
   useEffect(() => {
+    // Skip auto-loading if useXml is false
+    if (!useXml) return;
+
     const fetchXmlData = async () => {
       try {
         const response = await fetch('/backend/calibration_poly/read_xml', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path_idx: sourcePathIdx })
+          body: JSON.stringify({
+            xml_path: xmlPath || undefined,
+            source_path_idx: sourcePathIdx
+          })
         });
         const data = await response.json();
 
@@ -265,7 +346,7 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
 
     fetchXmlData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, JSON.stringify(cameraOptions)]);
+  }, [xmlPath, sourcePathIdx, useXml, JSON.stringify(cameraOptions)]);
 
   // Handle coefficient change
   const handleCoefficientChange = (camId: number, axis: 'x' | 'y', index: number, value: string) => {
@@ -494,6 +575,56 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
           </Select>
         </div>
 
+        {/* XML Path and Use XML Settings */}
+        <div className="space-y-4 p-4 border rounded-md bg-slate-50">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="useXml"
+                checked={useXml}
+                onCheckedChange={handleUseXmlChange}
+              />
+              <Label htmlFor="useXml" className="text-sm font-medium cursor-pointer">
+                Use XML values
+              </Label>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {useXml ? "(disable to use manually entered values)" : "(enable to load from XML file)"}
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Calibration XML Path</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="/path/to/Calibration.xml (leave empty for default location)"
+                value={xmlPath}
+                onChange={(e) => handleXmlPathChange(e.target.value)}
+                disabled={!useXml}
+                className={!useXml ? "bg-gray-100" : ""}
+              />
+              <Button
+                onClick={loadXmlToConfig}
+                disabled={!useXml || loadingXml || !xmlValidation?.valid}
+                variant="outline"
+                className="whitespace-nowrap"
+              >
+                {loadingXml ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-1" />
+                )}
+                Load from XML
+              </Button>
+            </div>
+            {!xmlPath && useXml && (
+              <p className="text-xs text-muted-foreground">
+                Default: source_path/calibration_subfolder/Calibration.xml
+              </p>
+            )}
+          </div>
+        </div>
+
         <div className="space-y-6">
           {cameraOptions.map((camId) => {
             const cam = cameraParams[camId] || {
@@ -633,14 +764,14 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         </div>
 
         {/* XML Validation Status */}
-        {validatingXml && (
+        {useXml && validatingXml && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Validating Calibration.xml...
           </div>
         )}
 
-        {xmlValidation && !validatingXml && (
+        {useXml && xmlValidation && !validatingXml && (
           xmlValidation.valid ? (
             <Alert className="border-green-200 bg-green-50">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -697,10 +828,11 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
           <Button
               onClick={calibrateVectors}
               disabled={
-                !xmlValidation?.valid ||
+                (useXml && !xmlValidation?.valid) ||
                 calibrating ||
                 jobStatus === 'running' ||
-                (calibrationScope === 'current' && !allPopulated)
+                (calibrationScope === 'current' && !allPopulated) ||
+                (!useXml && !allPopulated)
               }
               className="bg-green-600 hover:bg-green-700 text-white"
           >

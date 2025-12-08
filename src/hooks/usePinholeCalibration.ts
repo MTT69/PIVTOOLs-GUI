@@ -87,6 +87,7 @@ export function usePinholeCalibration(
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState(10);
   const [subfolder, setSubfolder] = useState('');
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
 
   // Grid params (saved to config)
   const [patternCols, setPatternCols] = useState(10);
@@ -140,6 +141,7 @@ export function usePinholeCalibration(
           if (calData.image_type) setImageType(calData.image_type);
           if (calData.num_images) setNumImages(calData.num_images);
           if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
+          if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
         }
 
         // Load pinhole-specific settings
@@ -178,6 +180,7 @@ export function usePinholeCalibration(
             image_type: imageType,
             num_images: numImages,
             subfolder: subfolder,
+            use_camera_subfolders: useCameraSubfolders,
           }),
         });
 
@@ -202,7 +205,7 @@ export function usePinholeCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -536,6 +539,8 @@ export function usePinholeCalibration(
     setNumImages,
     subfolder,
     setSubfolder,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
 
     // Grid params
     patternCols,

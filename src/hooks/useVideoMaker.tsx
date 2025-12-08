@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-// Types for ffmpeg and data source checking
-interface FfmpegStatus {
-  installed: boolean;
-  version: string | null;
-  path: string | null;
-  error: string | null;
-  loading: boolean;
-}
-
+// Types for data source checking
 interface DataSourceInfo {
   exists: boolean;
   frame_count: number;
@@ -22,6 +14,13 @@ interface DataSourcesAvailability {
 }
 
 export type DataSourceType = 'calibrated' | 'uncalibrated' | 'merged';
+
+// Types for available variables
+export interface VariableInfo {
+  name: string;
+  label: string;
+  group: 'piv' | 'stats';
+}
 
 export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Directory / base paths - now from config instead of localStorage
@@ -43,15 +42,6 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
 
-  // FFmpeg status
-  const [ffmpegStatus, setFfmpegStatus] = useState<FfmpegStatus>({
-    installed: false,
-    version: null,
-    path: null,
-    error: null,
-    loading: true,
-  });
-
   // Data sources availability
   const [dataSources, setDataSources] = useState<DataSourcesAvailability | null>(null);
   const [dataSourcesLoading, setDataSourcesLoading] = useState<boolean>(false);
@@ -61,6 +51,14 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const [availableRuns, setAvailableRuns] = useState<number[]>([1]);
   const [highestRun, setHighestRun] = useState<number>(1);
   const [runsLoading, setRunsLoading] = useState<boolean>(false);
+
+  // Available variables (dynamically fetched)
+  const [availableVariables, setAvailableVariables] = useState<VariableInfo[]>([
+    { name: 'ux', label: 'Velocity (x)', group: 'piv' },
+    { name: 'uy', label: 'Velocity (y)', group: 'piv' },
+    { name: 'mag', label: 'Velocity Magnitude', group: 'piv' },
+  ]);
+  const [variablesLoading, setVariablesLoading] = useState<boolean>(false);
 
   // Other selection state
   const [type, setType] = useState<string>('ux');
@@ -118,35 +116,6 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   useEffect(() => {
     if (effectiveDir) setDirectory(effectiveDir);
   }, [effectiveDir]);
-
-  // Check ffmpeg on mount
-  const checkFfmpeg = useCallback(async () => {
-    setFfmpegStatus(prev => ({ ...prev, loading: true }));
-    try {
-      const response = await fetch(`${backendUrl}/video/check_ffmpeg`);
-      const data = await response.json();
-      setFfmpegStatus({
-        installed: data.installed || false,
-        version: data.version || null,
-        path: data.path || null,
-        error: data.error || null,
-        loading: false,
-      });
-    } catch (error) {
-      console.error('Error checking ffmpeg:', error);
-      setFfmpegStatus({
-        installed: false,
-        version: null,
-        path: null,
-        error: 'Failed to check ffmpeg status',
-        loading: false,
-      });
-    }
-  }, [backendUrl]);
-
-  useEffect(() => {
-    checkFfmpeg();
-  }, [checkFfmpeg]);
 
   // Check data sources when camera or effectiveDir changes
   const checkDataSources = useCallback(async () => {
@@ -214,6 +183,37 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
   useEffect(() => {
     checkAvailableRuns();
+  }, [effectiveDir, camera, dataSource]);
+
+  // Check available variables when data source changes
+  const checkAvailableVariables = useCallback(async () => {
+    if (!effectiveDir) return;
+
+    setVariablesLoading(true);
+    try {
+      const response = await fetch(
+        `${backendUrl}/video/available_variables?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}&data_source=${dataSource}`
+      );
+      const data = await response.json();
+
+      if (data.success && data.variables) {
+        setAvailableVariables(data.variables);
+        // If current type is not in the available variables, reset to first available
+        const varNames = data.variables.map((v: VariableInfo) => v.name);
+        if (!varNames.includes(type)) {
+          setType(data.variables[0]?.name || 'ux');
+        }
+      }
+    } catch (error) {
+      console.error('Error checking available variables:', error);
+      // Keep default variables on error
+    } finally {
+      setVariablesLoading(false);
+    }
+  }, [backendUrl, effectiveDir, camera, dataSource, type]);
+
+  useEffect(() => {
+    checkAvailableVariables();
   }, [effectiveDir, camera, dataSource]);
 
   // Available data source options (only show sources that exist)
@@ -453,8 +453,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       setVideoReady(false);
       setVideoError(false);
       videoRetryCount.current = 0;
-      // Initial delay before showing video
-      const timer = setTimeout(() => setVideoReady(true), 2500);
+      // Short delay before showing video (backend now verifies file is ready)
+      const timer = setTimeout(() => setVideoReady(true), 500);
       return () => clearTimeout(timer);
     }
   }, [videoResult?.out_path]);
@@ -520,8 +520,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     videoReady,
     videoError,
     effectiveDir,
-    // New: FFmpeg and data source state
-    ffmpegStatus,
+    // Data source state
     dataSources,
     dataSourcesLoading,
     // Runs state
@@ -532,6 +531,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     setDataSource,
     dataSourceOptions,
     hasAnyData,
+    // Variables state
+    availableVariables,
+    variablesLoading,
     // Functions
     handleBrowse,
     onDirPicked,
@@ -542,7 +544,6 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     createVideoUrl,
     handleVideoError,
     handleRetryVideo,
-    checkFfmpeg,
     checkDataSources,
   };
 }

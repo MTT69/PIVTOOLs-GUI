@@ -3,8 +3,7 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 
@@ -27,8 +26,51 @@ const AVAILABLE_STATISTICS = {
   ]
 };
 
+// Variable label formatting helpers
+const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean'): string => {
+  // Special formatting for known variables
+  const specialLabels: Record<string, Record<string, string>> = {
+    inst_stat: {
+      u_prime: "u'",
+      v_prime: "v'",
+      w_prime: "w'",
+      gamma1: "γ₁",
+      gamma2: "γ₂",
+      vorticity: "ω",
+      divergence: "∇·u",
+    },
+    mean: {
+      ux: "Mean ux",
+      uy: "Mean uy",
+      uz: "Mean uz",
+      uu: "⟨u'u'⟩",
+      vv: "⟨v'v'⟩",
+      ww: "⟨w'w'⟩",
+      uv: "⟨u'v'⟩",
+      uw: "⟨u'w'⟩",
+      vw: "⟨v'w'⟩",
+      tke: "TKE",
+      vorticity: "Mean ω",
+      divergence: "Mean ∇·u",
+    },
+  };
+
+  if (source === 'inst_stat' && specialLabels.inst_stat[varName]) {
+    return specialLabels.inst_stat[varName];
+  }
+  if (source === 'mean' && specialLabels.mean[varName]) {
+    return specialLabels.mean[varName];
+  }
+  return varName;
+};
+
+// Check if any grouped vars are available
+const hasGroupedVars = (allVars: { instantaneous: string[]; instantaneous_stats: string[]; mean_stats: string[] }): boolean => {
+  return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0);
+};
+
 // Inline Vector Merging Hook
-const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number) => {
+const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any) => {
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
   const [merging, setMerging] = useState(false);
   const [mergingJobId, setMergingJobId] = useState<string | null>(null);
@@ -36,12 +78,37 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
   const [jobStatus, setJobStatus] = useState<string>("not_started");
   const [jobDetails, setJobDetails] = useState<any>(null);
 
-  // Initialize selected cameras when options change
+  // Get merging config values
+  const mergingConfig = config?.merging || {};
+  const configCameras = mergingConfig.cameras || [];
+  const configTypeName = mergingConfig.type_name || "instantaneous";
+  const configEndpoint = mergingConfig.endpoint || "";
+
+  // Initialize selected cameras: prefer config, then first 2 camera options
   useEffect(() => {
-    if (cameraOptions.length >= 2 && selectedCameras.length === 0) {
-      setSelectedCameras([cameraOptions[0], cameraOptions[1]]);
+    if (selectedCameras.length === 0) {
+      if (configCameras.length >= 2) {
+        setSelectedCameras(configCameras);
+      } else if (cameraOptions.length >= 2) {
+        setSelectedCameras([cameraOptions[0], cameraOptions[1]]);
+      }
     }
-  }, [cameraOptions, selectedCameras.length]);
+  }, [cameraOptions, configCameras, selectedCameras.length]);
+
+  // Save camera selection to config when changed by user
+  const updateSelectedCameras = useCallback(async (cameras: number[]) => {
+    setSelectedCameras(cameras);
+    // Save to config.yaml
+    try {
+      await fetch(`${backendUrl}/update_config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merging: { cameras } }),
+      });
+    } catch (e) {
+      console.error("Failed to save merging cameras to config:", e);
+    }
+  }, [backendUrl]);
 
   const mergeVectors = useCallback(async (frameIdx?: number) => {
     if (selectedCameras.length < 2) {
@@ -57,8 +124,8 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
       const body: any = {
         base_path_idx: basePathIdx,
         cameras: selectedCameras,
-        type_name: "instantaneous",
-        endpoint: "",
+        type_name: configTypeName,
+        endpoint: configEndpoint,
         image_count: maxFrameCount,
       };
 
@@ -94,7 +161,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
       setJobDetails({ error: error.message });
       setMerging(false);
     }
-  }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount]);
+  }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount, configTypeName, configEndpoint]);
 
   // Poll for job status
   useEffect(() => {
@@ -132,6 +199,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
   return {
     selectedCameras,
     setSelectedCameras,
+    updateSelectedCameras,
     merging,
     mergingJobId,
     showDialog,
@@ -210,7 +278,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     maxFrameCount,
     handlePlayToggle,
     handleRender,
-    toggleMeanMode,
     handleImageClick,
     updateOffsets,
     fetchCornerCoordinates,
@@ -237,10 +304,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     setDataSource,
     availableDataSources,
     availabilityLoading,
+    fetchAvailableDataSources,
+    fetchStatVars,
+    fetchFrameVars,
+    // Grouped variables for unified dropdown
+    allVars,
+    allVarsLoading,
+    fetchAllVars,
     // Derived feature flags
     isEnsemble,
     isMerged,
     isStatistics,
+    isMeanVar,
     canTransform,
     canEditCoordinates,
     canMerge,
@@ -287,17 +362,19 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     }
   }, [hoverData]);
 
-  // Use statistics calculation hook
+  // Use statistics calculation hook (with config for checkbox/gamma sync)
   const {
-    selectedCameras,
-    includeMerged,
+    processCameras,
+    processMerged,
     requestedStatistics,
+    gammaRadius,
     calculating,
     statisticsJobId,
     showDialog: showStatisticsDialog,
-    setSelectedCameras,
-    setIncludeMerged,
+    setProcessCameras,
+    setProcessMerged,
     setRequestedStatistics,
+    setGammaRadius,
     setShowDialog: setShowStatisticsDialog,
     jobStatus: statisticsStatus,
     jobDetails: statisticsDetails,
@@ -307,12 +384,29 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     backendUrl,
     basePathIdx,
     cameraOptions,
-    maxFrameCount
+    maxFrameCount,
+    config  // Pass config for initializing from enabled_methods and gamma_radius
   );
 
   // Derived values from job details
   const statisticsProgress = statisticsDetails?.overall_progress || statisticsDetails?.progress || 0;
   const statisticsError = statisticsDetails?.error || null;
+
+  // Refresh available data sources and variables when statistics calculation completes
+  useEffect(() => {
+    if (statisticsStatus === "completed") {
+      // Force refresh available data sources to pick up new statistics
+      fetchAvailableDataSources(true);
+      // Refresh grouped variables to show new stats in dropdown
+      fetchAllVars();
+      // Also refresh legacy mode vars
+      if (meanMode) {
+        fetchStatVars();
+      } else {
+        fetchFrameVars();
+      }
+    }
+  }, [statisticsStatus, fetchAvailableDataSources, fetchAllVars, fetchStatVars, fetchFrameVars, meanMode]);
 
   // Use vector merging hook
   const {
@@ -321,6 +415,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     mergingJobId,
     showDialog: showMergingDialog,
     setSelectedCameras: setSelectedMergeCameras,
+    updateSelectedCameras: updateMergeCameras,
     setShowDialog: setShowMergingDialog,
     jobStatus: mergingStatus,
     jobDetails: mergingDetails,
@@ -330,7 +425,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     backendUrl,
     basePathIdx,
     cameraOptions,
-    maxFrameCount
+    maxFrameCount,
+    config
   );
 
   // Derived values from merging job details
@@ -339,7 +435,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
   // Improved Play/Pause functionality with smart prefetching
   useEffect(() => {
-    if (playing && !meanMode) {
+    if (playing && !isMeanVar) {
       // Prefetch ahead based on playback speed
       const prefetchCount = Math.max(5, Math.ceil(playbackSpeed * 3));
       prefetchSurrounding(index, prefetchCount);
@@ -363,7 +459,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     return () => {
       if (playIntervalRef.current) clearInterval(playIntervalRef.current);
     };
-  }, [playing, maxFrameCount, playbackSpeed, meanMode, index, prefetchSurrounding]);
+  }, [playing, maxFrameCount, playbackSpeed, isMeanVar, index, prefetchSurrounding]);
 
   // Stop playing on error
   useEffect(() => {
@@ -494,22 +590,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Show Statistics Toggle - Only for calibrated instantaneous */}
-            {canViewStatistics && !isStatistics && (
-              <div className="flex items-center gap-2">
-                <label className="text-sm font-medium min-w-[100px]">Show Statistics:</label>
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    id="show-statistics"
-                    checked={meanMode}
-                    onCheckedChange={() => toggleMeanMode()}
-                  />
-                  <label htmlFor="show-statistics" className="text-sm text-gray-600">
-                    {meanMode ? "Enabled" : "Disabled"}
-                  </label>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Error Messages */}
@@ -527,7 +607,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             </div>
           )}
 
-          {meanMode && statsError && (
+          {isMeanVar && statsError && (
             <div className="p-4 bg-amber-50 border-l-4 border-amber-400 rounded-r-lg">
               <div className="flex items-start gap-3">
                 <svg className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -549,33 +629,66 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             <h3 className="text-lg font-semibold text-gray-800">Visualisation Settings</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Variable */}
+              {/* Variable - Unified Grouped Dropdown */}
               <div>
                 <label htmlFor="type" className="text-sm font-medium block mb-2">Variable:</label>
                 <Select value={type} onValueChange={v => setType(v)}>
                   <SelectTrigger id="type">
-                    <SelectValue placeholder="Select" />
+                    <SelectValue placeholder="Select variable" />
                   </SelectTrigger>
                   <SelectContent>
-                    {meanMode ? (
-                      statVarsLoading ? (
-                        <SelectItem value="loading">Loading...</SelectItem>
-                      ) : statVars && statVars.length > 0 ? (
-                        statVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
-                      ) : (
-                        <SelectItem value="none" disabled>No variables</SelectItem>
-                      )
+                    {allVarsLoading ? (
+                      <SelectItem value="loading" disabled>Loading...</SelectItem>
+                    ) : hasGroupedVars(allVars) ? (
+                      <>
+                        {/* Instantaneous Variables from frame files */}
+                        {allVars.instantaneous.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel className="text-xs text-gray-500 px-2">Instantaneous</SelectLabel>
+                            {allVars.instantaneous.map(v => (
+                              <SelectItem key={`inst:${v}`} value={`inst:${v}`}>
+                                {formatVarLabel(v, 'inst')}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
+
+                        {/* Calculated Per-Frame Stats (if computed) */}
+                        {allVars.instantaneous_stats.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectLabel className="text-xs text-gray-500 px-2">Calculated (Per-Frame)</SelectLabel>
+                              {allVars.instantaneous_stats.map(v => (
+                                <SelectItem key={`inst_stat:${v}`} value={`inst_stat:${v}`}>
+                                  {formatVarLabel(v, 'inst_stat')}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </>
+                        )}
+
+                        {/* Mean Statistics (if computed) */}
+                        {allVars.mean_stats.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectLabel className="text-xs text-gray-500 px-2">Mean Statistics</SelectLabel>
+                              {allVars.mean_stats.map(v => (
+                                <SelectItem key={`mean:${v}`} value={`mean:${v}`}>
+                                  {formatVarLabel(v, 'mean')}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </>
+                        )}
+                      </>
                     ) : (
-                      frameVarsLoading ? (
-                        <SelectItem value="loading">Loading...</SelectItem>
-                      ) : frameVars && frameVars.length > 0 ? (
-                        frameVars.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)
-                      ) : (
-                        <>
-                          <SelectItem value="ux">ux</SelectItem>
-                          <SelectItem value="uy">uy</SelectItem>
-                        </>
-                      )
+                      // Fallback if no grouped vars loaded yet
+                      <>
+                        <SelectItem value="inst:ux">ux</SelectItem>
+                        <SelectItem value="inst:uy">uy</SelectItem>
+                      </>
                     )}
                   </SelectContent>
                 </Select>
@@ -789,7 +902,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   })()}
                 </div>
                 <div className="text-xs text-gray-500">
-                  {meanMode ? "Mean Statistics Mode" : `Frame ${index}`}
+                  {isMeanVar ? "Mean Statistics Mode" : `Frame ${index}`}
                 </div>
               </div>
             </div>
@@ -812,7 +925,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 onClick={e => { if (datumMode) handleImageClick(e); }}
               >
                 {/* Frame navigation arrows - Only show when frame navigation is available */}
-                {hasFrameNavigation && !meanMode && (
+                {hasFrameNavigation && (
                   <>
                     <Button
                       size="sm"
@@ -882,8 +995,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 )}
               </div>
 
-              {/* Frame controls - Hidden for ensemble and statistics */}
-              {maxFrameCount > 0 && hasFrameNavigation && !meanMode && (
+              {/* Frame controls - Hidden for ensemble, statistics, and mean variables */}
+              {maxFrameCount > 0 && hasFrameNavigation && (
                 <div className="flex flex-col md:flex-row items-center justify-center gap-4 p-4 bg-gray-50 border rounded-lg">
                   {/* Frame slider + numeric input */}
                   <div className="flex items-center gap-3 flex-1 w-full">
@@ -1052,7 +1165,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             </div>
 
             {/* Coordinates Panel - Only for calibrated data */}
-            {showCoordinates && canEditCoordinates && !meanMode && (
+            {showCoordinates && canEditCoordinates && !isMeanVar && (
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
                 <h3 className="text-lg font-semibold text-blue-900">Coordinate System</h3>
 
@@ -1208,43 +1321,53 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       </div>
                     </div>
 
-                    <div>
-                      <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras:</label>
+                    {/* Gamma Radius Setting */}
+                    <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
+                      <label className="text-xs font-medium text-gray-700">Gamma Radius:</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={gammaRadius}
+                        onChange={e => setGammaRadius(Math.max(1, Number(e.target.value)))}
+                        className="w-20 h-8 text-sm"
+                      />
+                      <span className="text-xs text-gray-500">(grid points for vortex detection)</span>
+                    </div>
+
+                    {/* Data Source Selection */}
+                    <div className="space-y-2 pt-2 border-t border-gray-100">
+                      <label className="text-xs font-medium text-gray-700 block">Data Sources to Process:</label>
                       <div className="flex flex-wrap gap-2">
-                        {cameraOptions.map((cam: number) => (
-                          <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
+                        {/* Individual Cameras Toggle */}
+                        <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
+                          <input
+                            type="checkbox"
+                            checked={processCameras}
+                            onChange={e => setProcessCameras(e.target.checked)}
+                            className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                          />
+                          <span className="font-medium">Individual Cameras ({cameraOptions.length})</span>
+                        </label>
+
+                        {/* Merged Data Toggle - Only show if merged data exists */}
+                        {availableDataSources.merged_instantaneous?.exists && (
+                          <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
                             <input
                               type="checkbox"
-                              checked={selectedCameras.includes(String(cam))}
-                              onChange={e => {
-                                if (e.target.checked) {
-                                  setSelectedCameras([...selectedCameras, String(cam)]);
-                                } else {
-                                  setSelectedCameras(selectedCameras.filter((c: string) => c !== String(cam)));
-                                }
-                              }}
-                              className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                              checked={processMerged}
+                              onChange={e => setProcessMerged(e.target.checked)}
+                              className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 focus:ring-2"
                             />
-                            <span className="font-medium">Cam {cam}</span>
+                            <span className="font-medium">Merged Data</span>
                           </label>
-                        ))}
+                        )}
                       </div>
                     </div>
 
-                    <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
-                      <input
-                        type="checkbox"
-                        checked={includeMerged}
-                        onChange={e => setIncludeMerged(e.target.checked)}
-                        className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                      />
-                      <span className="font-medium">Include Merged Data</span>
-                      <span className="text-xs text-gray-500">(if available)</span>
-                    </label>
-
                     <Button
                       onClick={calculateStatistics}
-                      disabled={calculating || (selectedCameras.length === 0 && !includeMerged)}
+                      disabled={calculating || (!processCameras && !processMerged)}
                       className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                       size="sm"
                     >
@@ -1336,7 +1459,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             )}
 
             {/* Transforms Panel - Only for calibrated data */}
-            {showTransforms && canTransform && imageSrc && !error && !meanMode && (
+            {showTransforms && canTransform && imageSrc && !error && !isMeanVar && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
 
@@ -1424,7 +1547,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             )}
 
             {/* Merging Panel - Only for calibrated instantaneous with multiple cameras */}
-            {showMerging && canMerge && cameraOptions.length > 1 && !meanMode && (
+            {showMerging && canMerge && cameraOptions.length > 1 && !isMeanVar && (
               <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg space-y-3">
                 <h3 className="text-lg font-semibold text-green-900">Merge Vectors</h3>
                 <p className="text-xs text-green-800">
@@ -1443,9 +1566,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               checked={selectedMergeCameras.includes(cam)}
                               onChange={e => {
                                 if (e.target.checked) {
-                                  setSelectedMergeCameras([...selectedMergeCameras, cam]);
+                                  updateMergeCameras([...selectedMergeCameras, cam]);
                                 } else {
-                                  setSelectedMergeCameras(selectedMergeCameras.filter(c => c !== cam));
+                                  updateMergeCameras(selectedMergeCameras.filter(c => c !== cam));
                                 }
                               }}
                               className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500"

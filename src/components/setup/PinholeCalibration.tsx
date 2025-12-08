@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
 import { usePinholeCalibration, FrameDetection } from "@/hooks/usePinholeCalibration";
@@ -49,6 +51,8 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     setNumImages,
     subfolder,
     setSubfolder,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
 
     // Grid params
     patternCols,
@@ -302,6 +306,28 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
               />
             </div>
           </div>
+
+          {/* IM7 Camera Subfolders Toggle */}
+          {imageType === "lavision_im7" && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="pinhole-use-camera-subfolders"
+                  checked={useCameraSubfolders}
+                  onCheckedChange={setUseCameraSubfolders}
+                />
+                <Label htmlFor="pinhole-use-camera-subfolders" className="text-sm">
+                  IM7 files in camera subfolders (one camera per file)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-10">
+                {useCameraSubfolders
+                  ? "Each .im7 file contains ONE camera only. Files expected in Cam1/, Cam2/ subfolders."
+                  : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
+                }
+              </p>
+            </div>
+          )}
 
           {/* macOS Warning for Unsupported Formats */}
           {isContainerFormat && isMacOS && (
@@ -612,6 +638,9 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                   Processing camera {vectorJobStatus.current_camera}
                   {vectorJobStatus.total_cameras > 0 && (
                     <span> ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)</span>
+                  )}
+                  {vectorJobStatus.current_camera && vectorJobStatus.camera_progress?.[vectorJobStatus.current_camera] && (
+                    <span> | Frames: {vectorJobStatus.camera_progress[vectorJobStatus.current_camera].current}/{vectorJobStatus.camera_progress[vectorJobStatus.current_camera].total}</span>
                   )}
                 </div>
               </div>

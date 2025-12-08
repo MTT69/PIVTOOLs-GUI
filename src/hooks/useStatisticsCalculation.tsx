@@ -1,4 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+// All valid statistic keys (1:1 mapping with config)
+const ALL_STAT_KEYS = [
+  "mean_velocity", "reynolds_stress", "normal_stress", "mean_tke",
+  "mean_vorticity", "mean_divergence", "inst_velocity", "inst_fluctuations",
+  "inst_vorticity", "inst_divergence", "inst_gamma"
+];
 
 export interface StatisticsJobDetails {
   status: string;
@@ -19,24 +26,47 @@ export interface StatisticsJobDetails {
 
 /**
  * Hook for managing statistics calculation state and operations.
+ * Syncs checkbox states and gamma_radius with config.yaml.
  * @param backendUrl The backend URL prefix
  * @param basePathIdx Current base path index
  * @param cameraOptions Array of available cameras (e.g., ["Cam1", "Cam2"])
  * @param imageCount Number of images to process
+ * @param config Config object containing statistics settings
  */
 export function useStatisticsCalculation(
   backendUrl: string = "/backend",
   basePathIdx: number = 0,
   cameraOptions: string[] = [],
-  imageCount: number = 1000
+  imageCount: number = 1000,
+  config?: any
 ) {
   // --- State Initialization ---
-  const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
-  const [includeMerged, setIncludeMerged] = useState<boolean>(false);
-  const [requestedStatistics, setRequestedStatistics] = useState<string[]>([]);
+  // Data source toggles - which data to process (cameras, merged, or both)
+  const [processCameras, setProcessCameras] = useState<boolean>(
+    config?.statistics?.process_cameras ?? true
+  );
+  const [processMerged, setProcessMerged] = useState<boolean>(
+    config?.statistics?.process_merged ?? false
+  );
+
+  // Initialize requestedStatistics from config enabled_methods (1:1 mapping)
+  const [requestedStatistics, setRequestedStatistics] = useState<string[]>(() => {
+    const enabledMethods = config?.statistics?.enabled_methods || {};
+    return ALL_STAT_KEYS.filter(key => enabledMethods[key] === true);
+  });
+
+  // Initialize gamma_radius from config
+  const [gammaRadius, setGammaRadius] = useState<number>(
+    config?.statistics?.gamma_radius ?? 5
+  );
+
   const [calculating, setCalculating] = useState<boolean>(false);
   const [statisticsJobId, setStatisticsJobId] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState<boolean>(false);
+
+  // Track if this is the initial mount (to skip sync on first render)
+  const isInitialMount = useRef(true);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // --- Job status hook ---
   const useStatisticsJobStatus = (jobId: string | null) => {
@@ -114,10 +144,74 @@ export function useStatisticsCalculation(
   // Get job status
   const { status: jobStatus, details: jobDetails } = useStatisticsJobStatus(statisticsJobId);
 
+  // --- Config sync function ---
+  const updateConfigStatistics = useCallback(async (
+    newRequestedStats: string[],
+    newGammaRadius: number,
+    newProcessCameras: boolean,
+    newProcessMerged: boolean
+  ) => {
+    // Build enabled_methods object (1:1 mapping)
+    const enabledMethods: Record<string, boolean> = {};
+    for (const key of ALL_STAT_KEYS) {
+      enabledMethods[key] = newRequestedStats.includes(key);
+    }
+
+    try {
+      await fetch(`${backendUrl}/update_config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          statistics: {
+            enabled_methods: enabledMethods,
+            gamma_radius: newGammaRadius,
+            process_cameras: newProcessCameras,
+            process_merged: newProcessMerged,
+          },
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to update config:", err);
+    }
+  }, [backendUrl]);
+
+  // --- Debounced config sync on state changes ---
+  useEffect(() => {
+    // Skip sync on initial mount
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    // Debounce config updates
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
+    syncTimeoutRef.current = setTimeout(() => {
+      updateConfigStatistics(requestedStatistics, gammaRadius, processCameras, processMerged);
+    }, 500);
+
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [requestedStatistics, gammaRadius, processCameras, processMerged, updateConfigStatistics]);
+
   // --- Calculate statistics function ---
+  // Processes cameras and/or merged data based on toggle settings
   const calculateStatistics = async () => {
-    if (selectedCameras.length === 0 && !includeMerged) {
-      alert("Please select at least one camera or merged data");
+    // Convert camera options to int array
+    const allCameras = cameraOptions.map((c: any) =>
+      typeof c === 'string' ? parseInt(c.replace("Cam", "")) : c
+    );
+
+    // Determine what to process based on toggles
+    const camerasToProcess = processCameras ? allCameras : [];
+    const shouldProcessMerged = processMerged;
+
+    if (camerasToProcess.length === 0 && !shouldProcessMerged) {
+      alert("Please select at least one data source to process (cameras or merged)");
       return;
     }
 
@@ -129,8 +223,8 @@ export function useStatisticsCalculation(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_path_idx: basePathIdx,
-          cameras: selectedCameras.map((c: string) => parseInt(c.replace("Cam", ""))),
-          include_merged: includeMerged,
+          cameras: camerasToProcess,
+          include_merged: shouldProcessMerged,
           image_count: imageCount,
           type_name: "instantaneous",
           endpoint: "",
@@ -162,17 +256,19 @@ export function useStatisticsCalculation(
 
   return {
     // State
-    selectedCameras,
-    includeMerged,
+    processCameras,
+    processMerged,
     requestedStatistics,
+    gammaRadius,
     calculating,
     statisticsJobId,
     showDialog,
 
     // Setters
-    setSelectedCameras,
-    setIncludeMerged,
+    setProcessCameras,
+    setProcessMerged,
     setRequestedStatistics,
+    setGammaRadius,
     setCalculating,
     setStatisticsJobId,
     setShowDialog,

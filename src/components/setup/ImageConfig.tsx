@@ -37,7 +37,7 @@ const isMultiCameraContainer = (imageType: string): boolean => {
 interface ImageConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  validation: { valid: boolean; error?: string; checked: boolean };
+  validation: { valid: boolean; error?: string; checked: boolean; suggested_pattern?: string | null };
   sectionsToShow?: ('core' | 'patterns')[];
 }
 
@@ -54,6 +54,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [nonTimeResolvedMode, setNonTimeResolvedMode] = useState<string>("ab_format"); // "ab_format" or "skip_frames"
   const [imageType, setImageType] = useState<string>("standard"); // "standard", "cine", "lavision_set", "lavision_im7"
+  const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false); // For IM7: one camera per file in subfolders
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -114,6 +115,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     setTimeResolved(!!images.time_resolved);
     setZeroBasedIndexing(!!images.zero_based_indexing);
     setCameraSubfolders(paths.camera_subfolders || []);
+    setUseCameraSubfoldersIM7(!!images.use_camera_subfolders);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
     // Detect image type from config or format pattern
@@ -186,6 +188,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         image_format: nextTimeResolved ? nextRawPatterns[0] : nextRawPatterns,
         vector_format: [nextVectorPattern],
         image_type: effectiveImageType,
+        use_camera_subfolders: useCameraSubfoldersIM7,
       },
       paths: {
         camera_count: camCount,
@@ -419,10 +422,78 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
               )}
 
-              {Number(numCameras) > 1 && isMultiCameraContainer(imageType) && (
+              {Number(numCameras) > 1 && imageType === "lavision_set" && (
                 <div className="mt-4 flex items-start gap-2 text-sm text-muted-foreground">
                   <Info className="h-4 w-4 mt-0.5 text-blue-500" />
-                  <p>LaVision formats (.set, .im7) store all cameras in a single file - no camera subfolders needed.</p>
+                  <p>LaVision .set files store all cameras in a single file - no camera subfolders needed.</p>
+                </div>
+              )}
+
+              {Number(numCameras) > 1 && imageType === "lavision_im7" && (
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="im7_use_camera_subfolders"
+                      checked={useCameraSubfoldersIM7}
+                      onCheckedChange={(checked) => {
+                        setUseCameraSubfoldersIM7(checked);
+                        // Immediate save with current values
+                        const camCount = Number(numCameras) || 1;
+                        const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
+                        const payload = {
+                          images: {
+                            num_images: numImages === "" ? null : Number(numImages),
+                            time_resolved: timeResolved,
+                            zero_based_indexing: zeroBasedIndexing,
+                            image_format: timeResolved ? rawPatterns[0] : rawPatterns,
+                            vector_format: [vectorPattern],
+                            image_type: imageType,
+                            use_camera_subfolders: checked,
+                          },
+                          paths: {
+                            camera_count: camCount,
+                            camera_numbers: cameraNumbers,
+                            camera_subfolders: cameraSubfolders,
+                          },
+                        };
+                        updateConfigBackend(payload);
+                      }}
+                    />
+                    <Label htmlFor="im7_use_camera_subfolders">
+                      IM7 files in camera subfolders (one camera per file)
+                    </Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground ml-6">
+                    {useCameraSubfoldersIM7
+                      ? "Each .im7 file contains ONE camera only. Files expected in Cam1/, Cam2/ subfolders."
+                      : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
+                    }
+                  </p>
+                  {useCameraSubfoldersIM7 && (
+                    <div className="ml-6">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Label>Camera Subfolders</Label>
+                        <span className="text-xs text-muted-foreground">(optional)</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Array.from({ length: Number(numCameras) }).map((_, i) => (
+                          <div key={i}>
+                            <Label htmlFor={`im7_cam_folder_${i}`} className="text-xs">Camera {i + 1}</Label>
+                            <Input
+                              id={`im7_cam_folder_${i}`}
+                              placeholder={`Cam${i + 1}`}
+                              value={cameraSubfolders[i] || ""}
+                              onChange={(e) => handleCameraSubfolderChange(i, e.target.value)}
+                              onBlur={saveCameraSubfolders}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Leave empty to use default "CamN" folders.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -653,7 +724,15 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   ))}
 
                   {/* Validation Status */}
-                  <ValidationAlert validation={validation} />
+                  <ValidationAlert
+                    validation={validation}
+                    onApplySuggestedPattern={(pattern) => {
+                      // Apply the suggested pattern
+                      const newPatterns = [pattern];
+                      setRawPatterns(newPatterns);
+                      saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+                    }}
+                  />
                   {!timeResolved && (
                     <Button
                       variant="outline"

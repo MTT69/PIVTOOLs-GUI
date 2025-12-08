@@ -52,6 +52,19 @@ export interface AvailableDataSources {
   merged_statistics: DataSourceAvailability;
 }
 
+// Grouped variables interface
+export interface GroupedVariables {
+  instantaneous: string[];      // From frame .mat files
+  instantaneous_stats: string[]; // From instantaneous_stats folder
+  mean_stats: string[];         // From mean_stats.mat
+}
+
+const defaultGroupedVars: GroupedVariables = {
+  instantaneous: [],
+  instantaneous_stats: [],
+  mean_stats: [],
+};
+
 // Default empty availability
 const defaultAvailability: AvailableDataSources = {
   uncalibrated_instantaneous: { exists: false, frame_count: 0, variables: [] },
@@ -69,7 +82,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [basePaths, setBasePaths] = useState<string[]>(() => config?.paths?.base_paths || []);
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
   const [index, setIndex] = useState<number>(1);
-  const [type, setType] = useState<string>("ux");
+  const [type, setType] = useState<string>("inst:ux");
   const [run, setRun] = useState<number>(1);
   const [lower, setLower] = useState<string>("");
   const [upper, setUpper] = useState<string>("");
@@ -93,7 +106,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   ylimMaxRef.current = ylimMax;
   plotTitleRef.current = plotTitle;
   const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ run: number; var: string; width?: number; height?: number; axes_bbox?: { left: number; top: number; width: number; height: number; png_width: number; png_height: number } } | null>(null);
+  const [meta, setMeta] = useState<{ run: number; var: string; width?: number; height?: number; axes_bbox?: { left: number; top: number; width: number; height: number; png_width: number; png_height: number; xlim?: [number, number]; ylim?: [number, number] } } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasRendered, setHasRendered] = useState<boolean>(false);
@@ -137,7 +150,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const canViewMerged = useMemo(() => !isUncalibrated, [isUncalibrated]);
   const canCalculateStatistics = useMemo(() => !isUncalibrated && !isEnsemble && !isStatistics, [isUncalibrated, isEnsemble, isStatistics]);
   const canViewStatistics = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
-  const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics, [isEnsemble, isStatistics]);
+  // For unified dropdown: check if current variable is from mean_stats
+  const isMeanVar = useMemo(() => type.startsWith('mean:'), [type]);
+  // hasFrameNavigation: hide frame controls for ensemble, statistics, AND mean variables
+  const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
 
   // Legacy compatibility - derived from dataSource
   const merged = isMerged;
@@ -172,6 +188,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [frameVars, setFrameVars] = useState<string[] | null>(null);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [frameVarsError, setFrameVarsError] = useState<string | null>(null);
+  // Grouped variables for unified dropdown
+  const [allVars, setAllVars] = useState<GroupedVariables>(defaultGroupedVars);
+  const [allVarsLoading, setAllVarsLoading] = useState(false);
   const [datumMode, setDatumMode] = useState<boolean>(false);
   const [xOffset, setXOffset] = useState<string>("0");
   const [yOffset, setYOffset] = useState<string>("0");
@@ -203,6 +222,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const prefetchBufferRef = useRef<Map<string, { image: string; meta: any }>>(new Map());
   const prefetchInProgressRef = useRef<Set<string>>(new Set());
 
+  // Helper to parse type value into source and variable name
+  // Format: "source:varname" or just "varname" (defaults to "inst")
+  const parseVarType = useCallback((typeVal: string): { varSource: string; varName: string } => {
+    if (typeVal.includes(':')) {
+      const [src, ...rest] = typeVal.split(':');
+      return { varSource: src, varName: rest.join(':') };
+    }
+    return { varSource: 'inst', varName: typeVal };
+  }, []);
+
   // Functions
   const fetchImage = useCallback(async () => {
     setLoading(true);
@@ -210,10 +239,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       const basePath = effectiveDir;
       if (!basePath) throw new Error("Please provide a base path");
+
+      // Parse the type to get source and variable name
+      const { varSource, varName } = parseVarType(type);
+
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", String(index));
-      params.set("var", type);
+      params.set("var", varName);
+      params.set("var_source", varSource);
       params.set("cmap", cmap);
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
@@ -245,9 +279,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const parsed = Number(json.meta.run);
         if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
       }
-      if (json.meta && json.meta.var != null && typeof json.meta.var === "string") {
-        if (json.meta.var !== type) setType(json.meta.var);
-      }
+      // Don't override type from meta when using prefixed types
       return true;
     } catch (e: any) {
       setError(e.message || "Unknown error");
@@ -255,7 +287,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType]);
 
   // Prefetch a single frame for smooth playback
   const prefetchFrame = useCallback(async (frameIdx: number) => {
@@ -484,7 +516,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || `Failed to fetch stat vars (${res.status})`);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
       setStatVars(vars);
-      if (vars.length > 0) setType(prev => vars.includes(prev) ? prev : vars[0]);
+      // Note: Don't auto-select here - unified dropdown handles variable selection
     } catch (e: any) {
       setStatVarsError(e?.message ?? "Unknown error");
       setStatVars(null);
@@ -511,14 +543,46 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || `Failed to fetch frame vars (${res.status})`);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
       setFrameVars(vars);
-      if (vars.length > 0) setType(prev => (vars.includes(prev) ? prev : vars[0]));
+      // Note: Don't auto-select here - unified dropdown handles variable selection
     } catch (e: any) {
       setFrameVarsError(e?.message ?? "Unknown error");
       setFrameVars(null);
     } finally {
       setFrameVarsLoading(false);
     }
-  }, [effectiveDir, index, camera, merged, isUncalibrated, backendUrl]);
+  }, [effectiveDir, camera, merged, isUncalibrated, backendUrl]); // Note: removed index - vars are same across frames
+
+  // Fetch all variables grouped by source (instantaneous, instantaneous_stats, mean_stats)
+  const fetchAllVars = useCallback(async () => {
+    setAllVarsLoading(true);
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) return;
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("frame", "1"); // Just check frame 1 - vars are same across all frames
+      params.set("camera", String(camera));
+      params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) {
+        console.error("Failed to fetch all vars:", json.error);
+        return;
+      }
+      const grouped: GroupedVariables = {
+        instantaneous: Array.isArray(json.instantaneous) ? json.instantaneous : [],
+        instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
+        mean_stats: Array.isArray(json.mean_stats) ? json.mean_stats : [],
+      };
+      setAllVars(grouped);
+    } catch (e: any) {
+      console.error("Error fetching all vars:", e?.message);
+    } finally {
+      setAllVarsLoading(false);
+    }
+  }, [effectiveDir, camera, merged, isUncalibrated, backendUrl]); // Note: removed index - vars are same across frames
 
   const fetchLimits = useCallback(async () => {
     setLimitsLoading(true);
@@ -633,11 +697,19 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   }, [meanMode, effectiveDir, camera, merged, fetchStatVars]);
 
   // Auto-fetch frame vars when configuration changes (not in mean mode)
+  // Note: removed index from deps - vars are same across all frames
   useEffect(() => {
     if (!meanMode && effectiveDir && !isEnsemble) {
       void fetchFrameVars();
     }
-  }, [meanMode, effectiveDir, camera, merged, index, isEnsemble, isUncalibrated, fetchFrameVars]);
+  }, [meanMode, effectiveDir, camera, merged, isEnsemble, isUncalibrated, fetchFrameVars]);
+
+  // Auto-fetch all grouped vars when configuration changes
+  useEffect(() => {
+    if (effectiveDir) {
+      void fetchAllVars();
+    }
+  }, [effectiveDir, camera, merged, isUncalibrated, fetchAllVars]);
 
   // Auto-render when we have a valid configuration
   useEffect(() => {
@@ -829,11 +901,18 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
     // Pass axis limits so backend can correctly map percentage to visible region
-    if (xlimMin.trim() !== "" && xlimMax.trim() !== "") {
+    // Prefer limits from plot metadata (actual rendered limits) over user-provided strings
+    if (meta?.axes_bbox?.xlim) {
+      params.set("xlim_min", String(meta.axes_bbox.xlim[0]));
+      params.set("xlim_max", String(meta.axes_bbox.xlim[1]));
+    } else if (xlimMin.trim() !== "" && xlimMax.trim() !== "") {
       params.set("xlim_min", String(Number(xlimMin)));
       params.set("xlim_max", String(Number(xlimMax)));
     }
-    if (ylimMin.trim() !== "" && ylimMax.trim() !== "") {
+    if (meta?.axes_bbox?.ylim) {
+      params.set("ylim_min", String(meta.axes_bbox.ylim[0]));
+      params.set("ylim_max", String(meta.axes_bbox.ylim[1]));
+    } else if (ylimMin.trim() !== "" && ylimMax.trim() !== "") {
       params.set("ylim_min", String(Number(ylimMin)));
       params.set("ylim_max", String(Number(ylimMax)));
     }
@@ -847,7 +926,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax]);
+  }, [backendUrl, effectiveDir, camera, index, type, run, merged, meanMode, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -1282,6 +1361,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     statVarsLoading,
     frameVars,
     frameVarsLoading,
+    // Grouped variables for unified dropdown
+    allVars,
+    allVarsLoading,
+    fetchAllVars,
     datumMode,
     setDatumMode,
     xOffset,
@@ -1327,6 +1410,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     availableDataSources,
     availabilityLoading,
     fetchAvailableDataSources,
+    fetchStatVars,
+    fetchFrameVars,
     // Derived feature flags
     isEnsemble,
     isMerged,
@@ -1338,6 +1423,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     canCalculateStatistics,
     canViewStatistics,
     hasFrameNavigation,
+    // Unified variable dropdown support
+    isMeanVar,
+    parseVarType,
     // Ensemble specific
     fetchEnsembleImage,
     fetchCurrentView,

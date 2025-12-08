@@ -1,4 +1,5 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 interface ValidationAlertProps {
@@ -6,14 +7,17 @@ interface ValidationAlertProps {
     valid: boolean;
     checked: boolean;
     error?: string | null;
+    suggested_pattern?: string | null;
   };
   /** Custom success message to display instead of default */
   customSuccessMessage?: string;
   /** Optional count of found items to display */
   foundCount?: number | string;
+  /** Callback when user clicks to apply suggested pattern */
+  onApplySuggestedPattern?: (pattern: string) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, onApplySuggestedPattern }: ValidationAlertProps) {
   // Checking state
   if (!validation.checked && validation.error) {
     return (
@@ -52,6 +56,19 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount }
         <AlertTitle>Validation Failed</AlertTitle>
         <AlertDescription className="text-sm">
           {validation.error}
+          {validation.suggested_pattern && onApplySuggestedPattern && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-muted-foreground">Did you mean:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onApplySuggestedPattern(validation.suggested_pattern!)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
+              >
+                {validation.suggested_pattern}
+              </Button>
+            </div>
+          )}
         </AlertDescription>
       </Alert>
     );

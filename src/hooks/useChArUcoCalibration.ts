@@ -276,14 +276,7 @@ export function useChArUcoCalibration(
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           camera: camera,
-          // file_pattern removed - backend uses unified calibration.image_format from config
-          squares_h: Number(squaresH),
-          squares_v: Number(squaresV),
-          square_size: Number(squareSize),
-          marker_ratio: Number(markerRatio),
-          aruco_dict: arucoDict,
-          min_corners: Number(minCorners),
-          dt: Number(dt),
+          // Board parameters read from config by backend (saved via auto-save above)
         })
       });
       const result = await response.json();
@@ -309,14 +302,7 @@ export function useChArUcoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
-          // file_pattern removed - backend uses unified calibration.image_format from config
-          squares_h: Number(squaresH),
-          squares_v: Number(squaresV),
-          square_size: Number(squareSize),
-          marker_ratio: Number(markerRatio),
-          aruco_dict: arucoDict,
-          min_corners: Number(minCorners),
-          dt: Number(dt),
+          // Board parameters read from config by backend (saved via auto-save above)
         })
       });
       const result = await response.json();

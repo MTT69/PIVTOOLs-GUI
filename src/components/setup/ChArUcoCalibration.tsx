@@ -675,6 +675,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               {vectorJobStatus.total_cameras > 0 && (
                 <span> ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)</span>
               )}
+              {vectorJobStatus.current_camera && vectorJobStatus.camera_progress?.[vectorJobStatus.current_camera] && (
+                <span> | Frames: {vectorJobStatus.camera_progress[vectorJobStatus.current_camera].current}/{vectorJobStatus.camera_progress[vectorJobStatus.current_camera].total}</span>
+              )}
             </div>
           </div>
         )}

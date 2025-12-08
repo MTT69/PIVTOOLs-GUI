@@ -4,6 +4,7 @@ interface ValidationState {
   valid: boolean;
   error?: string;
   checked: boolean;
+  suggested_pattern?: string | null;
 }
 
 export function useConfigUpdate() {
@@ -142,6 +143,7 @@ export function useAutoValidation(config: any) {
             const details = json.details || {};
             const errors: string[] = [];
             const warnings: string[] = [];
+            let suggestedPattern: string | null = null;
 
             Object.entries(details).forEach(([key, value]: [string, any]) => {
               if (value.status === 'error') {
@@ -151,6 +153,10 @@ export function useAutoValidation(config: any) {
                     ? `Found ${value.actual_count}/${value.expected_count} files`
                     : 'Cannot read files');
                 errors.push(`${key}: ${errorDetail}`);
+                // Capture first suggested pattern from any camera
+                if (value.suggested_pattern && !suggestedPattern) {
+                  suggestedPattern = value.suggested_pattern;
+                }
               } else if (value.status === 'warning') {
                 const expected = value.expected_count || 0;
                 const actual = value.actual_count || 0;
@@ -163,7 +169,7 @@ export function useAutoValidation(config: any) {
               ...warnings,
             ].join('; ') || 'Image files not found';
 
-            setValidation({ valid: false, checked: true, error: errorMsg });
+            setValidation({ valid: false, checked: true, error: errorMsg, suggested_pattern: suggestedPattern });
           }
         } else {
           const json = await res.json();

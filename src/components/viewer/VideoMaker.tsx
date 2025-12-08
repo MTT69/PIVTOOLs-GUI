@@ -46,8 +46,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     videoReady,
     videoError,
     effectiveDir,
-    // New state
-    ffmpegStatus,
+    // Data source state
     dataSourcesLoading,
     dataSource,
     setDataSource,
@@ -57,6 +56,9 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     availableRuns,
     highestRun,
     runsLoading,
+    // Variables state
+    availableVariables,
+    variablesLoading,
     // Functions
     handleBrowse,
     onDirPicked,
@@ -70,7 +72,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
   } = useVideoMaker(backendUrl, config);
 
   // Determine if video creation is disabled
-  const videoCreationDisabled = !ffmpegStatus.installed || !hasAnyData || creating || videoStatus?.processing;
+  const videoCreationDisabled = !hasAnyData || creating || videoStatus?.processing;
 
   return (
     <div className="space-y-6">
@@ -121,26 +123,6 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               </TabsList>
               
               <TabsContent value="create" className="pt-4">
-                {/* FFmpeg warning */}
-                {ffmpegStatus.loading ? (
-                  <div className="p-3 mb-4 rounded border border-gray-200 bg-gray-50 text-gray-600 text-sm">
-                    Checking ffmpeg installation...
-                  </div>
-                ) : !ffmpegStatus.installed && (
-                  <div className="p-3 mb-4 rounded border border-amber-200 bg-amber-50 text-amber-800 text-sm">
-                    <div className="font-medium mb-1">FFmpeg Not Installed</div>
-                    <p>FFmpeg is required to create videos. Please install it:</p>
-                    <ul className="mt-2 ml-4 list-disc text-xs">
-                      <li><strong>macOS:</strong> <code className="bg-amber-100 px-1 rounded">brew install ffmpeg</code></li>
-                      <li><strong>Ubuntu/Debian:</strong> <code className="bg-amber-100 px-1 rounded">sudo apt install ffmpeg</code></li>
-                      <li><strong>Windows:</strong> Download from <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">ffmpeg.org</a></li>
-                    </ul>
-                    {ffmpegStatus.error && (
-                      <p className="mt-2 text-xs text-amber-600">Error: {ffmpegStatus.error}</p>
-                    )}
-                  </div>
-                )}
-
                 {/* No data warning */}
                 {!dataSourcesLoading && !hasAnyData && effectiveDir && (
                   <div className="p-3 mb-4 rounded border border-red-200 bg-red-50 text-red-700 text-sm">
@@ -189,15 +171,34 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Type (variable)</label>
-                    <Select value={type} onValueChange={v => setType(v)}>
-                      <SelectTrigger id="type"><SelectValue placeholder="Select type" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ux">ux</SelectItem>
-                        <SelectItem value="uy">uy</SelectItem>
-                        <SelectItem value="mag">mag</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <label className="text-sm font-medium">Variable</label>
+                    {variablesLoading ? (
+                      <span className="text-sm text-gray-500">Loading...</span>
+                    ) : (
+                      <Select value={type} onValueChange={v => setType(v)}>
+                        <SelectTrigger id="type"><SelectValue placeholder="Select variable" /></SelectTrigger>
+                        <SelectContent>
+                          {/* PIV Variables */}
+                          {availableVariables.filter(v => v.group === 'piv').length > 0 && (
+                            <>
+                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50">PIV Data</div>
+                              {availableVariables.filter(v => v.group === 'piv').map(v => (
+                                <SelectItem key={v.name} value={v.name}>{v.label}</SelectItem>
+                              ))}
+                            </>
+                          )}
+                          {/* Stats Variables */}
+                          {availableVariables.filter(v => v.group === 'stats').length > 0 && (
+                            <>
+                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50 mt-1">Computed Statistics</div>
+                              {availableVariables.filter(v => v.group === 'stats').map(v => (
+                                <SelectItem key={v.name} value={v.name}>{v.label}</SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -379,7 +380,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                       variant="outline"
                       onClick={() => handleCreateVideo(true)}
                       disabled={videoCreationDisabled}
-                      title={!ffmpegStatus.installed ? "FFmpeg is required" : !hasAnyData ? "No data available" : undefined}
+                      title={!hasAnyData ? "No data available" : undefined}
                     >
                       Test Video (50 frames)
                     </Button>
@@ -387,7 +388,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                       className="bg-soton-blue"
                       onClick={() => handleCreateVideo(false)}
                       disabled={videoCreationDisabled}
-                      title={!ffmpegStatus.installed ? "FFmpeg is required" : !hasAnyData ? "No data available" : undefined}
+                      title={!hasAnyData ? "No data available" : undefined}
                     >
                       {creating ? "Starting..." : videoStatus?.processing ? "Processing..." : "Create Full Video"}
                     </Button>
