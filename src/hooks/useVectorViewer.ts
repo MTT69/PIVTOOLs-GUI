@@ -1239,7 +1239,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         // Reload the image
         await handleRender();
       } else {
-        setError(result.error || "Clear transforms failed");
+        // Handle "No original backup" gracefully - this happens after batch apply
+        const errorMsg = result.error || "Clear transforms failed";
+        if (errorMsg.includes("No original backup") || errorMsg.includes("nothing to undo")) {
+          // Just clear the UI list silently - the data is already permanently transformed
+          setAppliedTransforms([]);
+          // Still reload the image to ensure display is current
+          await handleRender();
+        } else {
+          setError(errorMsg);
+        }
       }
     } catch (e: any) {
       setError(`Clear transforms failed: ${e?.message ?? "Unknown error"}`);
@@ -1247,6 +1256,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setLoading(false);
     }
   }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+
+  // Clear the operations list without calling backend (just UI state)
+  const clearOperationsList = useCallback(() => {
+    setAppliedTransforms([]);
+  }, []);
 
   const [transformationJob, setTransformationJob] = useState<{
     job_id: string;
@@ -1409,6 +1423,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     appliedTransforms,
     setAppliedTransforms,
     clearTransforms,
+    clearOperationsList,
     effectiveDir,
     prefetchSurrounding,
     // New data source management

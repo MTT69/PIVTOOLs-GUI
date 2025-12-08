@@ -130,13 +130,18 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
   const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
     setVectorTypeName(value);
     try {
-      await fetch('/backend/update_config', {
+      const res = await fetch('/backend/update_config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           calibration: { piv_type: value }
         })
       });
+      const json = await res.json();
+      if (res.ok && json.updated?.calibration) {
+        // Sync parent config state so other tabs see the update
+        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+      }
     } catch (e) {
       console.error('Failed to save piv_type:', e);
     }

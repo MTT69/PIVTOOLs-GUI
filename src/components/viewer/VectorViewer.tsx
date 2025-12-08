@@ -13,13 +13,12 @@ const AVAILABLE_STATISTICS = {
     { id: "mean_velocity", label: "Mean Velocity" },
     { id: "mean_vorticity", label: "Mean Vorticity" },
     { id: "mean_divergence", label: "Mean Divergence" },
-    { id: "reynolds_stress", label: "Reynolds Stress" },
-    { id: "normal_stress", label: "Normal Stress" },
+    { id: "mean_stresses", label: "Stresses" },  // Full stress tensor (uu, vv, uv + ww, uw, vw for stereo)
     { id: "mean_tke", label: "Mean TKE" },
   ],
   instantaneous: [
     { id: "inst_velocity", label: "Inst. Velocity" },
-    { id: "inst_fluctuations", label: "Inst. Fluctuations" },
+    { id: "inst_stresses", label: "Inst. Stresses" },  // Per-frame stress tensor
     { id: "inst_vorticity", label: "Inst. Vorticity" },
     { id: "inst_divergence", label: "Inst. Divergence" },
     { id: "inst_gamma", label: "Inst. Gamma" },
@@ -31,9 +30,18 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean'):
   // Special formatting for known variables
   const specialLabels: Record<string, Record<string, string>> = {
     inst_stat: {
+      // Instantaneous stress tensor components
+      uu_inst: "u'u'",
+      vv_inst: "v'v'",
+      ww_inst: "w'w'",
+      uv_inst: "u'v'",
+      uw_inst: "u'w'",
+      vw_inst: "v'w'",
+      // Legacy fluctuations (backward compat)
       u_prime: "u'",
       v_prime: "v'",
       w_prime: "w'",
+      // Other instantaneous stats
       gamma1: "γ₁",
       gamma2: "γ₂",
       vorticity: "ω",
@@ -295,6 +303,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     appliedTransforms,
     setAppliedTransforms,
     clearTransforms,
+    clearOperationsList,
     MAG_SIZE,
     dpr,
     effectiveDir,
@@ -1115,8 +1124,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - Only for calibrated data */}
-              {canTransform && (
+              {/* Transforms - Only for calibrated data, not for merged or statistics */}
+              {canTransform && !isMerged && !isStatistics && (
                 <Button
                   variant={showTransforms ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
@@ -1448,8 +1457,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Transforms Panel - Only for calibrated data */}
-            {showTransforms && canTransform && imageSrc && !error && !isMeanVar && (
+            {/* Transforms Panel - Only for calibrated data, not for merged or statistics */}
+            {showTransforms && canTransform && imageSrc && !error && !isMerged && !isStatistics && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
 
@@ -1586,11 +1595,21 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </Button>
                     <Button
                       size="default"
+                      variant="outline"
+                      onClick={clearOperationsList}
+                      disabled={appliedTransforms.length === 0}
+                      title="Clear the pending operations list without modifying files"
+                    >
+                      Clear List
+                    </Button>
+                    <Button
+                      size="default"
                       variant="destructive"
                       onClick={clearTransforms}
                       disabled={loading}
+                      title="Undo transforms from current frame (restores original data)"
                     >
-                      Clear Transforms
+                      Undo Frame
                     </Button>
                   </div>
                 </div>

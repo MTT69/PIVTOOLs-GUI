@@ -8,6 +8,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVideoMaker } from "@/hooks/useVideoMaker";
 
+// Variable label formatting helper (matches VectorViewer formatting)
+const formatVarLabel = (varName: string, group: 'piv' | 'stats'): string => {
+  const specialLabels: Record<string, string> = {
+    u_prime: "u'",
+    v_prime: "v'",
+    w_prime: "w'",
+    gamma1: "γ₁",
+    gamma2: "γ₂",
+    vorticity: "ω (Vorticity)",
+    divergence: "∇·u (Divergence)",
+  };
+
+  if (group === 'stats' && specialLabels[varName]) {
+    return specialLabels[varName];
+  }
+  return varName;
+};
+
 export default function VideoMaker({ backendUrl = '/backend', config }: { backendUrl?: string; config?: any }) {
   const {
     directory,
@@ -192,7 +210,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                             <>
                               <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50 mt-1">Computed Statistics</div>
                               {availableVariables.filter(v => v.group === 'stats').map(v => (
-                                <SelectItem key={v.name} value={v.name}>{v.label}</SelectItem>
+                                <SelectItem key={v.name} value={v.name}>{formatVarLabel(v.name, 'stats')}</SelectItem>
                               ))}
                             </>
                           )}

@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 // All valid statistic keys (1:1 mapping with config)
 const ALL_STAT_KEYS = [
-  "mean_velocity", "reynolds_stress", "normal_stress", "mean_tke",
-  "mean_vorticity", "mean_divergence", "inst_velocity", "inst_fluctuations",
+  "mean_velocity", "mean_stresses", "mean_tke",
+  "mean_vorticity", "mean_divergence", "inst_velocity", "inst_stresses",
   "inst_vorticity", "inst_divergence", "inst_gamma"
 ];
 
@@ -24,11 +24,18 @@ export interface StatisticsJobDetails {
   }>;
 }
 
+// Path info interface for CameraSelector
+interface PathInfo {
+  source: string;
+  base: string;
+}
+
 /**
  * Hook for managing statistics calculation state and operations.
  * Syncs checkbox states and gamma_radius with config.yaml.
+ * Supports multi-path batch processing.
  * @param backendUrl The backend URL prefix
- * @param basePathIdx Current base path index
+ * @param basePathIdx Current base path index (legacy, for backward compatibility)
  * @param cameraOptions Array of available cameras (e.g., ["Cam1", "Cam2"])
  * @param imageCount Number of images to process
  * @param config Config object containing statistics settings
@@ -41,13 +48,51 @@ export function useStatisticsCalculation(
   config?: any
 ) {
   // --- State Initialization ---
-  // Data source toggles - which data to process (cameras, merged, or both)
-  const [processCameras, setProcessCameras] = useState<boolean>(
-    config?.statistics?.process_cameras ?? true
+  // Multi-path selection
+  const [activePaths, setActivePaths] = useState<number[]>(() => {
+    const configPaths = config?.statistics?.active_paths;
+    if (Array.isArray(configPaths) && configPaths.length > 0) {
+      return configPaths;
+    }
+    return [basePathIdx];
+  });
+
+  // Build paths array for CameraSelector
+  const paths: PathInfo[] = useMemo(() => {
+    const basePaths = config?.paths?.base_paths || [];
+    const sourcePaths = config?.paths?.source_paths || [];
+    return basePaths.map((base: string, idx: number) => ({
+      base,
+      source: sourcePaths[idx] || base,
+    }));
+  }, [config?.paths?.base_paths, config?.paths?.source_paths]);
+
+  // Camera selection - which cameras to process
+  const [selectedCameras, setSelectedCameras] = useState<number[]>(() => {
+    const configCameras = config?.statistics?.cameras;
+    if (Array.isArray(configCameras) && configCameras.length > 0) {
+      return configCameras;
+    }
+    // Default to all cameras
+    return cameraOptions.map((c: string) => parseInt(c.replace("Cam", "")));
+  });
+
+  // Data source toggles - whether to include merged data
+  const [includeMerged, setIncludeMerged] = useState<boolean>(
+    config?.statistics?.include_merged ?? false
   );
-  const [processMerged, setProcessMerged] = useState<boolean>(
-    config?.statistics?.process_merged ?? false
-  );
+
+  // Legacy compatibility aliases
+  const processCameras = selectedCameras.length > 0;
+  const processMerged = includeMerged;
+  const setProcessCameras = (value: boolean) => {
+    if (value && selectedCameras.length === 0) {
+      setSelectedCameras(cameraOptions.map((c: string) => parseInt(c.replace("Cam", ""))));
+    } else if (!value) {
+      setSelectedCameras([]);
+    }
+  };
+  const setProcessMerged = setIncludeMerged;
 
   // Initialize requestedStatistics from config enabled_methods (1:1 mapping)
   const [requestedStatistics, setRequestedStatistics] = useState<string[]>(() => {
@@ -148,8 +193,9 @@ export function useStatisticsCalculation(
   const updateConfigStatistics = useCallback(async (
     newRequestedStats: string[],
     newGammaRadius: number,
-    newProcessCameras: boolean,
-    newProcessMerged: boolean
+    newActivePaths: number[],
+    newSelectedCameras: number[],
+    newIncludeMerged: boolean
   ) => {
     // Build enabled_methods object (1:1 mapping)
     const enabledMethods: Record<string, boolean> = {};
@@ -165,8 +211,9 @@ export function useStatisticsCalculation(
           statistics: {
             enabled_methods: enabledMethods,
             gamma_radius: newGammaRadius,
-            process_cameras: newProcessCameras,
-            process_merged: newProcessMerged,
+            active_paths: newActivePaths,
+            cameras: newSelectedCameras,
+            include_merged: newIncludeMerged,
           },
         }),
       });
@@ -188,7 +235,7 @@ export function useStatisticsCalculation(
       clearTimeout(syncTimeoutRef.current);
     }
     syncTimeoutRef.current = setTimeout(() => {
-      updateConfigStatistics(requestedStatistics, gammaRadius, processCameras, processMerged);
+      updateConfigStatistics(requestedStatistics, gammaRadius, activePaths, selectedCameras, includeMerged);
     }, 500);
 
     return () => {
@@ -196,22 +243,19 @@ export function useStatisticsCalculation(
         clearTimeout(syncTimeoutRef.current);
       }
     };
-  }, [requestedStatistics, gammaRadius, processCameras, processMerged, updateConfigStatistics]);
+  }, [requestedStatistics, gammaRadius, activePaths, selectedCameras, includeMerged, updateConfigStatistics]);
 
   // --- Calculate statistics function ---
   // Processes cameras and/or merged data based on toggle settings
+  // Now supports multi-path batch processing
   const calculateStatistics = async () => {
-    // Convert camera options to int array
-    const allCameras = cameraOptions.map((c: any) =>
-      typeof c === 'string' ? parseInt(c.replace("Cam", "")) : c
-    );
-
-    // Determine what to process based on toggles
-    const camerasToProcess = processCameras ? allCameras : [];
-    const shouldProcessMerged = processMerged;
-
-    if (camerasToProcess.length === 0 && !shouldProcessMerged) {
+    if (selectedCameras.length === 0 && !includeMerged) {
       alert("Please select at least one data source to process (cameras or merged)");
+      return;
+    }
+
+    if (activePaths.length === 0) {
+      alert("Please select at least one path to process");
       return;
     }
 
@@ -222,12 +266,11 @@ export function useStatisticsCalculation(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          base_path_idx: basePathIdx,
-          cameras: camerasToProcess,
-          include_merged: shouldProcessMerged,
+          active_paths: activePaths,
+          cameras: selectedCameras,
+          include_merged: includeMerged,
           image_count: imageCount,
           type_name: "instantaneous",
-          endpoint: "",
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
       });
@@ -240,7 +283,7 @@ export function useStatisticsCalculation(
       const data = await res.json();
       setStatisticsJobId(data.parent_job_id);
       setShowDialog(false);
-      console.log(`Statistics calculation started! Job ID: ${data.parent_job_id}`);
+      console.log(`Statistics calculation started! Job ID: ${data.parent_job_id}, processing ${data.processed_targets} targets across ${activePaths.length} path(s)`);
     } catch (err: any) {
       console.error("Error starting statistics calculation:", err);
       alert(`Error: ${err.message}`);
@@ -254,10 +297,27 @@ export function useStatisticsCalculation(
     setCalculating(false);
   };
 
+  // Camera count for CameraSelector
+  const cameraCount = cameraOptions.length;
+
   return {
-    // State
+    // Batch state (new)
+    activePaths,
+    setActivePaths,
+    paths,
+    selectedCameras,
+    setSelectedCameras,
+    includeMerged,
+    setIncludeMerged,
+    cameraCount,
+
+    // Legacy state (for backward compatibility)
     processCameras,
     processMerged,
+    setProcessCameras,
+    setProcessMerged,
+
+    // Statistics options
     requestedStatistics,
     gammaRadius,
     calculating,
@@ -265,8 +325,6 @@ export function useStatisticsCalculation(
     showDialog,
 
     // Setters
-    setProcessCameras,
-    setProcessMerged,
     setRequestedStatistics,
     setGammaRadius,
     setCalculating,

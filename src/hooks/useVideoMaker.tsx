@@ -22,12 +22,75 @@ export interface VariableInfo {
   group: 'piv' | 'stats';
 }
 
+// Path info interface for CameraSelector
+interface PathInfo {
+  source: string;
+  base: string;
+}
+
+// Batch job status interface
+interface BatchJobStatus {
+  parent_job_id: string;
+  sub_jobs: Array<{
+    job_id: string;
+    type: string;
+    path_idx: number;
+    label: string;
+  }>;
+  overall_progress: number;
+  status: string;
+  sub_job_statuses?: Array<{
+    status: string;
+    progress: number;
+    label: string;
+    out_path?: string;
+  }>;
+}
+
 export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Directory / base paths - now from config instead of localStorage
   const [directory, setDirectory] = useState<string>('');
   const dirInputRef = useRef<HTMLInputElement | null>(null);
   const basePaths = useMemo(() => config?.paths?.base_paths || [], [config]);
+  const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const [basePathIdx, setBasePathIdx] = useState<number>(0);
+
+  // Multi-path batch selection
+  const [activePaths, setActivePaths] = useState<number[]>(() => {
+    const configPaths = config?.video?.active_paths;
+    if (Array.isArray(configPaths) && configPaths.length > 0) {
+      return configPaths;
+    }
+    return [0];
+  });
+
+  // Build paths array for CameraSelector
+  const paths: PathInfo[] = useMemo(() => {
+    return basePaths.map((base: string, idx: number) => ({
+      base,
+      source: sourcePaths[idx] || base,
+    }));
+  }, [basePaths, sourcePaths]);
+
+  // Multi-camera selection for batch
+  const [selectedCameras, setSelectedCameras] = useState<number[]>(() => {
+    const configCameras = config?.video?.cameras;
+    if (Array.isArray(configCameras) && configCameras.length > 0) {
+      return configCameras;
+    }
+    return config?.paths?.camera_numbers || [1];
+  });
+
+  // Include merged data in batch
+  const [includeMerged, setIncludeMerged] = useState<boolean>(
+    config?.video?.include_merged ?? false
+  );
+
+  // Batch mode toggle
+  const [batchMode, setBatchMode] = useState<boolean>(false);
+
+  // Batch job status
+  const [batchJobStatus, setBatchJobStatus] = useState<BatchJobStatus | null>(null);
 
   // Camera options derived from config
   const cameraOptions: string[] = useMemo(() => {
@@ -451,6 +514,113 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     }
   };
 
+  // Handle batch video creation (multi-path + multi-camera)
+  const handleCreateBatchVideo = async (isTest: boolean = false) => {
+    if (selectedCameras.length === 0 && !includeMerged) {
+      alert('Please select at least one camera or enable merged data');
+      return;
+    }
+
+    if (activePaths.length === 0) {
+      alert('Please select at least one path');
+      return;
+    }
+
+    setCreating(true);
+    setVideoResult(null);
+    setVideoStatus(null);
+    setBatchJobStatus(null);
+
+    try {
+      const params: any = {
+        active_paths: activePaths,
+        cameras: selectedCameras,
+        include_merged: includeMerged,
+        variable: type,
+        run: run,
+        data_source: dataSource,
+        fps: fps,
+        cmap: cmap,
+        lower: lower,
+        upper: upper,
+        resolution: resolution,
+      };
+
+      if (isTest) {
+        params.test_mode = true;
+        params.test_frames = 50;
+      }
+
+      const response = await fetch(`${backendUrl}/video/start_batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to start batch video creation');
+      }
+
+      const parentJobId = result.parent_job_id;
+      console.log(`Batch video creation started! Parent job: ${parentJobId}, ${result.processed_targets} targets`);
+
+      // Poll batch status
+      const pollBatchStatus = async () => {
+        try {
+          const statusRes = await fetch(`${backendUrl}/video/batch_status/${parentJobId}`);
+          const statusData = await statusRes.json();
+
+          setBatchJobStatus(statusData);
+          setVideoStatus({
+            processing: statusData.status === 'running',
+            progress: statusData.overall_progress || 0,
+            status: statusData.status,
+            message: `Processing ${statusData.sub_job_statuses?.filter((s: any) => s.status === 'completed').length || 0}/${statusData.sub_job_statuses?.length || 0} videos`,
+          });
+
+          if (statusData.status === 'running' || statusData.status === 'starting') {
+            setTimeout(pollBatchStatus, 1000);
+          } else {
+            setCreating(false);
+            if (statusData.status === 'completed') {
+              const completedCount = statusData.sub_job_statuses?.filter((s: any) => s.status === 'completed').length || 0;
+              setVideoResult({
+                success: true,
+                message: `Batch complete! ${completedCount} video(s) created.`,
+              });
+              if (activeTab === 'browse') {
+                fetchAvailableVideos();
+              }
+            } else if (statusData.status === 'failed') {
+              setVideoResult({
+                success: false,
+                message: 'Some videos failed to create. Check sub-job statuses.',
+              });
+            }
+          }
+        } catch (err) {
+          console.error('Batch polling error:', err);
+          setCreating(false);
+          setVideoResult({
+            success: false,
+            message: 'Error polling batch status.',
+          });
+        }
+      };
+
+      pollBatchStatus();
+    } catch (error: any) {
+      console.error('Batch video error:', error);
+      setVideoResult({
+        success: false,
+        message: `Error: ${error.message}`,
+      });
+      setCreating(false);
+    }
+  };
+
   // Helper functions
   const basename = (p: string) => {
     if (!p) return "";
@@ -506,6 +676,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     setTimeout(() => setVideoReady(true), videoRetryDelay);
   }, []);
 
+  // Camera count for CameraSelector
+  const cameraCount = cameraOptions.length;
+
   return {
     // State
     directory,
@@ -560,11 +733,24 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     // Variables state
     availableVariables,
     variablesLoading,
+    // Batch state (new)
+    paths,
+    activePaths,
+    setActivePaths,
+    selectedCameras,
+    setSelectedCameras,
+    includeMerged,
+    setIncludeMerged,
+    batchMode,
+    setBatchMode,
+    batchJobStatus,
+    cameraCount,
     // Functions
     handleBrowse,
     onDirPicked,
     fetchAvailableVideos,
     handleCreateVideo,
+    handleCreateBatchVideo,
     handleCancelVideo,
     basename,
     createVideoUrl,
