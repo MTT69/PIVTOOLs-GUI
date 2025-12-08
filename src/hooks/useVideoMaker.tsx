@@ -306,22 +306,41 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     }
   };
 
-  // Build params
-  const buildParams = () => {
-    const params: any = {
-      base_path: effectiveDir,
+  // Update video config in config.yaml before creating video
+  const updateVideoConfig = async (): Promise<boolean> => {
+    const configParams = {
+      base_path_idx: basePathIdx,
       camera: camera,
-      var: type,
-      run: String(run),
-      data_source: dataSource,  // New: use dataSource instead of merged flag
-      cmap,
-      lower,
-      upper,
-      num_images: config?.images?.num_images || 0,
-      resolution,
-      fps: String(fps),
+      data_source: dataSource,
+      variable: type,
+      run: run,
+      piv_type: 'instantaneous',
+      cmap: cmap,
+      lower: lower,
+      upper: upper,
+      fps: fps,
+      resolution: resolution,
     };
-    return params;
+
+    try {
+      const response = await fetch(`${backendUrl}/video/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configParams),
+      });
+
+      if (!response.ok) {
+        console.error('Failed to update video config');
+        return false;
+      }
+
+      const result = await response.json();
+      console.log('Video config updated:', result.updated);
+      return true;
+    } catch (error) {
+      console.error('Error updating video config:', error);
+      return false;
+    }
   };
 
   // Handle video creation
@@ -329,9 +348,16 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     setCreating(true);
     setVideoResult(null);
     setVideoStatus(null);
-    
+
     try {
-      const params = buildParams();
+      // Step 1: Update config.yaml with current settings
+      const configUpdated = await updateVideoConfig();
+      if (!configUpdated) {
+        throw new Error('Failed to update video configuration');
+      }
+
+      // Step 2: Start video (backend reads params from config)
+      const params: any = { base_path_idx: basePathIdx };
       if (isTest) {
         params.test_mode = true;
         params.test_frames = 50;
