@@ -316,8 +316,8 @@ export default function CalibrationImageConfig({
               <Label htmlFor="calib-zero-based" className="text-sm">Zero-based indexing</Label>
             </div>
           )}
-          {/* Use camera subfolders toggle - for IM7 files in camera directories */}
-          {imageType === "lavision_im7" && (
+          {/* Use camera subfolders toggle - for standard and IM7 formats */}
+          {(imageType === "standard" || imageType === "lavision_im7") && (
             <div className="flex items-center gap-2">
               <Switch
                 id="calib-use-camera-subfolders"
@@ -328,22 +328,22 @@ export default function CalibrationImageConfig({
                 }}
               />
               <Label htmlFor="calib-use-camera-subfolders" className="text-sm">
-                IM7 files in camera subfolders
+                Use camera subfolders
               </Label>
             </div>
           )}
         </div>
-        {imageType === "lavision_im7" && (
+        {(imageType === "standard" || imageType === "lavision_im7") && (
           <p className="text-xs text-muted-foreground">
             {useCameraSubfolders
-              ? "Each .im7 file contains ONE camera only. Files expected in Cam1/, Cam2/ subfolders."
-              : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
+              ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+              : "Images in source directory without camera subfolders."
             }
           </p>
         )}
 
         {/* Path Order - only show when using camera subfolders */}
-        {(useCameraSubfolders || imageType === "standard") && (
+        {useCameraSubfolders && (
           <div className="space-y-3 pt-2">
             <div>
               <Label htmlFor="calib-path-order">Path Structure</Label>

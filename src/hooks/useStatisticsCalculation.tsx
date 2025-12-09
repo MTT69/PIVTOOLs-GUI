@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 // All valid statistic keys (1:1 mapping with config)
 const ALL_STAT_KEYS = [
@@ -24,75 +24,74 @@ export interface StatisticsJobDetails {
   }>;
 }
 
-// Path info interface for CameraSelector
-interface PathInfo {
-  source: string;
-  base: string;
+export interface StatisticsConstraints {
+  allowed_source_endpoints: string[];
+  workflow_options: string[];
+  current_workflow: string;
+  current_source_endpoint: string;
+  is_stereo: boolean;
 }
+
+export type StatsWorkflow = 'per_camera' | 'after_merge' | 'both' | 'stereo';
 
 /**
  * Hook for managing statistics calculation state and operations.
  * Syncs checkbox states and gamma_radius with config.yaml.
- * Supports multi-path batch processing.
+ *
+ * Simplified: Uses base_path_idx + process_merged (boolean) pattern.
+ * - process_merged=false: Processes all cameras from config.camera_numbers
+ * - process_merged=true: Processes merged data only
+ *
  * @param backendUrl The backend URL prefix
- * @param basePathIdx Current base path index (legacy, for backward compatibility)
- * @param cameraOptions Array of available cameras (e.g., ["Cam1", "Cam2"])
+ * @param basePathIdx Current base path index
+ * @param cameraOptions Array of available camera numbers (e.g., [1, 2, 3])
  * @param imageCount Number of images to process
  * @param config Config object containing statistics settings
  */
 export function useStatisticsCalculation(
   backendUrl: string = "/backend",
   basePathIdx: number = 0,
-  cameraOptions: string[] = [],
+  cameraOptions: number[] = [],
   imageCount: number = 1000,
   config?: any
 ) {
   // --- State Initialization ---
-  // Multi-path selection
-  const [activePaths, setActivePaths] = useState<number[]>(() => {
-    const configPaths = config?.statistics?.active_paths;
-    if (Array.isArray(configPaths) && configPaths.length > 0) {
-      return configPaths;
+
+  // Data source: false = all cameras, true = merged only (legacy)
+  const [processMerged, setProcessMerged] = useState<boolean>(false);
+
+  // Workflow mode: per_camera, after_merge, both, or stereo
+  const [workflow, setWorkflow] = useState<StatsWorkflow>(() => {
+    const configWorkflow = config?.statistics?.workflow;
+    if (configWorkflow && ['per_camera', 'after_merge', 'both', 'stereo'].includes(configWorkflow)) {
+      return configWorkflow as StatsWorkflow;
     }
-    return [basePathIdx];
+    return 'per_camera';
   });
 
-  // Build paths array for CameraSelector
-  const paths: PathInfo[] = useMemo(() => {
-    const basePaths = config?.paths?.base_paths || [];
-    const sourcePaths = config?.paths?.source_paths || [];
-    return basePaths.map((base: string, idx: number) => ({
-      base,
-      source: sourcePaths[idx] || base,
-    }));
-  }, [config?.paths?.base_paths, config?.paths?.source_paths]);
-
-  // Camera selection - which cameras to process
-  const [selectedCameras, setSelectedCameras] = useState<number[]>(() => {
-    const configCameras = config?.statistics?.cameras;
-    if (Array.isArray(configCameras) && configCameras.length > 0) {
-      return configCameras;
-    }
-    // Default to all cameras
-    return cameraOptions.map((c: string) => parseInt(c.replace("Cam", "")));
+  // Source endpoint: instantaneous, ensemble, merged, stereo
+  const [sourceEndpoint, setSourceEndpoint] = useState<string>(() => {
+    return config?.statistics?.source_endpoint || 'instantaneous';
   });
 
-  // Data source toggles - whether to include merged data
-  const [includeMerged, setIncludeMerged] = useState<boolean>(
-    config?.statistics?.include_merged ?? false
-  );
+  // Constraints from backend
+  const [constraints, setConstraints] = useState<StatisticsConstraints | null>(null);
 
-  // Legacy compatibility aliases
-  const processCameras = selectedCameras.length > 0;
-  const processMerged = includeMerged;
-  const setProcessCameras = (value: boolean) => {
-    if (value && selectedCameras.length === 0) {
-      setSelectedCameras(cameraOptions.map((c: string) => parseInt(c.replace("Cam", ""))));
-    } else if (!value) {
-      setSelectedCameras([]);
-    }
-  };
-  const setProcessMerged = setIncludeMerged;
+  // Fetch constraints on mount
+  useEffect(() => {
+    const fetchConstraints = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/statistics/constraints`);
+        if (res.ok) {
+          const data = await res.json();
+          setConstraints(data);
+        }
+      } catch (err) {
+        console.error("Error fetching statistics constraints:", err);
+      }
+    };
+    fetchConstraints();
+  }, [backendUrl]);
 
   // Initialize requestedStatistics from config enabled_methods (1:1 mapping)
   const [requestedStatistics, setRequestedStatistics] = useState<string[]>(() => {
@@ -192,10 +191,7 @@ export function useStatisticsCalculation(
   // --- Config sync function ---
   const updateConfigStatistics = useCallback(async (
     newRequestedStats: string[],
-    newGammaRadius: number,
-    newActivePaths: number[],
-    newSelectedCameras: number[],
-    newIncludeMerged: boolean
+    newGammaRadius: number
   ) => {
     // Build enabled_methods object (1:1 mapping)
     const enabledMethods: Record<string, boolean> = {};
@@ -211,9 +207,6 @@ export function useStatisticsCalculation(
           statistics: {
             enabled_methods: enabledMethods,
             gamma_radius: newGammaRadius,
-            active_paths: newActivePaths,
-            cameras: newSelectedCameras,
-            include_merged: newIncludeMerged,
           },
         }),
       });
@@ -235,7 +228,7 @@ export function useStatisticsCalculation(
       clearTimeout(syncTimeoutRef.current);
     }
     syncTimeoutRef.current = setTimeout(() => {
-      updateConfigStatistics(requestedStatistics, gammaRadius, activePaths, selectedCameras, includeMerged);
+      updateConfigStatistics(requestedStatistics, gammaRadius);
     }, 500);
 
     return () => {
@@ -243,22 +236,11 @@ export function useStatisticsCalculation(
         clearTimeout(syncTimeoutRef.current);
       }
     };
-  }, [requestedStatistics, gammaRadius, activePaths, selectedCameras, includeMerged, updateConfigStatistics]);
+  }, [requestedStatistics, gammaRadius, updateConfigStatistics]);
 
   // --- Calculate statistics function ---
-  // Processes cameras and/or merged data based on toggle settings
-  // Now supports multi-path batch processing
+  // Uses simplified API: base_path_idx + process_merged (boolean)
   const calculateStatistics = async () => {
-    if (selectedCameras.length === 0 && !includeMerged) {
-      alert("Please select at least one data source to process (cameras or merged)");
-      return;
-    }
-
-    if (activePaths.length === 0) {
-      alert("Please select at least one path to process");
-      return;
-    }
-
     setCalculating(true);
 
     try {
@@ -266,10 +248,8 @@ export function useStatisticsCalculation(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          active_paths: activePaths,
-          cameras: selectedCameras,
-          include_merged: includeMerged,
-          image_count: imageCount,
+          base_path_idx: basePathIdx,
+          process_merged: processMerged,
           type_name: "instantaneous",
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
@@ -283,7 +263,7 @@ export function useStatisticsCalculation(
       const data = await res.json();
       setStatisticsJobId(data.parent_job_id);
       setShowDialog(false);
-      console.log(`Statistics calculation started! Job ID: ${data.parent_job_id}, processing ${data.processed_targets} targets across ${activePaths.length} path(s)`);
+      console.log(`Statistics calculation started! Job ID: ${data.parent_job_id}, processing ${data.processed_targets} target(s)`);
     } catch (err: any) {
       console.error("Error starting statistics calculation:", err);
       alert(`Error: ${err.message}`);
@@ -297,25 +277,24 @@ export function useStatisticsCalculation(
     setCalculating(false);
   };
 
-  // Camera count for CameraSelector
+  // Camera count for DataSourceToggle
   const cameraCount = cameraOptions.length;
 
   return {
-    // Batch state (new)
-    activePaths,
-    setActivePaths,
-    paths,
-    selectedCameras,
-    setSelectedCameras,
-    includeMerged,
-    setIncludeMerged,
+    // Data source toggle (simplified - legacy)
+    processMerged,
+    setProcessMerged,
     cameraCount,
 
-    // Legacy state (for backward compatibility)
-    processCameras,
-    processMerged,
-    setProcessCameras,
-    setProcessMerged,
+    // Workflow options (new)
+    workflow,
+    setWorkflow,
+    sourceEndpoint,
+    setSourceEndpoint,
+    constraints,
+    workflowOptions: constraints?.workflow_options ?? ['per_camera', 'after_merge', 'both'],
+    allowedSourceEndpoints: constraints?.allowed_source_endpoints ?? ['instantaneous', 'ensemble', 'merged', 'stereo'],
+    isStereoStats: constraints?.is_stereo ?? false,
 
     // Statistics options
     requestedStatistics,

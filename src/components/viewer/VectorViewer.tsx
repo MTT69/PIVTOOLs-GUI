@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
 import { useVectorViewer } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
+import DataSourceToggle from "@/components/shared/DataSourceToggle";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -26,7 +27,7 @@ const AVAILABLE_STATISTICS = {
 };
 
 // Variable label formatting helpers
-const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean'): string => {
+const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' | 'ens'): string => {
   // Special formatting for known variables
   const specialLabels: Record<string, Record<string, string>> = {
     inst_stat: {
@@ -61,6 +62,20 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean'):
       vorticity: "Mean ω",
       divergence: "Mean ∇·u",
     },
+    ens: {
+      ux: "Ensemble ux",
+      uy: "Ensemble uy",
+      uz: "Ensemble uz",
+      UU_stress: "⟨u'u'⟩",
+      VV_stress: "⟨v'v'⟩",
+      WW_stress: "⟨w'w'⟩",
+      UV_stress: "⟨u'v'⟩",
+      UW_stress: "⟨u'w'⟩",
+      VW_stress: "⟨v'w'⟩",
+      tke: "TKE",
+      vorticity: "Ensemble ω",
+      divergence: "Ensemble ∇·u",
+    },
   };
 
   if (source === 'inst_stat' && specialLabels.inst_stat[varName]) {
@@ -69,12 +84,15 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean'):
   if (source === 'mean' && specialLabels.mean[varName]) {
     return specialLabels.mean[varName];
   }
+  if (source === 'ens' && specialLabels.ens[varName]) {
+    return specialLabels.ens[varName];
+  }
   return varName;
 };
 
 // Check if any grouped vars are available
-const hasGroupedVars = (allVars: { instantaneous: string[]; instantaneous_stats: string[]; mean_stats: string[] }): boolean => {
-  return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0);
+const hasGroupedVars = (allVars: { instantaneous: string[]; instantaneous_stats: string[]; mean_stats: string[]; ensemble: string[] }): boolean => {
+  return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0 || allVars.ensemble.length > 0);
 };
 
 // Inline Vector Merging Hook
@@ -324,6 +342,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     isEnsemble,
     isMerged,
     isStatistics,
+    isStereo,
     isMeanVar,
     canTransform,
     canEditCoordinates,
@@ -373,15 +392,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
   // Use statistics calculation hook (with config for checkbox/gamma sync)
   const {
-    processCameras,
     processMerged,
+    setProcessMerged,
+    cameraCount: statsCameraCount,
+    isStereoStats,
     requestedStatistics,
     gammaRadius,
     calculating,
     statisticsJobId,
     showDialog: showStatisticsDialog,
-    setProcessCameras,
-    setProcessMerged,
     setRequestedStatistics,
     setGammaRadius,
     setShowDialog: setShowStatisticsDialog,
@@ -545,13 +564,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       Uncalibrated Ensemble (Mean)
                     </SelectItem>
                   )}
-                  {/* Merged options - only for calibrated */}
-                  {availableDataSources.merged_instantaneous.exists && cameraOptions.length > 1 && (
+                  {/* Merged options - only for calibrated, multi-camera, non-stereo */}
+                  {availableDataSources.merged_instantaneous.exists && cameraOptions.length > 1 && !isStereo && (
                     <SelectItem value="merged_instantaneous">
                       Merged Instantaneous ({availableDataSources.merged_instantaneous.frame_count} frames)
                     </SelectItem>
                   )}
-                  {availableDataSources.merged_ensemble.exists && cameraOptions.length > 1 && (
+                  {availableDataSources.merged_ensemble.exists && cameraOptions.length > 1 && !isStereo && (
                     <SelectItem value="merged_ensemble">
                       Merged Ensemble (Mean)
                     </SelectItem>
@@ -568,24 +587,34 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </Select>
             </div>
 
-            {/* Camera Selection - Only show when not merged */}
+            {/* Camera Selection - Hide when merged, show "Stereo" for stereo setups */}
             {!isMerged && (
               <div className="flex items-center gap-2">
-                <label className="text-sm font-medium min-w-[100px]">Camera:</label>
-                <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {cameraOptions.length === 0 ? (
-                      <SelectItem value="none" disabled>No cameras available</SelectItem>
-                    ) : (
-                      cameraOptions.map((c: number, i: number) => (
-                        <SelectItem key={i} value={String(c)}>{c}</SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
+                <label className="text-sm font-medium min-w-[100px]">
+                  {isStereo ? "Source:" : "Camera:"}
+                </label>
+                {isStereo ? (
+                  // Stereo mode: show fixed "Stereo" label (no dropdown)
+                  <div className="flex-1 px-3 py-2 bg-muted rounded-md text-sm">
+                    Stereo (3D)
+                  </div>
+                ) : (
+                  // Non-stereo: show camera dropdown
+                  <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cameraOptions.length === 0 ? (
+                        <SelectItem value="none" disabled>No cameras available</SelectItem>
+                      ) : (
+                        cameraOptions.map((c: number, i: number) => (
+                          <SelectItem key={i} value={String(c)}>Camera {c}</SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
             )}
 
@@ -676,6 +705,21 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               {allVars.mean_stats.map(v => (
                                 <SelectItem key={`mean:${v}`} value={`mean:${v}`}>
                                   {formatVarLabel(v, 'mean')}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </>
+                        )}
+
+                        {/* Ensemble Variables (from ensemble_result.mat) */}
+                        {allVars.ensemble.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectLabel className="text-xs text-gray-500 px-2">Ensemble (Mean)</SelectLabel>
+                              {allVars.ensemble.map(v => (
+                                <SelectItem key={`ens:${v}`} value={`ens:${v}`}>
+                                  {formatVarLabel(v, 'ens')}
                                 </SelectItem>
                               ))}
                             </SelectGroup>
@@ -1124,8 +1168,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - Only for calibrated data, not for merged or statistics */}
-              {canTransform && !isMerged && !isStatistics && (
+              {/* Transforms - For calibrated data (including merged), not statistics */}
+              {canTransform && !isStatistics && (
                 <Button
                   variant={showTransforms ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
@@ -1143,8 +1187,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Merging - Only for calibrated instantaneous with multiple cameras */}
-              {canMerge && cameraOptions.length > 1 && (
+              {/* Merging - Only for calibrated instantaneous with multiple cameras, not stereo */}
+              {canMerge && cameraOptions.length > 1 && !isStereo && (
                 <Button
                   variant={showMerging ? "default" : "outline"}
                   onClick={() => setShowMerging(!showMerging)}
@@ -1335,38 +1379,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </div>
 
                     {/* Data Source Selection */}
-                    <div className="space-y-2 pt-2 border-t border-gray-100">
-                      <label className="text-xs font-medium text-gray-700 block">Data Sources to Process:</label>
-                      <div className="flex flex-wrap gap-2">
-                        {/* Individual Cameras Toggle */}
-                        <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
-                          <input
-                            type="checkbox"
-                            checked={processCameras}
-                            onChange={e => setProcessCameras(e.target.checked)}
-                            className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                          />
-                          <span className="font-medium">Individual Cameras ({cameraOptions.length})</span>
-                        </label>
-
-                        {/* Merged Data Toggle - Only show if merged data exists */}
-                        {availableDataSources.merged_instantaneous?.exists && (
-                          <label className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
-                            <input
-                              type="checkbox"
-                              checked={processMerged}
-                              onChange={e => setProcessMerged(e.target.checked)}
-                              className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 focus:ring-2"
-                            />
-                            <span className="font-medium">Merged Data</span>
-                          </label>
-                        )}
-                      </div>
-                    </div>
+                    <DataSourceToggle
+                      cameraCount={statsCameraCount}
+                      hasMergedData={availableDataSources.merged_instantaneous?.exists ?? false}
+                      value={processMerged ? "merged" : "all_cameras"}
+                      onChange={(val) => setProcessMerged(val === "merged")}
+                      disabled={calculating}
+                      isStereo={isStereoStats}
+                    />
 
                     <Button
                       onClick={calculateStatistics}
-                      disabled={calculating || (!processCameras && !processMerged)}
+                      disabled={calculating}
                       className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                       size="sm"
                     >
@@ -1457,10 +1481,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Transforms Panel - Only for calibrated data, not for merged or statistics */}
-            {showTransforms && canTransform && imageSrc && !error && !isMerged && !isStatistics && (
+            {/* Transforms Panel - For calibrated data (including merged), not statistics */}
+            {showTransforms && canTransform && imageSrc && !error && !isStatistics && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
+
+                {/* Data source indicator */}
+                <div className="mb-3 text-sm text-purple-700">
+                  <span className="font-medium">Source: </span>
+                  <span className="bg-purple-100 px-2 py-0.5 rounded">
+                    {isMerged ? "Merged" : isStereo ? "Stereo" : `Camera ${camera}`}
+                  </span>
+                </div>
 
                 <div className="flex flex-col gap-3">
                   {/* Applied transforms indicator */}
@@ -1651,8 +1683,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Merging Panel - Only for calibrated instantaneous with multiple cameras */}
-            {showMerging && canMerge && cameraOptions.length > 1 && !isMeanVar && (
+            {/* Merging Panel - Only for calibrated instantaneous with multiple cameras, not stereo */}
+            {showMerging && canMerge && cameraOptions.length > 1 && !isMeanVar && !isStereo && (
               <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg space-y-3">
                 <h3 className="text-lg font-semibold text-green-900">Merge Vectors</h3>
                 <p className="text-xs text-green-800">

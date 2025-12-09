@@ -57,12 +57,14 @@ export interface GroupedVariables {
   instantaneous: string[];      // From frame .mat files
   instantaneous_stats: string[]; // From instantaneous_stats folder
   mean_stats: string[];         // From mean_stats.mat
+  ensemble: string[];           // From ensemble_result.mat
 }
 
 const defaultGroupedVars: GroupedVariables = {
   instantaneous: [],
   instantaneous_stats: [],
   mean_stats: [],
+  ensemble: [],
 };
 
 // Default empty availability
@@ -155,6 +157,19 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // hasFrameNavigation: hide frame controls for ensemble, statistics, AND mean variables
   const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
 
+  // Reset run to 1 when switching to ensemble mode (ensemble may have fewer passes)
+  useEffect(() => {
+    if (isEnsemble) {
+      setRun(1);
+    }
+  }, [isEnsemble]);
+
+  // Stereo detection: check if active calibration method is stereo
+  const isStereo = useMemo(() => {
+    const activeCalib = config?.calibration?.active;
+    return activeCalib === "stereo" || activeCalib === "stereo_charuco";
+  }, [config?.calibration?.active]);
+
   // Legacy compatibility - derived from dataSource
   const merged = isMerged;
   const setMerged = useCallback((val: boolean) => {
@@ -231,6 +246,38 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
     return { varSource: 'inst', varName: typeVal };
   }, []);
+
+  // Helper to derive type_name from dataSource
+  const getTypeNameFromDataSource = useCallback((ds: DataSourceType): string => {
+    if (ds.includes('ensemble')) {
+      return 'ensemble';
+    }
+    return 'instantaneous';
+  }, []);
+
+  // Sync type_name to config.yaml when dataSource changes
+  // This ensures merging, transforms, and statistics use the correct data type
+  useEffect(() => {
+    const typeName = getTypeNameFromDataSource(dataSource);
+
+    const syncTypeNames = async () => {
+      try {
+        await fetch(`${backendUrl}/update_config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            merging: { type_name: typeName },
+            transforms: { type_name: typeName },
+            statistics: { type_name: typeName },
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to sync type_name to config:', err);
+      }
+    };
+
+    syncTypeNames();
+  }, [dataSource, backendUrl, getTypeNameFromDataSource]);
 
   // Functions
   const fetchImage = useCallback(async () => {
@@ -575,6 +622,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         instantaneous: Array.isArray(json.instantaneous) ? json.instantaneous : [],
         instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
         mean_stats: Array.isArray(json.mean_stats) ? json.mean_stats : [],
+        ensemble: Array.isArray(json.ensemble) ? json.ensemble : [],
       };
       setAllVars(grouped);
     } catch (e: any) {
@@ -1438,6 +1486,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     isEnsemble,
     isMerged,
     isStatistics,
+    isStereo,
     canTransform,
     canEditCoordinates,
     canMerge,

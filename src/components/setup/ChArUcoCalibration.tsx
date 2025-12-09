@@ -90,21 +90,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const [calibrationSubfolder, setCalibrationSubfolder] = useState("");
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
 
-  // Unified scope selector for both model generation and vector calibration
-  // 'all' means all cameras, number means specific camera
-  const [calibrationScope, setCalibrationScope] = useState<'all' | number>('all');
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // Toast notifications
   const { toast } = useToast();
-
-  // Load calibrationScope from config on mount (from charuco.camera)
-  useEffect(() => {
-    const savedCamera = config.calibration?.charuco?.camera;
-    if (typeof savedCamera === 'number' && cameraOptions.includes(savedCamera)) {
-      setCalibrationScope(savedCamera);
-    }
-  }, [config.calibration?.charuco?.camera, cameraOptions]);
 
   // Load piv_type from config on mount
   useEffect(() => {
@@ -113,29 +102,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
       setVectorTypeName(pivType);
     }
   }, [config.calibration?.piv_type]);
-
-  // Save scope to config when changed
-  const handleScopeChange = async (value: string) => {
-    const newScope = value === 'all' ? 'all' : Number(value);
-    setCalibrationScope(newScope);
-
-    // When single camera selected, also update the hook's camera state
-    if (typeof newScope === 'number') {
-      setCamera(newScope);
-      // Save to config
-      try {
-        await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            calibration: { charuco: { camera: newScope } }
-          })
-        });
-      } catch (e) {
-        console.error('Failed to save camera scope:', e);
-      }
-    }
-  };
 
   // Save piv_type when changed
   const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
@@ -536,20 +502,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         <div className="border-t pt-4 space-y-4">
           {/* Unified Action Row */}
           <div className="flex gap-2 items-center flex-wrap">
-            <Select value={String(calibrationScope)} onValueChange={handleScopeChange}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Cameras</SelectItem>
-                {cameraOptions.map((cam) => (
-                  <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
             <Button
-              onClick={() => calibrationScope === 'all' ? calibrateAllCameras() : startCalibration()}
+              onClick={() => calibrateAllCameras()}
               disabled={calibrating || !validation.valid}
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
@@ -578,31 +532,33 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               )}
             </Button>
 
-            <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
-              <SelectTrigger className="w-[130px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="instantaneous">Instantaneous</SelectItem>
-                <SelectItem value="ensemble">Ensemble</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              onClick={() => calibrateVectors(calibrationScope === 'all', vectorTypeName)}
-              disabled={!hasModel || isVectorCalibrating}
-              className="bg-green-600 hover:bg-green-700 text-white"
-              title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors"}
-            >
-              {isVectorCalibrating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Calibrating...
-                </>
-              ) : (
-                'Calibrate Vectors'
-              )}
-            </Button>
+            {/* Calibrate Vectors with type selection */}
+            <div className="flex items-center gap-1">
+              <Button
+                onClick={() => calibrateVectors(true, vectorTypeName)}
+                disabled={!hasModel || isVectorCalibrating}
+                className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
+                title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
+              >
+                {isVectorCalibrating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Calibrating...
+                  </>
+                ) : (
+                  'Calibrate Vectors'
+                )}
+              </Button>
+              <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
+                <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                  <SelectItem value="ensemble">Ensemble</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             <Button
               onClick={setAsActiveMethod}

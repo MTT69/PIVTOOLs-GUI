@@ -254,7 +254,7 @@ export function usePinholeCalibration(
   // Auto-validate on param changes
   useEffect(() => {
     validateImages();
-  }, [validateImages, imageFormat, numImages, subfolder, imageType]);
+  }, [validateImages, imageFormat, numImages, subfolder, imageType, useCameraSubfolders, cameraSubfolders, pathOrder]);
 
   // Generate camera model
   const generateCameraModel = useCallback(async () => {

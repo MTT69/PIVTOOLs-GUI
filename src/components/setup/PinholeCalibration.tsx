@@ -106,19 +106,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
-
-  // Unified scope selector for both model generation and vector calibration
-  // 'all' means all cameras, number means specific camera
-  const [calibrationScope, setCalibrationScope] = useState<'all' | number>('all');
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
-
-  // Load calibrationScope from config on mount (from pinhole.camera)
-  React.useEffect(() => {
-    const savedCamera = config.calibration?.pinhole?.camera;
-    if (typeof savedCamera === 'number' && cameraOptions.includes(savedCamera)) {
-      setCalibrationScope(savedCamera);
-    }
-  }, [config.calibration?.pinhole?.camera, cameraOptions]);
 
   // Load piv_type from config on mount
   React.useEffect(() => {
@@ -127,29 +115,6 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
       setVectorTypeName(pivType);
     }
   }, [config.calibration?.piv_type]);
-
-  // Save scope to config when changed
-  const handleScopeChange = async (value: string) => {
-    const newScope = value === 'all' ? 'all' : Number(value);
-    setCalibrationScope(newScope);
-
-    // When single camera selected, also update the hook's camera state (for generateCameraModel)
-    if (typeof newScope === 'number') {
-      setCamera(newScope);
-      // Save to config
-      try {
-        await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            calibration: { pinhole: { camera: newScope } }
-          })
-        });
-      } catch (e) {
-        console.error('Failed to save camera scope:', e);
-      }
-    }
-  };
 
   // Save piv_type when changed
   const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
@@ -263,15 +228,12 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
               <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
             </div>
             <div>
-              <label className="text-sm font-medium">Camera</label>
-              <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-                <SelectTrigger><SelectValue placeholder="Select camera" /></SelectTrigger>
-                <SelectContent>
-                  {cameraOptions.map((c) => (
-                    <SelectItem key={c} value={String(c)}>{`Camera ${c}`}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <label className="text-sm font-medium">Cameras to Process</label>
+              <div className="text-sm text-muted-foreground mt-2 p-2 bg-muted rounded">
+                {cameraOptions.length > 0
+                  ? `Cameras ${cameraOptions.join(', ')} (from config.camera_numbers)`
+                  : 'No cameras configured'}
+              </div>
             </div>
           </div>
 
@@ -316,8 +278,8 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             </div>
           </div>
 
-          {/* IM7 Camera Subfolders Toggle */}
-          {imageType === "lavision_im7" && (
+          {/* Use Camera Subfolders Toggle - for standard and IM7 formats */}
+          {(imageType === "standard" || imageType === "lavision_im7") && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Switch
@@ -326,20 +288,20 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                   onCheckedChange={setUseCameraSubfolders}
                 />
                 <Label htmlFor="pinhole-use-camera-subfolders" className="text-sm">
-                  IM7 files in camera subfolders (one camera per file)
+                  Use camera subfolders
                 </Label>
               </div>
               <p className="text-xs text-muted-foreground ml-10">
                 {useCameraSubfolders
-                  ? "Each .im7 file contains ONE camera only. Files expected in Cam1/, Cam2/ subfolders."
-                  : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."
+                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+                  : "Images in source directory without camera subfolders."
                 }
               </p>
             </div>
           )}
 
-          {/* Camera Subfolders & Path Order */}
-          {cameraOptions.length > 1 && (
+          {/* Camera Subfolders & Path Order - only show when using camera subfolders */}
+          {useCameraSubfolders && cameraOptions.length > 1 && (
             <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
               <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
 
@@ -497,15 +459,29 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
 
           {/* Section 5: Image Viewer Toggle */}
           {validation?.valid && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowImageViewer(!showImageViewer)}
-              className="flex items-center gap-2"
-            >
-              {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowImageViewer(!showImageViewer)}
+                className="flex items-center gap-2"
+              >
+                {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
+              </Button>
+              {showImageViewer && cameraOptions.length > 1 && (
+                <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
+                  <SelectTrigger className="w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cameraOptions.map((c) => (
+                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           )}
 
           {/* Section 6: Image Viewer with Overlay Support */}
@@ -531,20 +507,8 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
           <div className="border-t pt-4 space-y-4">
             {/* Unified Action Row */}
             <div className="flex gap-2 items-center flex-wrap">
-              <Select value={String(calibrationScope)} onValueChange={handleScopeChange}>
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Cameras</SelectItem>
-                  {cameraOptions.map((cam) => (
-                    <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
               <Button
-                onClick={() => calibrationScope === 'all' ? generateCameraModelAll() : generateCameraModel()}
+                onClick={() => generateCameraModelAll()}
                 disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
@@ -573,31 +537,33 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
                 )}
               </Button>
 
-              <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
-                <SelectTrigger className="w-[130px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="instantaneous">Instantaneous</SelectItem>
-                  <SelectItem value="ensemble">Ensemble</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Button
-                onClick={() => calibrateVectors(calibrationScope === 'all', vectorTypeName)}
-                disabled={!hasModel || isVectorCalibrating}
-                className="bg-green-600 hover:bg-green-700 text-white"
-                title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors"}
-              >
-                {isVectorCalibrating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Calibrating...
-                  </>
-                ) : (
-                  'Calibrate Vectors'
-                )}
-              </Button>
+              {/* Calibrate Vectors with type selection */}
+              <div className="flex items-center gap-1">
+                <Button
+                  onClick={() => calibrateVectors(true, vectorTypeName)}
+                  disabled={!hasModel || isVectorCalibrating}
+                  className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
+                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
+                >
+                  {isVectorCalibrating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Calibrating...
+                    </>
+                  ) : (
+                    'Calibrate Vectors'
+                  )}
+                </Button>
+                <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
+                  <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                    <SelectItem value="ensemble">Ensemble</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
               <Button
                 onClick={setAsActiveMethod}

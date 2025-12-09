@@ -59,12 +59,22 @@ export function usePivRunner(settings: PivRunnerSettings) {
           is_uncalibrated: '1',
         });
         if (currentSettings.cmap !== 'default') params.set('cmap', currentSettings.cmap);
-        
-        // Fetch progress, image, and logs in parallel
-        const [statusRes, logsRes] = await Promise.all([
+        // Pass job_id for log-based progress tracking (especially for ensemble mode)
+        if (jobId) params.set('job_id', jobId);
+
+        // Fetch progress, logs, and job status in parallel
+        const [statusRes, logsRes, jobStatusRes] = await Promise.all([
           fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
           jobId ? fetch(`/backend/piv_logs?job_id=${jobId}`) : Promise.resolve(null),
+          jobId ? fetch(`/backend/piv_status?job_id=${jobId}`) : Promise.resolve(null),
         ]);
+
+        // Check if job is still running
+        let jobRunning = true;
+        if (jobStatusRes && jobStatusRes.ok) {
+          const jobStatus = await jobStatusRes.json();
+          jobRunning = jobStatus.running ?? true;
+        }
 
         // Process progress response
         let currentProgress = 0;
@@ -73,7 +83,8 @@ export function usePivRunner(settings: PivRunnerSettings) {
           const data = await statusRes.json();
           currentProgress = Math.round(data.percent ?? 0);
           setProgress((p: number) => Math.max(p, currentProgress)); // Avoid progress going backwards
-          if (currentProgress >= 100) setIsPolling(false); // Stop polling on completion
+          // Only stop polling when BOTH: progress complete AND job is not running
+          if (currentProgress >= 100 && !jobRunning) setIsPolling(false);
           // Parse available files to get frame indices
           if (data.files && Array.isArray(data.files)) {
             availableFrames = data.files.map((f: string) => {

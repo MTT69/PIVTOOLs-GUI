@@ -8,6 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { usePivRunner } from '@/hooks/usePivRunner'; 
 
 // Helper to display a user-friendly path name
@@ -40,6 +50,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [activePaths, setActivePaths] = useState<number[]>([]);
+  const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
+  const [isCheckingOutput, setIsCheckingOutput] = useState(false);
 
   // Ref for log container to enable auto-scroll
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -65,10 +77,84 @@ const RunPIV: React.FC<RunPIVProps> = ({
     );
   };
 
-  // --- PIV Logic from Custom Hook ---
+  // --- PIV Logic from Custom Hook (moved up so run/cancel are available) ---
   const { isLoading, isPolling, progress, statusImage, logs, run, cancel } = usePivRunner({
     sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage, activePaths
   });
+
+  // Check if output data already exists before starting a run
+  const handleRunClick = async () => {
+    if (activePaths.length === 0) return;
+
+    setIsCheckingOutput(true);
+    try {
+      const url = `/backend/check_output_exists?active_paths=${activePaths.join(',')}`;
+      console.log('[RunPIV] Checking for existing output:', url);
+      const checkRes = await fetch(url);
+      console.log('[RunPIV] Check response status:', checkRes.status);
+
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        console.log('[RunPIV] Check response data:', data);
+
+        if (data.exists) {
+          // Data exists - show confirmation dialog
+          console.log('[RunPIV] Data exists, showing dialog');
+          setShowOverwriteDialog(true);
+          setIsCheckingOutput(false);
+          return; // Don't run yet - wait for user confirmation
+        } else {
+          // No existing data - run directly
+          console.log('[RunPIV] No existing data, running directly');
+          run();
+        }
+      } else {
+        // If check fails, just run anyway
+        console.log('[RunPIV] Check failed, running anyway');
+        run();
+      }
+    } catch (error) {
+      console.error("[RunPIV] Error checking for existing output:", error);
+      // On error, just run anyway
+      run();
+    } finally {
+      setIsCheckingOutput(false);
+    }
+  };
+
+  // Handle user confirming they want to overwrite existing data
+  const handleConfirmOverwrite = async () => {
+    setShowOverwriteDialog(false);
+    setIsCheckingOutput(true);
+
+    try {
+      // Clear existing output data for selected paths and cameras
+      console.log('[RunPIV] Clearing output for paths:', activePaths, 'cameras:', config?.paths?.camera_numbers);
+      const clearRes = await fetch('/backend/clear_output', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          active_paths: activePaths,
+          camera_numbers: config?.paths?.camera_numbers || []
+        })
+      });
+
+      if (clearRes.ok) {
+        const result = await clearRes.json();
+        console.log('[RunPIV] Clear result:', result);
+      } else {
+        console.error("[RunPIV] Failed to clear output data:", clearRes.status);
+      }
+    } catch (error) {
+      console.error("[RunPIV] Error clearing output:", error);
+    } finally {
+      setIsCheckingOutput(false);
+    }
+
+    // Start the PIV run
+    console.log('[RunPIV] Starting PIV run after clear');
+    run();
+  };
 
   // --- Effects for UI Sync ---
   // Auto-scroll logs to bottom when they update
@@ -300,15 +386,37 @@ const RunPIV: React.FC<RunPIVProps> = ({
         <div className="flex items-center gap-4 pt-2">
           <Button
             className="bg-green-600 hover:bg-green-700"
-            onClick={run}
-            disabled={isLoading || isPolling || activePaths.length === 0}
+            onClick={handleRunClick}
+            disabled={isLoading || isPolling || isCheckingOutput || activePaths.length === 0}
           >
-            {isPolling ? "Running..." : activePaths.length === 0 ? "Select Paths" : "Run PIV"}
+            {isPolling ? "Running..." : isCheckingOutput ? "Checking..." : activePaths.length === 0 ? "Select Paths" : "Run PIV"}
           </Button>
           <Button className="bg-red-600 hover:bg-red-700" onClick={cancel} disabled={!isPolling && !isLoading}>
             Cancel Run
           </Button>
         </div>
+
+        {/* Overwrite Confirmation Dialog */}
+        <AlertDialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Output Data Already Exists</AlertDialogTitle>
+              <AlertDialogDescription>
+                Output data already exists for the selected paths. Would you like to clear the existing data and recompute?
+                This will delete all existing PIV results for the selected cameras and cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleConfirmOverwrite}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                Clear and Recompute
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
   );

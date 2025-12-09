@@ -10,24 +10,48 @@ export interface MergingJobDetails {
   valid_runs?: number[];
 }
 
+export interface MergingConstraints {
+  allowed_source_endpoints: string[];
+  is_stereo_setup: boolean;
+  stereo_blocked: boolean;
+  stereo_reason: string | null;
+}
+
 /**
  * Hook for managing vector merging state and operations.
  * @param backendUrl The backend URL prefix
  * @param basePathIdx Current base path index
- * @param cameraOptions Array of available cameras (e.g., ["Cam1", "Cam2"])
+ * @param cameraOptions Array of available camera numbers (e.g., [1, 2, 3])
  * @param imageCount Number of images to process
  */
 export function useVectorMerging(
   backendUrl: string = "/backend",
   basePathIdx: number = 0,
-  cameraOptions: string[] = [],
+  cameraOptions: number[] = [],
   imageCount: number = 1000
 ) {
   // --- State Initialization ---
-  const [selectedCameras, setSelectedCameras] = useState<string[]>([]);
+  const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
   const [merging, setMerging] = useState<boolean>(false);
   const [mergingJobId, setMergingJobId] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState<boolean>(false);
+  const [constraints, setConstraints] = useState<MergingConstraints | null>(null);
+
+  // --- Fetch constraints on mount ---
+  useEffect(() => {
+    const fetchConstraints = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/merge_vectors/constraints`);
+        if (res.ok) {
+          const data = await res.json();
+          setConstraints(data);
+        }
+      } catch (err) {
+        console.error("Error fetching merging constraints:", err);
+      }
+    };
+    fetchConstraints();
+  }, [backendUrl]);
 
   // --- Job status hook ---
   const useMergingJobStatus = (jobId: string | null) => {
@@ -120,7 +144,7 @@ export function useVectorMerging(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_path_idx: basePathIdx,
-          cameras: selectedCameras.map((c: string) => parseInt(c.replace("Cam", ""))),
+          cameras: selectedCameras,  // Already number[]
           image_count: imageCount,
           type_name: "instantaneous",
           endpoint: "",
@@ -155,6 +179,7 @@ export function useVectorMerging(
     merging,
     mergingJobId,
     showDialog,
+    constraints,
 
     // Setters
     setSelectedCameras,
@@ -169,5 +194,9 @@ export function useVectorMerging(
     // Actions
     mergeVectors,
     resetMerging,
+
+    // Derived state for UI
+    isStereoBlocked: constraints?.stereo_blocked ?? false,
+    stereoBlockedReason: constraints?.stereo_reason ?? null,
   };
 }

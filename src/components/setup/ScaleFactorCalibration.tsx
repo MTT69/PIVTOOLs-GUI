@@ -50,9 +50,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     imageCount
   );
 
-  // Scope selectors for vector calibration
-  const [vectorScope, setVectorScope] = useState<'current' | 'all'>('all');
-  const [selectedCamera, setSelectedCamera] = useState<number>(cameraOptions[0] || 1);
+  // Vector type selector
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // Load piv_type from config on mount
@@ -205,55 +203,34 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           )}
         </div>
 
-        {/* Calibrate Vectors with scope and type selectors */}
+        {/* Calibrate Vectors with type selector */}
         <div className="flex gap-2 items-center flex-wrap">
-          <Select value={vectorScope} onValueChange={(v) => setVectorScope(v as 'current' | 'all')}>
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Cameras</SelectItem>
-              <SelectItem value="current">Single Camera</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {vectorScope === 'current' && (
-            <Select value={String(selectedCamera)} onValueChange={(v) => setSelectedCamera(Number(v))}>
-              <SelectTrigger className="w-[120px]">
+          {/* Calibrate Vectors with type selection */}
+          <div className="flex items-center gap-1">
+            <Button
+              onClick={() => calibrateVectors(true, 1, vectorTypeName)}
+              disabled={calibrating}
+              className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
+            >
+              {calibrating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Calibrating...
+                </>
+              ) : (
+                'Calibrate Vectors'
+              )}
+            </Button>
+            <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={calibrating}>
+              <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {cameraOptions.map((cam) => (
-                  <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
-                ))}
+                <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                <SelectItem value="ensemble">Ensemble</SelectItem>
               </SelectContent>
             </Select>
-          )}
-
-          <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}>
-            <SelectTrigger className="w-[130px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="instantaneous">Instantaneous</SelectItem>
-              <SelectItem value="ensemble">Ensemble</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Button
-            onClick={() => calibrateVectors(vectorScope === 'all', selectedCamera, vectorTypeName)}
-            disabled={calibrating}
-            className="bg-green-600 hover:bg-green-700 text-white"
-          >
-            {calibrating ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Calibrating...
-              </>
-            ) : (
-              'Calibrate Vectors'
-            )}
-          </Button>
+          </div>
 
           <Button
             onClick={setAsActiveMethod}

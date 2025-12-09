@@ -11,16 +11,28 @@ import { useVideoMaker } from "@/hooks/useVideoMaker";
 // Variable label formatting helper (matches VectorViewer formatting)
 const formatVarLabel = (varName: string, group: 'piv' | 'stats'): string => {
   const specialLabels: Record<string, string> = {
+    // Legacy fluctuations
     u_prime: "u'",
     v_prime: "v'",
     w_prime: "w'",
+    // Instantaneous stress tensor components
+    uu_inst: "u'u'",
+    vv_inst: "v'v'",
+    ww_inst: "w'w'",
+    uv_inst: "u'v'",
+    uw_inst: "u'w'",
+    vw_inst: "v'w'",
+    // Other computed stats
     gamma1: "γ₁",
     gamma2: "γ₂",
     vorticity: "ω (Vorticity)",
     divergence: "∇·u (Divergence)",
+    // PIV base
+    mag: "Velocity Magnitude",
+    b_mask: "Mask",
   };
 
-  if (group === 'stats' && specialLabels[varName]) {
+  if (specialLabels[varName]) {
     return specialLabels[varName];
   }
   return varName;
@@ -76,6 +88,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     runsLoading,
     // Variables state
     availableVariables,
+    groupedVariables,
     variablesLoading,
     // Functions
     handleBrowse,
@@ -196,22 +209,47 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                       <Select value={type} onValueChange={v => setType(v)}>
                         <SelectTrigger id="type"><SelectValue placeholder="Select variable" /></SelectTrigger>
                         <SelectContent>
-                          {/* PIV Variables */}
-                          {availableVariables.filter(v => v.group === 'piv').length > 0 && (
+                          {/* Instantaneous Variables (from PIV frame files) */}
+                          {groupedVariables.instantaneous.length > 0 && (
                             <>
-                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50">PIV Data</div>
-                              {availableVariables.filter(v => v.group === 'piv').map(v => (
-                                <SelectItem key={v.name} value={v.name}>{v.label}</SelectItem>
+                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50">Instantaneous</div>
+                              {groupedVariables.instantaneous.map(varName => (
+                                <SelectItem key={varName} value={varName}>{formatVarLabel(varName, 'piv')}</SelectItem>
+                              ))}
+                              {/* Add mag (velocity magnitude) if not in list */}
+                              {!groupedVariables.instantaneous.includes('mag') && (
+                                <SelectItem key="mag" value="mag">{formatVarLabel('mag', 'piv')}</SelectItem>
+                              )}
+                            </>
+                          )}
+                          {/* Calculated Per-Frame Statistics */}
+                          {groupedVariables.instantaneous_stats.length > 0 && (
+                            <>
+                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50 mt-1">Calculated (Per-Frame)</div>
+                              {groupedVariables.instantaneous_stats.map(varName => (
+                                <SelectItem key={varName} value={varName}>{formatVarLabel(varName, 'stats')}</SelectItem>
                               ))}
                             </>
                           )}
-                          {/* Stats Variables */}
-                          {availableVariables.filter(v => v.group === 'stats').length > 0 && (
+                          {/* Fallback to flat list if grouped is empty */}
+                          {groupedVariables.instantaneous.length === 0 && groupedVariables.instantaneous_stats.length === 0 && (
                             <>
-                              <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50 mt-1">Computed Statistics</div>
-                              {availableVariables.filter(v => v.group === 'stats').map(v => (
-                                <SelectItem key={v.name} value={v.name}>{formatVarLabel(v.name, 'stats')}</SelectItem>
-                              ))}
+                              {availableVariables.filter(v => v.group === 'piv').length > 0 && (
+                                <>
+                                  <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50">PIV Data</div>
+                                  {availableVariables.filter(v => v.group === 'piv').map(v => (
+                                    <SelectItem key={v.name} value={v.name}>{v.label}</SelectItem>
+                                  ))}
+                                </>
+                              )}
+                              {availableVariables.filter(v => v.group === 'stats').length > 0 && (
+                                <>
+                                  <div className="px-2 py-1 text-xs font-semibold text-gray-500 bg-gray-50 mt-1">Computed Statistics</div>
+                                  {availableVariables.filter(v => v.group === 'stats').map(v => (
+                                    <SelectItem key={v.name} value={v.name}>{formatVarLabel(v.name, 'stats')}</SelectItem>
+                                  ))}
+                                </>
+                              )}
                             </>
                           )}
                         </SelectContent>

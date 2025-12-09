@@ -22,6 +22,12 @@ export interface VariableInfo {
   group: 'piv' | 'stats';
 }
 
+// Grouped variables structure (matching VectorViewer)
+export interface GroupedVariables {
+  instantaneous: string[];
+  instantaneous_stats: string[];
+}
+
 // Path info interface for CameraSelector
 interface PathInfo {
   source: string;
@@ -45,6 +51,13 @@ interface BatchJobStatus {
     label: string;
     out_path?: string;
   }>;
+}
+
+// Video constraints interface
+export interface VideoConstraints {
+  allowed_source_endpoints: string[];
+  ensemble_blocked: boolean;
+  ensemble_reason: string;
 }
 
 export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
@@ -92,6 +105,25 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Batch job status
   const [batchJobStatus, setBatchJobStatus] = useState<BatchJobStatus | null>(null);
 
+  // Video constraints (ensemble blocked)
+  const [constraints, setConstraints] = useState<VideoConstraints | null>(null);
+
+  // Fetch constraints on mount
+  useEffect(() => {
+    const fetchConstraints = async () => {
+      try {
+        const res = await fetch(`${backendUrl}/video/constraints`);
+        if (res.ok) {
+          const data = await res.json();
+          setConstraints(data);
+        }
+      } catch (err) {
+        console.error("Error fetching video constraints:", err);
+      }
+    };
+    fetchConstraints();
+  }, [backendUrl]);
+
   // Camera options derived from config
   const cameraOptions: string[] = useMemo(() => {
     const cameras = config?.paths?.camera_numbers || [];
@@ -121,6 +153,10 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     { name: 'uy', label: 'Velocity (y)', group: 'piv' },
     { name: 'mag', label: 'Velocity Magnitude', group: 'piv' },
   ]);
+  const [groupedVariables, setGroupedVariables] = useState<GroupedVariables>({
+    instantaneous: [],
+    instantaneous_stats: [],
+  });
   const [variablesLoading, setVariablesLoading] = useState<boolean>(false);
 
   // Other selection state
@@ -261,6 +297,15 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
       if (data.success && data.variables) {
         setAvailableVariables(data.variables);
+
+        // Also set grouped variables if available (new API structure)
+        if (data.grouped_variables) {
+          setGroupedVariables({
+            instantaneous: data.grouped_variables.instantaneous || [],
+            instantaneous_stats: data.grouped_variables.instantaneous_stats || [],
+          });
+        }
+
         // If current type is not in the available variables, reset to first available
         const varNames = data.variables.map((v: VariableInfo) => v.name);
         if (!varNames.includes(type)) {
@@ -732,6 +777,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     hasAnyData,
     // Variables state
     availableVariables,
+    groupedVariables,
     variablesLoading,
     // Batch state (new)
     paths,
@@ -757,5 +803,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     handleVideoError,
     handleRetryVideo,
     checkDataSources,
+    // Constraints
+    constraints,
+    isEnsembleBlocked: constraints?.ensemble_blocked ?? true,
+    ensembleBlockedReason: constraints?.ensemble_reason ?? "Ensemble has no temporal sequence",
   };
 }
