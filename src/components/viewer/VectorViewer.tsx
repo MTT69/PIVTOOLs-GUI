@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
-import { useVectorViewer } from "@/hooks/useVectorViewer";
+import { useVectorViewer, GroupedVariables, DataSourceType } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
 
@@ -93,6 +93,43 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' |
 // Check if any grouped vars are available
 const hasGroupedVars = (allVars: { instantaneous: string[]; instantaneous_stats: string[]; mean_stats: string[]; ensemble: string[] }): boolean => {
   return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0 || allVars.ensemble.length > 0);
+};
+
+// Filter allVars based on current data source
+const getFilteredVars = (
+  allVars: GroupedVariables,
+  dataSource: DataSourceType
+): GroupedVariables => {
+  const isEnsembleSource = dataSource.includes('ensemble');
+  const isStatisticsSource = dataSource.includes('statistics');
+
+  if (isEnsembleSource) {
+    // Ensemble mode: only show ensemble variables
+    return {
+      instantaneous: [],
+      instantaneous_stats: [],
+      mean_stats: [],
+      ensemble: allVars.ensemble,
+    };
+  }
+
+  if (isStatisticsSource) {
+    // Statistics mode: only show mean stats
+    return {
+      instantaneous: [],
+      instantaneous_stats: [],
+      mean_stats: allVars.mean_stats,
+      ensemble: [],
+    };
+  }
+
+  // Instantaneous mode: show instantaneous + stats, not ensemble
+  return {
+    instantaneous: allVars.instantaneous,
+    instantaneous_stats: allVars.instantaneous_stats,
+    mean_stats: allVars.mean_stats,
+    ensemble: [],
+  };
 };
 
 // Inline Vector Merging Hook
@@ -374,6 +411,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     const cameras = config?.paths?.camera_numbers || [];
     return cameras.length > 0 ? cameras : hookCameraOptions;
   }, [config?.paths?.camera_numbers, hookCameraOptions]);
+
+  // Filter variables based on current data source
+  const filteredVars = useMemo(
+    () => getFilteredVars(allVars, dataSource),
+    [allVars, dataSource]
+  );
 
   // Initialize camera from first available option when config loads
   useEffect(() => {
@@ -667,13 +710,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   <SelectContent>
                     {allVarsLoading ? (
                       <SelectItem value="loading" disabled>Loading...</SelectItem>
-                    ) : hasGroupedVars(allVars) ? (
+                    ) : hasGroupedVars(filteredVars) ? (
                       <>
                         {/* Instantaneous Variables from frame files */}
-                        {allVars.instantaneous.length > 0 && (
+                        {filteredVars.instantaneous.length > 0 && (
                           <SelectGroup>
                             <SelectLabel className="text-xs text-gray-500 px-2">Instantaneous</SelectLabel>
-                            {allVars.instantaneous.map(v => (
+                            {filteredVars.instantaneous.map(v => (
                               <SelectItem key={`inst:${v}`} value={`inst:${v}`}>
                                 {formatVarLabel(v, 'inst')}
                               </SelectItem>
@@ -682,12 +725,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         )}
 
                         {/* Calculated Per-Frame Stats (if computed) */}
-                        {allVars.instantaneous_stats.length > 0 && (
+                        {filteredVars.instantaneous_stats.length > 0 && (
                           <>
                             <SelectSeparator />
                             <SelectGroup>
                               <SelectLabel className="text-xs text-gray-500 px-2">Calculated (Per-Frame)</SelectLabel>
-                              {allVars.instantaneous_stats.map(v => (
+                              {filteredVars.instantaneous_stats.map(v => (
                                 <SelectItem key={`inst_stat:${v}`} value={`inst_stat:${v}`}>
                                   {formatVarLabel(v, 'inst_stat')}
                                 </SelectItem>
@@ -697,12 +740,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         )}
 
                         {/* Mean Statistics (if computed) */}
-                        {allVars.mean_stats.length > 0 && (
+                        {filteredVars.mean_stats.length > 0 && (
                           <>
                             <SelectSeparator />
                             <SelectGroup>
                               <SelectLabel className="text-xs text-gray-500 px-2">Mean Statistics</SelectLabel>
-                              {allVars.mean_stats.map(v => (
+                              {filteredVars.mean_stats.map(v => (
                                 <SelectItem key={`mean:${v}`} value={`mean:${v}`}>
                                   {formatVarLabel(v, 'mean')}
                                 </SelectItem>
@@ -712,12 +755,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         )}
 
                         {/* Ensemble Variables (from ensemble_result.mat) */}
-                        {allVars.ensemble.length > 0 && (
+                        {filteredVars.ensemble.length > 0 && (
                           <>
                             <SelectSeparator />
                             <SelectGroup>
                               <SelectLabel className="text-xs text-gray-500 px-2">Ensemble (Mean)</SelectLabel>
-                              {allVars.ensemble.map(v => (
+                              {filteredVars.ensemble.map(v => (
                                 <SelectItem key={`ens:${v}`} value={`ens:${v}`}>
                                   {formatVarLabel(v, 'ens')}
                                 </SelectItem>

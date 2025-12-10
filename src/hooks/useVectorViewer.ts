@@ -157,13 +157,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // hasFrameNavigation: hide frame controls for ensemble, statistics, AND mean variables
   const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
 
-  // Reset run to 1 when switching to ensemble mode (ensemble may have fewer passes)
-  useEffect(() => {
-    if (isEnsemble) {
-      setRun(1);
-    }
-  }, [isEnsemble]);
-
   // Stereo detection: check if active calibration method is stereo
   const isStereo = useMemo(() => {
     const activeCalib = config?.calibration?.active;
@@ -255,6 +248,66 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     return 'instantaneous';
   }, []);
 
+  // Auto-select appropriate variable when data source changes
+  useEffect(() => {
+    const isEnsembleSource = dataSource.includes('ensemble');
+    const isStatisticsSource = dataSource.includes('statistics');
+    const isUncalibratedSource = dataSource.includes('uncalibrated');
+
+    // Parse current variable
+    const { varSource, varName } = parseVarType(type);
+
+    if (isEnsembleSource) {
+      // Switching TO ensemble - need ensemble variable
+      if (varSource !== 'ens') {
+        // Try to find equivalent in ensemble vars, or default to first, or fallback to ens:ux
+        if (allVars.ensemble.includes(varName)) {
+          setType(`ens:${varName}`);
+        } else if (allVars.ensemble.length > 0) {
+          setType(`ens:${allVars.ensemble[0]}`);
+        } else {
+          // Fallback to ens:ux if ensemble vars haven't loaded yet
+          setType('ens:ux');
+        }
+      }
+      // Note: fetchAvailableRuns effect will handle setting the correct run value
+    } else if (isStatisticsSource) {
+      // Switching TO statistics - need mean variable
+      if (varSource !== 'mean') {
+        if (allVars.mean_stats.includes(varName)) {
+          setType(`mean:${varName}`);
+        } else if (allVars.mean_stats.length > 0) {
+          setType(`mean:${allVars.mean_stats[0]}`);
+        }
+      }
+    } else {
+      // Switching TO instantaneous (calibrated or uncalibrated)
+
+      // Handle inst_stat variables - not available for uncalibrated data
+      if (varSource === 'inst_stat') {
+        const hasInstStats = !isUncalibratedSource && allVars.instantaneous_stats.length > 0;
+        if (!hasInstStats) {
+          // Fall back to basic instantaneous variable
+          if (allVars.instantaneous.includes('ux')) {
+            setType('inst:ux');
+          } else if (allVars.instantaneous.length > 0) {
+            setType(`inst:${allVars.instantaneous[0]}`);
+          }
+        }
+      } else if (varSource === 'ens' || varSource === 'mean') {
+        // Coming from ensemble/statistics - switch to instantaneous equivalent
+        if (allVars.instantaneous.includes(varName)) {
+          setType(`inst:${varName}`);
+        } else if (allVars.instantaneous.length > 0) {
+          setType(`inst:${allVars.instantaneous[0]}`);
+        } else {
+          // Fallback to default if no instantaneous variables available
+          setType('inst:ux');
+        }
+      }
+    }
+  }, [dataSource, allVars, parseVarType, type]);
+
   // Sync type_name to config.yaml when dataSource changes
   // This ensures merging, transforms, and statistics use the correct data type
   useEffect(() => {
@@ -322,9 +375,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || "Failed to fetch vector plot");
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
+      // Only update run if it's actually different to avoid re-render loops
       if (json.meta && json.meta.run != null) {
         const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
+          setRun(parsed);
+        }
       }
       // Don't override type from meta when using prefixed types
       return true;
@@ -519,12 +575,24 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
+      // Only update run if it's actually different to avoid re-render loops
       if (json.meta?.run != null) {
         const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
+          setRun(parsed);
+        }
       }
+      // Backend returns raw var name (e.g., "ux"), frontend uses prefixed (e.g., "ens:ux")
+      // Compare raw names to avoid re-render loop
       if (json.meta?.var != null && typeof json.meta.var === "string") {
-        if (json.meta.var !== type) setType(json.meta.var);
+        const currentRawVar = type.includes(':') ? type.split(':')[1] : type;
+        const responseVar = json.meta.var;
+        // Only update if the raw variable name is actually different
+        if (responseVar !== currentRawVar) {
+          // Keep the current prefix when updating
+          const prefix = type.includes(':') ? type.split(':')[0] + ':' : '';
+          setType(prefix + responseVar);
+        }
       }
       return true;
     } catch (e: any) {
@@ -667,6 +735,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("base_path", basePath);
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      // Pass type_name so backend checks correct data source (ensemble vs instantaneous)
+      params.set("type_name", isEnsemble ? "ensemble" : "instantaneous");
       const url = `${backendUrl}/plot/check_runs?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
@@ -676,7 +747,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } catch (e) {
       return [];
     }
-  }, [effectiveDir, camera, merged, backendUrl]);
+  }, [effectiveDir, camera, merged, isEnsemble, isUncalibrated, backendUrl]);
 
   const handlePlayToggle = () => {
     setPlaying(p => !p);
@@ -716,12 +787,21 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || `Failed to fetch stats plot (${res.status})`);
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
+      // Only update run if it's actually different to avoid re-render loops
       if (json.meta && json.meta.run != null) {
         const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0) setRun(parsed);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
+          setRun(parsed);
+        }
       }
+      // Compare raw var names to avoid re-render loop (backend may return unprefixed name)
       if (json.meta && json.meta.var != null && typeof json.meta.var === "string") {
-        if (json.meta.var !== type) setType(json.meta.var);
+        const currentRawVar = type.includes(':') ? type.split(':')[1] : type;
+        const responseVar = json.meta.var;
+        if (responseVar !== currentRawVar) {
+          const prefix = type.includes(':') ? type.split(':')[0] + ':' : '';
+          setType(prefix + responseVar);
+        }
       }
       setHasRendered(true);
     } catch (e: any) {
@@ -1133,6 +1213,27 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   useEffect(() => {
     if (!hasRendered || !(effectiveDir || basePaths.length > 0)) return;
+
+    // Guard: ensure type is compatible with dataSource before rendering
+    // This prevents race conditions where dataSource changed but type hasn't updated yet
+    const varSource = type.includes(':') ? type.split(':')[0] : 'inst';
+    const isEnsembleSource = dataSource.includes('ensemble');
+    const isUncalibratedSource = dataSource.includes('uncalibrated');
+    const isStatisticsSource = dataSource.includes('statistics');
+
+    if (isEnsembleSource && varSource !== 'ens') {
+      // Wait for type to be updated to ens: prefix
+      return;
+    }
+    if (isStatisticsSource && varSource !== 'mean') {
+      // Wait for type to be updated to mean: prefix
+      return;
+    }
+    if (isUncalibratedSource && varSource === 'inst_stat') {
+      // inst_stat not available for uncalibrated - wait for fallback
+      return;
+    }
+
     if (meanMode) {
       void fetchStatsImage();
     } else if (isEnsemble) {
@@ -1245,7 +1346,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           frame: index,
           transformation,
           merged: merged,
-          type_name: "instantaneous", // or get from somewhere
         }),
       });
       const result = await response.json();
@@ -1278,7 +1378,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           camera: camera,
           frame: index,
           merged: merged,
-          type_name: "instantaneous",
         }),
       });
       const result = await response.json();
@@ -1337,7 +1436,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           camera: camera,
           transformations,
           merged: merged,
-          type_name: "instantaneous",
           image_count: maxFrameCount,
         }),
       });
