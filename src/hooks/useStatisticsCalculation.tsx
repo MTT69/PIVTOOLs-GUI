@@ -69,9 +69,9 @@ export function useStatisticsCalculation(
     return 'per_camera';
   });
 
-  // Source endpoint: instantaneous, ensemble, merged, stereo
+  // Source endpoint: regular, merged, stereo (data source location)
   const [sourceEndpoint, setSourceEndpoint] = useState<string>(() => {
-    return config?.statistics?.source_endpoint || 'instantaneous';
+    return config?.statistics?.source_endpoint || 'regular';
   });
 
   // Constraints from backend
@@ -250,7 +250,9 @@ export function useStatisticsCalculation(
         body: JSON.stringify({
           base_path_idx: basePathIdx,
           process_merged: processMerged,
-          type_name: "instantaneous",
+          workflow: workflow,
+          type_name: config?.statistics?.type_name || 'instantaneous',
+          source_endpoint: sourceEndpoint,
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
       });

@@ -196,7 +196,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
             </Button>
             {performanceOpen && (
               <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
-                <PerformanceSettings config={config} updateConfigValue={updateConfigValue} showFilterWorkerCount={true} />
+                <PerformanceSettings config={config} updateConfigValue={updateConfigValue} />
               </div>
             )}
           </div>
@@ -270,7 +270,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
       </Card>
 
       {/* PIV Runner */}
-      <RunPIV config={config} />
+      <RunPIV config={config} mode="instantaneous" />
     </div>
   );
 }

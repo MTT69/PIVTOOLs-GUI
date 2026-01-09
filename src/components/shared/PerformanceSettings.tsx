@@ -8,13 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 interface PerformanceSettingsProps {
   config: any;
   updateConfigValue: (path: string[], value: any) => void;
-  showFilterWorkerCount?: boolean;
 }
 
 const PerformanceSettings = memo(function PerformanceSettings({
   config,
   updateConfigValue,
-  showFilterWorkerCount = false
 }: PerformanceSettingsProps) {
   // Memory per worker state
   const [memoryNumber, setMemoryNumber] = useState<string>('6');
@@ -108,23 +106,6 @@ const PerformanceSettings = memo(function PerformanceSettings({
         </div>
         <p className="text-xs text-muted-foreground">Memory limit per worker</p>
       </div>
-
-      {showFilterWorkerCount && (
-        <div className="space-y-2">
-          <Label htmlFor="filter-workers">Filter Worker Count</Label>
-          <Input
-            id="filter-workers"
-            type="text"
-            value={config?.processing?.filter_worker_count === '' ? '' : (config?.processing?.filter_worker_count ?? 1)}
-            onChange={(e) => {
-              const val = e.target.value;
-              const num = parseInt(val, 10);
-              updateConfigValue(['processing', 'filter_worker_count'], isNaN(num) ? '' : num);
-            }}
-          />
-          <p className="text-xs text-muted-foreground">Number of workers for filtering operations</p>
-        </div>
-      )}
     </div>
   );
 });

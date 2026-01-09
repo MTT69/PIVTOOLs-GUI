@@ -17,7 +17,7 @@ interface CameraValidation {
 }
 
 /**
- * Validation result for pinhole (single camera) calibration
+ * Validation result for planar (single camera) calibration
  */
 export interface PinholeValidationResult {
   valid: boolean;
@@ -52,7 +52,7 @@ export interface StereoValidationResult {
 }
 
 /**
- * Hook for validating pinhole calibration images
+ * Hook for validating planar calibration images
  *
  * @param sourcePathIdx - Index of the source path in config
  * @param camera - Camera number (1-based)

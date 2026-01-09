@@ -80,7 +80,7 @@ const InfillingSettings = memo(function InfillingSettings({
             </Select>
           </div>
 
-          {(infillingConfig.mid_pass?.method === 'local_median' || infillingConfig.mid_pass?.method === 'biharmonic') && (
+          {infillingConfig.mid_pass?.method === 'local_median' && (
             <div className="space-y-1">
               <Label className="text-xs">Kernel Size</Label>
               <Input
@@ -191,7 +191,7 @@ const InfillingSettings = memo(function InfillingSettings({
               </Select>
             </div>
 
-            {(infillingConfig.final_pass?.method === 'local_median' || infillingConfig.final_pass?.method === 'biharmonic') && (
+            {infillingConfig.final_pass?.method === 'local_median' && (
               <div className="space-y-1">
                 <Label className="text-xs">Kernel Size</Label>
                 <Input

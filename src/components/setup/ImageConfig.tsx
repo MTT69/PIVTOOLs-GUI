@@ -34,6 +34,38 @@ const isMultiCameraContainer = (imageType: string): boolean => {
   return imageType === "lavision_set" || imageType === "lavision_im7";
 };
 
+// Helper to derive A/B pattern pair from a single pattern
+const deriveABPatterns = (pattern: string): [string, string] => {
+  // Helper to preserve case when replacing A<->B
+  const replacePreservingCase = (str: string, from: string, to: string): string => {
+    // Match the pattern with captured case
+    const regex = new RegExp(`([_-])${from}(\\.[a-zA-Z]+)$`, 'i');
+    const match = str.match(regex);
+    if (!match) return str;
+    // Preserve the case of the original letter
+    const originalChar = str.charAt(str.indexOf(match[0]) + 1);
+    const isUpperCase = originalChar === originalChar.toUpperCase();
+    const replacement = isUpperCase ? to.toUpperCase() : to.toLowerCase();
+    return str.replace(regex, `$1${replacement}$2`);
+  };
+
+  // If pattern contains _A or -A, derive B version
+  if (/[_-]A\.[a-zA-Z]+$/i.test(pattern)) {
+    const patternB = replacePreservingCase(pattern, 'A', 'B');
+    return [pattern, patternB];
+  }
+  // If pattern contains _B or -B, derive A version
+  if (/[_-]B\.[a-zA-Z]+$/i.test(pattern)) {
+    const patternA = replacePreservingCase(pattern, 'B', 'A');
+    return [patternA, pattern];
+  }
+  // Default: add _A and _B suffixes before extension
+  const extMatch = pattern.match(/\.[a-zA-Z]+$/i);
+  const ext = extMatch ? extMatch[0] : '.tif';
+  const base = pattern.replace(/\.[a-zA-Z]+$/i, '');
+  return [`${base}_A${ext}`, `${base}_B${ext}`];
+};
+
 interface ImageConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
@@ -736,9 +768,33 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   {/* Validation Status */}
                   <ValidationAlert
                     validation={validation}
-                    onApplySuggestedPattern={(pattern) => {
-                      // Apply the suggested pattern
-                      const newPatterns = [pattern];
+                    currentMode={nonTimeResolvedMode as 'ab_format' | 'skip_frames'}
+                    onApplySuggestedPattern={(pattern, patternB, suggestedMode) => {
+                      let newPatterns: string[];
+
+                      // Determine if we should use A/B mode
+                      const shouldUseABMode =
+                        suggestedMode === 'ab_format' ||
+                        nonTimeResolvedMode === 'ab_format';
+
+                      if (shouldUseABMode && !timeResolved) {
+                        // Preserve or apply A/B mode
+                        if (patternB) {
+                          // Backend provided both patterns
+                          newPatterns = [pattern, patternB];
+                        } else {
+                          // Derive B from A (or vice versa)
+                          newPatterns = deriveABPatterns(pattern);
+                        }
+                        // Update mode if it changed
+                        if (nonTimeResolvedMode !== 'ab_format') {
+                          setNonTimeResolvedMode('ab_format');
+                        }
+                      } else {
+                        // Single pattern (time-resolved or skip-frames mode)
+                        newPatterns = [pattern];
+                      }
+
                       setRawPatterns(newPatterns);
                       saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
                     }}

@@ -8,11 +8,11 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
-import { usePinholeCalibration, FrameDetection } from "@/hooks/usePinholeCalibration";
+import { useDotboardCalibration, FrameDetection } from "@/hooks/useDotboardCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 
-interface PinholeCalibrationProps {
+interface DotboardCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
@@ -26,14 +26,14 @@ const basename = (p: string) => {
   return parts.filter(Boolean).pop() || p;
 };
 
-export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
+export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
   // Use the new simplified hook
-  const calibration = usePinholeCalibration(cameraOptions, sourcePaths);
+  const calibration = useDotboardCalibration(cameraOptions, sourcePaths);
 
   const {
     // Source selection
@@ -183,7 +183,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          calibration: { active: "pinhole" },
+          calibration: { active: "dotboard" },
         }),
       });
       const json = await res.json();
@@ -196,7 +196,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
     }
   }, [config.calibration, updateConfig]);
 
-  const isActive = config.calibration?.active === "pinhole";
+  const isActive = config.calibration?.active === "dotboard";
 
   // Check if container format (unsupported on macOS)
   const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
@@ -207,9 +207,9 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
       {/* Main Configuration Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Pinhole Calibration (Planar)</CardTitle>
+          <CardTitle>Dotboard Calibration (Planar)</CardTitle>
           <CardDescription>
-            Configure and run planar calibration to generate camera model
+            Configure and run dotboard calibration to generate camera model
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -283,11 +283,11 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Switch
-                  id="pinhole-use-camera-subfolders"
+                  id="dotboard-use-camera-subfolders"
                   checked={useCameraSubfolders}
                   onCheckedChange={setUseCameraSubfolders}
                 />
-                <Label htmlFor="pinhole-use-camera-subfolders" className="text-sm">
+                <Label htmlFor="dotboard-use-camera-subfolders" className="text-sm">
                   Use camera subfolders
                 </Label>
               </div>
@@ -491,7 +491,7 @@ export const PinholeCalibration: React.FC<PinholeCalibrationProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={camera}
               numImages={numImages}
-              calibrationType="pinhole"
+              calibrationType="dotboard"
               calibrationParams={{
                 pattern_cols: patternCols,
                 pattern_rows: patternRows,

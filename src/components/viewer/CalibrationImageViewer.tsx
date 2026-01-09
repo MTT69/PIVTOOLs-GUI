@@ -31,7 +31,7 @@ export interface CalibrationImageViewerProps {
   sourcePathIdx: number;
   camera: number;
   numImages: number;
-  calibrationType: 'pinhole' | 'charuco' | 'stereo' | 'stereo-charuco';
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco';
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;

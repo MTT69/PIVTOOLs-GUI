@@ -111,7 +111,7 @@ export function useChArUcoCalibration(
 
   // Note: validationResult and validating state removed - use usePinholeValidation hook in component instead
 
-  // Camera model and detections (like pinhole)
+  // Camera model and detections (like dotboard)
   const [cameraModel, setCameraModel] = useState<CameraModel | null>(null);
   const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
@@ -488,7 +488,7 @@ export function useChArUcoCalibration(
     loadingResults,
     calibrationResults,
 
-    // Model and detections (like pinhole)
+    // Model and detections (like dotboard)
     cameraModel,
     detections,
     modelLoading,

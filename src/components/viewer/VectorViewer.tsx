@@ -380,6 +380,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     isMerged,
     isStatistics,
     isStereo,
+    isStereoData,  // Based on selected dataSource (not config)
     isMeanVar,
     canTransform,
     canEditCoordinates,
@@ -463,9 +464,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const statisticsProgress = statisticsDetails?.overall_progress || statisticsDetails?.progress || 0;
   const statisticsError = statisticsDetails?.error || null;
 
+  // Track if we've already refreshed after statistics completion (avoid infinite loop)
+  const hasRefreshedAfterStatsCompletion = useRef(false);
+
   // Refresh available data sources and variables when statistics calculation completes
+  // Using ref guard to prevent infinite loop from circular dependencies in fetch functions
   useEffect(() => {
-    if (statisticsStatus === "completed") {
+    if (statisticsStatus === "completed" && !hasRefreshedAfterStatsCompletion.current) {
+      hasRefreshedAfterStatsCompletion.current = true;
       // Force refresh available data sources to pick up new statistics
       fetchAvailableDataSources(true);
       // Refresh grouped variables to show new stats in dropdown
@@ -477,7 +483,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
         fetchFrameVars();
       }
     }
-  }, [statisticsStatus, fetchAvailableDataSources, fetchAllVars, fetchStatVars, fetchFrameVars, meanMode]);
+    // Reset the ref when status changes away from completed
+    if (statisticsStatus !== "completed") {
+      hasRefreshedAfterStatsCompletion.current = false;
+    }
+  }, [statisticsStatus]);  // Only depend on status, not fetch functions (avoids circular dependency)
 
   // Use vector merging hook
   const {
@@ -607,42 +617,55 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       Uncalibrated Ensemble (Mean)
                     </SelectItem>
                   )}
+                  {/* Stereo options - show when stereo data exists (file-based detection) */}
+                  {availableDataSources.stereo_instantaneous?.exists && (
+                    <SelectItem value="stereo_instantaneous">
+                      Stereo Instantaneous ({availableDataSources.stereo_instantaneous.frame_count} frames)
+                    </SelectItem>
+                  )}
+                  {availableDataSources.stereo_ensemble?.exists && (
+                    <SelectItem value="stereo_ensemble">
+                      Stereo Ensemble (Mean)
+                    </SelectItem>
+                  )}
                   {/* Merged options - only for calibrated, multi-camera, non-stereo */}
-                  {availableDataSources.merged_instantaneous.exists && cameraOptions.length > 1 && !isStereo && (
+                  {availableDataSources.merged_instantaneous?.exists && cameraOptions.length > 1 && !isStereo && (
                     <SelectItem value="merged_instantaneous">
                       Merged Instantaneous ({availableDataSources.merged_instantaneous.frame_count} frames)
                     </SelectItem>
                   )}
-                  {availableDataSources.merged_ensemble.exists && cameraOptions.length > 1 && !isStereo && (
+                  {availableDataSources.merged_ensemble?.exists && cameraOptions.length > 1 && !isStereo && (
                     <SelectItem value="merged_ensemble">
                       Merged Ensemble (Mean)
                     </SelectItem>
                   )}
                   {/* Mean Statistics removed - now accessible via Variable dropdown with mean: prefix */}
                   {/* Show message if nothing available */}
-                  {!availableDataSources.calibrated_instantaneous.exists &&
-                   !availableDataSources.uncalibrated_instantaneous.exists &&
-                   !availableDataSources.calibrated_ensemble.exists &&
-                   !availableDataSources.uncalibrated_ensemble.exists && (
+                  {!availableDataSources.calibrated_instantaneous?.exists &&
+                   !availableDataSources.uncalibrated_instantaneous?.exists &&
+                   !availableDataSources.calibrated_ensemble?.exists &&
+                   !availableDataSources.uncalibrated_ensemble?.exists &&
+                   !availableDataSources.stereo_instantaneous?.exists &&
+                   !availableDataSources.stereo_ensemble?.exists && (
                     <SelectItem value="none" disabled>No data available</SelectItem>
                   )}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Camera Selection - Hide when merged, show "Stereo" for stereo setups */}
+            {/* Camera Selection - Hide when merged, show "Stereo" only when viewing stereo data */}
             {!isMerged && (
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium min-w-[100px]">
-                  {isStereo ? "Source:" : "Camera:"}
+                  {isStereoData ? "Source:" : "Camera:"}
                 </label>
-                {isStereo ? (
-                  // Stereo mode: show fixed "Stereo" label (no dropdown)
+                {isStereoData ? (
+                  // Stereo data selected: show fixed "Stereo" label (no dropdown)
                   <div className="flex-1 px-3 py-2 bg-muted rounded-md text-sm">
                     Stereo (3D)
                   </div>
                 ) : (
-                  // Non-stereo: show camera dropdown
+                  // Non-stereo data: show camera dropdown
                   <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
                     <SelectTrigger className="flex-1">
                       <SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : "Select"} />
@@ -1211,8 +1234,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - For calibrated data (including merged), not statistics */}
-              {canTransform && !isStatistics && (
+              {/* Transforms - For calibrated data (including merged), not statistics or stereo */}
+              {canTransform && !isStatistics && !isStereoData && (
                 <Button
                   variant={showTransforms ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
@@ -1482,7 +1505,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <div>
                           <h5 className="text-xs font-semibold text-green-800">Statistics Calculated!</h5>
                           <p className="text-xs text-green-700 mt-0.5">
-                            Select "Mean Statistics" data source to view them.
+                            Select from the Variable dropdown to view them.
                           </p>
                         </div>
                       </div>
@@ -1524,8 +1547,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Transforms Panel - For calibrated data (including merged), not statistics */}
-            {showTransforms && canTransform && imageSrc && !error && !isStatistics && (
+            {/* Transforms Panel - For calibrated data (including merged), not statistics or stereo */}
+            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isStereoData && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
 
@@ -1533,7 +1556,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <div className="mb-3 text-sm text-purple-700">
                   <span className="font-medium">Source: </span>
                   <span className="bg-purple-100 px-2 py-0.5 rounded">
-                    {isMerged ? "Merged" : isStereo ? "Stereo" : `Camera ${camera}`}
+                    {isMerged ? "Merged" : isStereoData ? "Stereo" : `Camera ${camera}`}
                   </span>
                 </div>
 

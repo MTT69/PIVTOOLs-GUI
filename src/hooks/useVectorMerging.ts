@@ -23,12 +23,14 @@ export interface MergingConstraints {
  * @param basePathIdx Current base path index
  * @param cameraOptions Array of available camera numbers (e.g., [1, 2, 3])
  * @param imageCount Number of images to process
+ * @param config Config object containing merging settings
  */
 export function useVectorMerging(
   backendUrl: string = "/backend",
   basePathIdx: number = 0,
   cameraOptions: number[] = [],
-  imageCount: number = 1000
+  imageCount: number = 1000,
+  config?: any
 ) {
   // --- State Initialization ---
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
@@ -146,8 +148,8 @@ export function useVectorMerging(
           base_path_idx: basePathIdx,
           cameras: selectedCameras,  // Already number[]
           image_count: imageCount,
-          type_name: "instantaneous",
-          endpoint: "",
+          type_name: config?.merging?.type_name || 'instantaneous',
+          endpoint: config?.merging?.source_endpoint || 'regular',
         }),
       });
 

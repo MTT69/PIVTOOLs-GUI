@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCalibration } from '@/hooks/useCalibration';
 import { ScaleFactorCalibration } from './ScaleFactorCalibration';
-import { PinholeCalibration } from './PinholeCalibration';
+import { DotboardCalibration } from './DotboardCalibration';
 import { StereoCalibration } from './StereoCalibration';
 import { StereoCharucoCalibration } from './StereoCharucoCalibration';
 import { PolynomialCalibration } from './PolynomialCalibration';
@@ -41,10 +41,10 @@ export const Calibration: React.FC<CalibrationProps> = ({
 
   const calibrationMethods = [
     { id: 'scale_factor', label: 'Scale Factor', component: ScaleFactorCalibration },
-    { id: 'pinhole', label: 'Planar Dotboard', component: PinholeCalibration },
+    { id: 'dotboard', label: 'Planar Dotboard', component: DotboardCalibration },
     { id: 'charuco', label: 'Planar ChArUco', component: ChArUcoCalibration },
     { id: 'polynomial', label: 'Polynomial', component: PolynomialCalibration },
-    { id: 'stereo', label: 'Stereo Dotboard', component: StereoCalibration },
+    { id: 'stereo_dotboard', label: 'Stereo Dotboard', component: StereoCalibration },
     { id: 'stereo_charuco', label: 'Stereo ChArUco', component: StereoCharucoCalibration },
   ];
 

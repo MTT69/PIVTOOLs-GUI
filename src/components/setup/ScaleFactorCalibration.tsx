@@ -181,7 +181,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         </div>
 
 
-        {/* Status indicator (same as pinhole) */}
+        {/* Status indicator (same as dotboard) */}
         <div className="mb-2">
           {status === "running" && (
             <div className="flex items-center gap-2 text-blue-600 text-sm">

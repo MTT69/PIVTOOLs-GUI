@@ -35,7 +35,7 @@ export function useCalibrationImageViewer(
   idx: number,
   imageFormat: 'jpeg' | 'png' = 'jpeg',
   autoLimits: boolean = true,
-  calibrationType: 'pinhole' | 'charuco' | 'stereo' | 'stereo-charuco' = 'pinhole'
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' = 'dotboard'
 ) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,15 +69,15 @@ export function useCalibrationImageViewer(
 
   // Build frame URL based on calibration type
   const buildFrameUrl = useCallback((frameIdx: number) => {
-    if (calibrationType === 'stereo') {
-      // Stereo pinhole uses different endpoint structure
-      return `${backendUrl}/calibration/stereo/pinhole/frame/${frameIdx}?camera=${camera}&source_path_idx=${sourcePathIdx}`;
+    if (calibrationType === 'stereo_dotboard') {
+      // Stereo dotboard uses different endpoint structure
+      return `${backendUrl}/calibration/stereo/dotboard/frame/${frameIdx}?camera=${camera}&source_path_idx=${sourcePathIdx}`;
     }
-    if (calibrationType === 'stereo-charuco') {
+    if (calibrationType === 'stereo_charuco') {
       // Stereo ChArUco uses different endpoint structure
       return `${backendUrl}/calibration/stereo/charuco/frame/${frameIdx}?camera=${camera}&source_path_idx=${sourcePathIdx}`;
     }
-    // Pinhole and charuco use the shared endpoint
+    // Dotboard and charuco use the shared endpoint
     return `${backendUrl}/calibration/get_frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
   }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits, calibrationType]);
 

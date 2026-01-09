@@ -55,6 +55,7 @@ export interface CameraValidationResult {
   camera_path?: string;
   format_detected?: string;
   container_format?: boolean;
+  suggested_pattern?: string;
   error?: string;
 }
 
@@ -144,6 +145,9 @@ export function useStereoCharucoCalibration(
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState(10);
   const [subfolder, setSubfolder] = useState('');
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [pathOrder, setPathOrder] = useState('camera_first');
 
   // ChArUco board params (saved to config.calibration.stereo_charuco)
   const [squaresH, setSquaresH] = useState(10);
@@ -196,6 +200,9 @@ export function useStereoCharucoCalibration(
           if (calData.image_type) setImageType(calData.image_type);
           if (calData.num_images) setNumImages(calData.num_images);
           if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
+          if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
+          if (calData.camera_subfolders) setCameraSubfolders(calData.camera_subfolders);
+          if (calData.path_order) setPathOrder(calData.path_order);
         }
 
         // Load ChArUco-specific settings from charuco section
@@ -235,6 +242,9 @@ export function useStereoCharucoCalibration(
             image_type: imageType,
             num_images: numImages,
             subfolder: subfolder,
+            use_camera_subfolders: useCameraSubfolders,
+            camera_subfolders: cameraSubfolders,
+            path_order: pathOrder,
           }),
         });
 
@@ -260,7 +270,7 @@ export function useStereoCharucoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -306,7 +316,7 @@ export function useStereoCharucoCalibration(
   // Auto-validate on param changes
   useEffect(() => {
     validateImages();
-  }, [validateImages, imageFormat, numImages, subfolder, imageType]);
+  }, [validateImages, imageFormat, numImages, subfolder, imageType, useCameraSubfolders, cameraSubfolders, pathOrder]);
 
   // Generate stereo ChArUco model
   const generateStereoModel = useCallback(async () => {
@@ -547,6 +557,12 @@ export function useStereoCharucoCalibration(
     setNumImages,
     subfolder,
     setSubfolder,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+    pathOrder,
+    setPathOrder,
 
     // ChArUco board params
     squaresH,

@@ -5,15 +5,18 @@ interface DataSourceInfo {
   exists: boolean;
   frame_count: number;
   path: string | null;
+  camera_pair?: number[] | null;
 }
 
 interface DataSourcesAvailability {
   calibrated: DataSourceInfo;
   uncalibrated: DataSourceInfo;
   merged: DataSourceInfo;
+  stereo: DataSourceInfo;
+  inst_stats: DataSourceInfo;
 }
 
-export type DataSourceType = 'calibrated' | 'uncalibrated' | 'merged';
+export type DataSourceType = 'calibrated' | 'uncalibrated' | 'merged' | 'stereo' | 'inst_stats';
 
 // Types for available variables
 export interface VariableInfo {
@@ -171,7 +174,6 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const [resolution, setResolution] = useState<string>('1080p');
   const resolutionOptions = [
     { label: '1080p (1920x1080)', value: '1080p' },
-    { label: '4K (3840x2160)', value: '4k' }
   ];
   const [fps, setFps] = useState<number>(30);
 
@@ -199,9 +201,10 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     };
   } | null>(null);
 
-  // Video ready/error state
+  // Video ready/error/loading state
   const [videoReady, setVideoReady] = useState<boolean>(false);
   const [videoError, setVideoError] = useState<boolean>(false);
+  const [videoLoading, setVideoLoading] = useState<boolean>(false);
 
   // Effective directory
   const effectiveDir = useMemo(() => {
@@ -263,10 +266,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       if (data.success && data.runs) {
         setAvailableRuns(data.runs);
         setHighestRun(data.highest_run || 1);
-        // Auto-set to highest run if current run is not available
-        if (!data.runs.includes(run)) {
-          setRun(data.highest_run || 1);
-        }
+        // Always default to highest run (matches VectorViewer behavior)
+        setRun(data.highest_run || 1);
       } else {
         setAvailableRuns([1]);
         setHighestRun(1);
@@ -328,25 +329,32 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const dataSourceOptions = useMemo(() => {
     if (!dataSources) return [];
     const options: { value: DataSourceType; label: string; frameCount: number }[] = [];
-    if (dataSources.calibrated.exists) {
+    if (dataSources.calibrated?.exists) {
       options.push({
         value: 'calibrated',
         label: `Calibrated (${dataSources.calibrated.frame_count} frames)`,
         frameCount: dataSources.calibrated.frame_count,
       });
     }
-    if (dataSources.uncalibrated.exists) {
+    if (dataSources.uncalibrated?.exists) {
       options.push({
         value: 'uncalibrated',
         label: `Uncalibrated (${dataSources.uncalibrated.frame_count} frames)`,
         frameCount: dataSources.uncalibrated.frame_count,
       });
     }
-    if (dataSources.merged.exists) {
+    if (dataSources.merged?.exists) {
       options.push({
         value: 'merged',
         label: `Merged (${dataSources.merged.frame_count} frames)`,
         frameCount: dataSources.merged.frame_count,
+      });
+    }
+    if (dataSources.stereo?.exists) {
+      options.push({
+        value: 'stereo',
+        label: `Stereo 3D (${dataSources.stereo.frame_count} frames)`,
+        frameCount: dataSources.stereo.frame_count,
       });
     }
     return options;
@@ -356,6 +364,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const hasAnyData = useMemo(() => {
     return dataSourceOptions.length > 0;
   }, [dataSourceOptions]);
+
+  // Check if current data source is stereo
+  const isStereoData = useMemo(() => dataSource === 'stereo', [dataSource]);
 
   // Directory picker
   const handleBrowse = () => {
@@ -684,41 +695,33 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     }
   };
 
-  // Video ready effect - with auto-retry on error
-  const videoRetryCount = useRef(0);
-  const maxVideoRetries = 5;
-  const videoRetryDelay = 1500; // ms between retries
-
+  // Video ready state management - simple and stable
   useEffect(() => {
     if (videoResult?.out_path) {
-      setVideoReady(false);
+      setVideoLoading(true);
+      setVideoReady(true);
       setVideoError(false);
-      videoRetryCount.current = 0;
-      // Short delay before showing video (backend now verifies file is ready)
-      const timer = setTimeout(() => setVideoReady(true), 500);
-      return () => clearTimeout(timer);
     }
   }, [videoResult?.out_path]);
 
-  const handleVideoError = useCallback(() => {
-    // Auto-retry silently up to maxVideoRetries times
-    if (videoRetryCount.current < maxVideoRetries) {
-      videoRetryCount.current += 1;
-      console.log(`Video load failed, auto-retrying (${videoRetryCount.current}/${maxVideoRetries})...`);
-      setVideoReady(false);
-      setTimeout(() => setVideoReady(true), videoRetryDelay);
-    } else {
-      // Only show error after all retries exhausted
-      console.error('Video load failed after all retries');
-      setVideoError(true);
-    }
+  // Called when video element fires 'canplay' event
+  const handleVideoCanPlay = useCallback(() => {
+    setVideoLoading(false);
   }, []);
 
+  // Called on video load error
+  const handleVideoError = useCallback(() => {
+    setVideoLoading(false);
+    setVideoError(true);
+  }, []);
+
+  // Manual retry - just reload the video element
   const handleRetryVideo = useCallback(() => {
-    videoRetryCount.current = 0;
     setVideoError(false);
+    setVideoLoading(true);
+    // Force video element to reload by briefly toggling ready state
     setVideoReady(false);
-    setTimeout(() => setVideoReady(true), videoRetryDelay);
+    requestAnimationFrame(() => setVideoReady(true));
   }, []);
 
   // Camera count for CameraSelector
@@ -763,6 +766,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     videoStatus,
     videoReady,
     videoError,
+    videoLoading,
+    handleVideoCanPlay,
     effectiveDir,
     // Data source state
     dataSources,
@@ -775,6 +780,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     setDataSource,
     dataSourceOptions,
     hasAnyData,
+    isStereoData,
     // Variables state
     availableVariables,
     groupedVariables,

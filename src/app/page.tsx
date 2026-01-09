@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Navigation from '@/components/Navigation';
-import Hero from '@/components/Hero';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import {
@@ -31,12 +30,7 @@ import { useAutoValidation, useConfigUpdate } from '@/hooks/useConfigUpdate';
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
 
-// Force reset localStorage for testing - remove in production
-const FORCE_RESET_HERO = true; // Set to false in production
-
 export default function Home() {
-  // Don't read localStorage during render — keep server and client markup identical.
-  const [seenHero, setSeenHero] = useState<boolean>(false);
   const [mounted, setMounted] = useState(false);
   const [config, setConfig] = useState<any>(emptyConfig);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -47,25 +41,6 @@ export default function Home() {
   const pathValidation = useAutoValidation(config);
 
   useEffect(() => {
-    // Clear localStorage hero flag if FORCE_RESET_HERO is true
-    if (FORCE_RESET_HERO) {
-      try {
-        localStorage.removeItem('pivtools_seen_hero');
-        console.log('Hero state reset for testing');
-      } catch (error) {
-        console.error('Failed to reset hero state:', error);
-      }
-    }
-
-    try {
-      const v = localStorage.getItem('pivtools_seen_hero');
-      // Only set seenHero to true if the value is specifically 'true'
-      setSeenHero(v === 'true');
-      console.log('Hero visibility check:', { v, seenHero: v === 'true', mounted: true });
-    } catch (error) {
-      console.error('Error accessing localStorage:', error);
-      setSeenHero(false);
-    }
     setMounted(true);
   }, []);
 
@@ -188,30 +163,13 @@ export default function Home() {
     setShowValidationWarning(false);
   }, []);
 
-  // DEBUG: Log component state on each render
-  console.log('Render state:', { mounted, seenHero });
-
   return (
     <main className="min-h-screen bg-gray-50">
-      {/* Only show Navigation when not showing the Hero */}
-      {mounted && seenHero && <Navigation />}
-      
+      {mounted && <Navigation />}
+
       { !mounted ? (
         <div className="max-w-7xl mx-auto px-4 pt-24 pb-16" />
-      ) : (
-        !seenHero ? (
-          <Hero onGetStarted={() => { 
-            try { 
-              localStorage.setItem('pivtools_seen_hero', 'true'); 
-              console.log('Hero marked as seen');
-            } catch (error) {
-              console.error('Error setting localStorage:', error);
-            }
-            // mark hero seen and switch to the setup tab
-            setSeenHero(true);
-            setActiveTab('setup');
-          }} />
-        ) : configError ? (
+      ) : configError ? (
           <div className="max-w-2xl mx-auto px-4 pt-24 pb-16">
             <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-6 rounded-xl shadow-lg">
               <h2 className="text-2xl font-bold mb-2">Backend Server Not Detected</h2>
@@ -328,8 +286,7 @@ export default function Home() {
               </Tabs>
             </div>
           </div>
-        )
-      )}
+        )}
 
       {/* Validation warning dialog */}
       <AlertDialog open={showValidationWarning} onOpenChange={setShowValidationWarning}>

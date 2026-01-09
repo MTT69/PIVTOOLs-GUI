@@ -75,6 +75,8 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     videoStatus,
     videoReady,
     videoError,
+    videoLoading,
+    handleVideoCanPlay,
     effectiveDir,
     // Data source state
     dataSourcesLoading,
@@ -82,6 +84,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     setDataSource,
     dataSourceOptions,
     hasAnyData,
+    isStereoData,
     // Runs state
     availableRuns,
     highestRun,
@@ -166,18 +169,26 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                 {/* Camera and Data Source selection */}
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="flex items-center gap-2">
-                    <label htmlFor="camera" className="text-sm font-medium">Camera:</label>
-                    <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-                      <SelectTrigger id="camera" className="w-28"><SelectValue placeholder="Select camera" /></SelectTrigger>
-                      <SelectContent>
-                        {cameraOptions.map((c, i) => {
-                          const camNum = c.replace('Cam', '');
-                          return (
-                            <SelectItem key={i} value={camNum}>{c}</SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <label htmlFor="camera" className="text-sm font-medium">
+                      {isStereoData ? "Source:" : "Camera:"}
+                    </label>
+                    {isStereoData ? (
+                      <div className="px-3 py-2 bg-muted rounded-md text-sm w-28">
+                        Stereo (3D)
+                      </div>
+                    ) : (
+                      <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
+                        <SelectTrigger id="camera" className="w-28"><SelectValue placeholder="Select camera" /></SelectTrigger>
+                        <SelectContent>
+                          {cameraOptions.map((c, i) => {
+                            const camNum = c.replace('Cam', '');
+                            return (
+                              <SelectItem key={i} value={camNum}>{c}</SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
 
                   {/* Data Source selection */}
@@ -381,19 +392,28 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     )}
                     
                     {videoResult.out_path && videoReady && (
-                      <div className="mt-2">
+                      <div className="mt-2 relative">
+                        {/* Loading overlay - sits on top of video */}
+                        {videoLoading && !videoError && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded border z-10">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                            <span className="ml-2 text-sm text-gray-600">Loading video...</span>
+                          </div>
+                        )}
+                        {/* Video element - always mounted, loading overlay covers it until ready */}
                         <video
                           controls
                           className="w-full rounded border"
                           style={{ maxHeight: 512 }}
                           src={createVideoUrl(videoResult.out_path)}
+                          onCanPlay={handleVideoCanPlay}
                           onError={handleVideoError}
                         >
                           Your browser does not support the video tag.
                         </video>
                         {videoError && (
                           <div className="p-2 bg-red-50 text-red-600 text-sm mt-1 rounded flex items-center gap-2">
-                            Error loading video. The file might not be ready yet.
+                            Error loading video.
                             <Button variant="outline" size="sm" onClick={handleRetryVideo}>
                               Retry
                             </Button>

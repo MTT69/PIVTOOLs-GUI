@@ -8,16 +8,20 @@ interface ValidationAlertProps {
     checked: boolean;
     error?: string | null;
     suggested_pattern?: string | null;
+    suggested_pattern_b?: string | null;  // For A/B pair detection
+    suggested_mode?: 'ab_format' | 'skip_frames' | null;  // Detected pairing mode
   };
   /** Custom success message to display instead of default */
   customSuccessMessage?: string;
   /** Optional count of found items to display */
   foundCount?: number | string;
-  /** Callback when user clicks to apply suggested pattern */
-  onApplySuggestedPattern?: (pattern: string) => void;
+  /** Current pairing mode from config (used to preserve mode when applying suggestions) */
+  currentMode?: 'ab_format' | 'skip_frames';
+  /** Callback when user clicks to apply suggested pattern(s) */
+  onApplySuggestedPattern?: (pattern: string, patternB?: string | null, mode?: string | null) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, onApplySuggestedPattern }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern }: ValidationAlertProps) {
   // Checking state
   if (!validation.checked && validation.error) {
     return (
@@ -62,10 +66,15 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => onApplySuggestedPattern(validation.suggested_pattern!)}
+                onClick={() => onApplySuggestedPattern(
+                  validation.suggested_pattern!,
+                  validation.suggested_pattern_b,
+                  validation.suggested_mode
+                )}
                 className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
               >
                 {validation.suggested_pattern}
+                {validation.suggested_pattern_b && ` + ${validation.suggested_pattern_b}`}
               </Button>
             </div>
           )}

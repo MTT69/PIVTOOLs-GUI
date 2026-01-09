@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
 import { useChArUcoCalibration, ARUCO_DICTS, FrameDetection } from "@/hooks/useChArUcoCalibration";
 import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
 import { useToast } from "@/components/ui/use-toast";
@@ -45,7 +47,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     calibrating,
     jobId,
 
-    // Model and detections (like pinhole)
+    // Model and detections (like dotboard)
     cameraModel,
     detections,
     modelLoading,
@@ -89,6 +91,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const [numImages, setNumImages] = useState<string | number>(10);
   const [calibrationSubfolder, setCalibrationSubfolder] = useState("");
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [pathOrder, setPathOrder] = useState('camera_first');
 
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
@@ -163,6 +168,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           setImageType(json.image_type || "standard");
           setNumImages(json.num_images || 10);
           setCalibrationSubfolder(json.subfolder || "");
+          setUseCameraSubfolders(json.use_camera_subfolders || false);
+          setCameraSubfolders(json.camera_subfolders || []);
+          setPathOrder(json.path_order || 'camera_first');
         }
       } catch (e) {
         console.error("Failed to load calibration config:", e);
@@ -266,15 +274,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
           </div>
           <div>
-            <label className="text-sm font-medium">Camera</label>
-            <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
-              <SelectTrigger><SelectValue placeholder="Pick camera" /></SelectTrigger>
-              <SelectContent>
-                {cameraOptions.map((c) => (
-                  <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <label className="text-sm font-medium">Cameras to Process</label>
+            <div className="text-sm text-muted-foreground mt-2 p-2 bg-muted rounded">
+              {cameraOptions.length > 0
+                ? `Cameras ${cameraOptions.join(', ')} (from config.camera_numbers)`
+                : 'No cameras configured'}
+            </div>
           </div>
         </div>
 
@@ -335,6 +340,89 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             />
           </div>
         </div>
+
+        {/* Use Camera Subfolders Toggle */}
+        {(imageType === "standard" || imageType === "lavision_im7") && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="charuco-use-camera-subfolders"
+                checked={useCameraSubfolders}
+                onCheckedChange={checked => {
+                  setUseCameraSubfolders(checked);
+                  saveCalibrationConfig({ use_camera_subfolders: checked });
+                }}
+              />
+              <Label htmlFor="charuco-use-camera-subfolders" className="text-sm">
+                Use camera subfolders
+              </Label>
+            </div>
+            <p className="text-xs text-muted-foreground ml-10">
+              {useCameraSubfolders
+                ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+                : "Images in source directory without camera subfolders."}
+            </p>
+          </div>
+        )}
+
+        {/* Camera Subfolders & Path Order - only show when using camera subfolders */}
+        {useCameraSubfolders && cameraOptions.length > 1 && (
+          <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
+            <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
+
+            {/* Path Order Selector */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Path Order</label>
+              <Select
+                value={pathOrder}
+                onValueChange={v => {
+                  setPathOrder(v);
+                  saveCalibrationConfig({ path_order: v });
+                }}
+              >
+                <SelectTrigger className="w-[280px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
+                  <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {pathOrder === "calibration_first"
+                  ? `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${calibrationSubfolder || 'calibration'}/${cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/`
+                  : `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/${calibrationSubfolder || 'calibration'}/`
+                }
+              </p>
+            </div>
+
+            {/* Custom Camera Subfolder Names */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
+              <p className="text-xs text-muted-foreground mb-2">
+                Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {cameraOptions.map((cam, idx) => (
+                  <div key={cam}>
+                    <label className="text-xs text-muted-foreground">Camera {cam}</label>
+                    <Input
+                      placeholder={`Cam${cam}`}
+                      value={cameraSubfolders[idx] || ''}
+                      onChange={e => {
+                        const newSubfolders = [...cameraSubfolders];
+                        while (newSubfolders.length < cameraOptions.length) newSubfolders.push('');
+                        newSubfolders[idx] = e.target.value;
+                        setCameraSubfolders(newSubfolders);
+                      }}
+                      onBlur={() => saveCalibrationConfig({ camera_subfolders: cameraSubfolders })}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Board Parameters */}
         <div className="grid grid-cols-2 gap-4">
@@ -465,15 +553,35 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
         {/* Calibration Image Viewer Button */}
         {validation.valid && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowImageViewer(!showImageViewer)}
-            className="flex items-center gap-2"
-          >
-            {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
-          </Button>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowImageViewer(!showImageViewer)}
+              className="flex items-center gap-2"
+            >
+              {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
+            </Button>
+
+            {/* Camera Toggle (shown when viewer is visible and multiple cameras) */}
+            {showImageViewer && cameraOptions.length > 1 && (
+              <div className="flex items-center gap-1 bg-muted rounded-md p-1">
+                {cameraOptions.map((cam) => (
+                  <Button
+                    key={cam}
+                    variant={camera === cam ? "default" : "ghost"}
+                    size="sm"
+                    onClick={() => setCamera(cam)}
+                    className="h-7 px-3"
+                  >
+                    <Camera className="h-3 w-3 mr-1" />
+                    Cam {cam}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Calibration Image Viewer */}

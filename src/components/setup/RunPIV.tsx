@@ -29,6 +29,7 @@ interface RunPIVProps {
   showFrameViewer?: boolean;
   showSimpleStatus?: boolean;
   title?: string;
+  mode?: "instantaneous" | "ensemble";
 }
 
 const RunPIV: React.FC<RunPIVProps> = ({
@@ -36,7 +37,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
   showProgressBar = true,
   showFrameViewer = true,
   showSimpleStatus = false,
-  title = "Run PIV"
+  title = "Run PIV",
+  mode = "instantaneous"
 }) => {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
@@ -79,7 +81,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
 
   // --- PIV Logic from Custom Hook (moved up so run/cancel are available) ---
   const { isLoading, isPolling, progress, statusImage, logs, run, cancel } = usePivRunner({
-    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage, activePaths
+    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage, activePaths, mode
   });
 
   // Check if output data already exists before starting a run

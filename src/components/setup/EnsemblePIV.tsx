@@ -335,7 +335,6 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 <PerformanceSettings
                   config={config}
                   updateConfigValue={updateConfigValue}
-                  showFilterWorkerCount={true}
                 />
               </div>
             )}
@@ -386,6 +385,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
       {/* PIV Runner - Simplified for Ensemble */}
       <RunPIV
         config={config}
+        mode="ensemble"
         showProgressBar={false}
         showFrameViewer={false}
         showSimpleStatus={true}

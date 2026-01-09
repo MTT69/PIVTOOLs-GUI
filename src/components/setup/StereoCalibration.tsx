@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
 import { useStereoCalibration, StereoFrameDetection } from "@/hooks/useStereoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
@@ -55,6 +57,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setNumImages,
     subfolder,
     setSubfolder,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+    pathOrder,
+    setPathOrder,
 
     // Grid params
     patternCols,
@@ -137,7 +145,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          calibration: { active: "stereo" },
+          calibration: { active: "stereo_dotboard" },
         }),
       });
       const json = await res.json();
@@ -150,7 +158,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     }
   };
 
-  const isActive = config.calibration?.active === "stereo";
+  const isActive = config.calibration?.active === "stereo_dotboard";
 
   // Local input state for debouncing
   const [patternColsInput, setPatternColsInput] = useState(String(patternCols));
@@ -201,7 +209,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
       {/* Main Configuration Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Stereo Pinhole Calibration</CardTitle>
+          <CardTitle>Stereo Dotboard Calibration</CardTitle>
           <CardDescription>
             Configure and run stereo calibration for 3D velocity reconstruction
           </CardDescription>
@@ -290,6 +298,91 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           </div>
 
+          {/* Use Camera Subfolders Toggle */}
+          {(imageType === "standard" || imageType === "lavision_im7") && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="stereo-dotboard-use-camera-subfolders"
+                  checked={useCameraSubfolders}
+                  onCheckedChange={setUseCameraSubfolders}
+                />
+                <Label htmlFor="stereo-dotboard-use-camera-subfolders" className="text-sm">
+                  Use camera subfolders
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-10">
+                {useCameraSubfolders
+                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+                  : "Images in source directory without camera subfolders."
+                }
+              </p>
+            </div>
+          )}
+
+          {/* Camera Subfolders & Path Order - only show when using camera subfolders */}
+          {useCameraSubfolders && (
+            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
+              <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
+
+              {/* Path Order Selector */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Path Order</label>
+                <Select value={pathOrder} onValueChange={setPathOrder}>
+                  <SelectTrigger className="w-[280px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
+                    <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {pathOrder === "calibration_first"
+                    ? `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${subfolder || 'calibration'}/${cameraSubfolders[0] || `Cam${cam1}`}/`
+                    : `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${cameraSubfolders[0] || `Cam${cam1}`}/${subfolder || 'calibration'}/`
+                  }
+                </p>
+              </div>
+
+              {/* Custom Camera Subfolder Names */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2).
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Camera {cam1}</label>
+                    <Input
+                      placeholder={`Cam${cam1}`}
+                      value={cameraSubfolders[0] || ''}
+                      onChange={e => {
+                        const newSubfolders = [...cameraSubfolders];
+                        while (newSubfolders.length < 2) newSubfolders.push('');
+                        newSubfolders[0] = e.target.value;
+                        setCameraSubfolders(newSubfolders);
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Camera {cam2}</label>
+                    <Input
+                      placeholder={`Cam${cam2}`}
+                      value={cameraSubfolders[1] || ''}
+                      onChange={e => {
+                        const newSubfolders = [...cameraSubfolders];
+                        while (newSubfolders.length < 2) newSubfolders.push('');
+                        newSubfolders[1] = e.target.value;
+                        setCameraSubfolders(newSubfolders);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* macOS Warning for Unsupported Formats */}
           {isContainerFormat && isMacOS && (
             <Alert variant="destructive">
@@ -329,6 +422,21 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   </span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Suggested Pattern Button */}
+          {validation && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}"
+              </Button>
             </div>
           )}
 
@@ -438,7 +546,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
               numImages={numImages}
-              calibrationType="stereo"
+              calibrationType="stereo_dotboard"
               calibrationParams={{
                 pattern_cols: patternCols,
                 pattern_rows: patternRows,

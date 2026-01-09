@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-export type CalibrationMethod = "scale_factor" | "pinhole" | "charuco" | "polynomial" | "stereo";
+export type CalibrationMethod = "scale_factor" | "dotboard" | "charuco" | "polynomial" | "stereo_dotboard" | "stereo_charuco";
 
 export interface CalibrationConfig {
   active?: CalibrationMethod;
   scale_factor?: any;
-  pinhole?: any;
+  dotboard?: any;
   charuco?: any;
   polynomial?: any;
-  stereo?: any;
+  stereo_dotboard?: any;
+  stereo_charuco?: any;
   [key: string]: any;
 }
 
@@ -81,7 +82,7 @@ export function useCalibration(
 
   return {
     calibrationConfig,
-    activeMethod: calibrationConfig.active || "pinhole",
+    activeMethod: calibrationConfig.active || "dotboard",
     setActiveMethod,
     updateCalibrationConfig,
     getCameraOptions,

@@ -66,15 +66,15 @@ export interface MultiCameraJobStatus {
 }
 
 /**
- * Hook for managing pinhole calibration state and operations.
+ * Hook for managing dotboard calibration state and operations.
  *
  * Simplified API:
  * - Parameters are saved to config.yaml via /backend/calibration/config
- * - Validation via /backend/calibration/planar/validate
- * - Calibration via /backend/calibration/planar/generate_model
- * - Model loading via /backend/calibration/planar/model
+ * - Validation via /backend/calibration/dotboard/validate
+ * - Calibration via /backend/calibration/dotboard/generate_model
+ * - Model loading via /backend/calibration/dotboard/model
  */
-export function usePinholeCalibration(
+export function useDotboardCalibration(
   cameraOptions: number[],
   sourcePaths: string[],
 ) {
@@ -148,17 +148,17 @@ export function usePinholeCalibration(
           if (calData.path_order !== undefined) setPathOrder(calData.path_order);
         }
 
-        // Load pinhole-specific settings
+        // Load dotboard-specific settings
         const cfgRes = await fetch('/backend/config');
         if (cfgRes.ok) {
           const cfgData = await cfgRes.json();
-          const pinhole = cfgData.calibration?.pinhole || {};
-          if (pinhole.pattern_cols) setPatternCols(pinhole.pattern_cols);
-          if (pinhole.pattern_rows) setPatternRows(pinhole.pattern_rows);
-          if (pinhole.dot_spacing_mm) setDotSpacingMm(pinhole.dot_spacing_mm);
-          if (pinhole.enhance_dots !== undefined) setEnhanceDots(pinhole.enhance_dots);
-          if (pinhole.asymmetric !== undefined) setAsymmetric(pinhole.asymmetric);
-          if (pinhole.dt) setDt(pinhole.dt);
+          const dotboard = cfgData.calibration?.dotboard || {};
+          if (dotboard.pattern_cols) setPatternCols(dotboard.pattern_cols);
+          if (dotboard.pattern_rows) setPatternRows(dotboard.pattern_rows);
+          if (dotboard.dot_spacing_mm) setDotSpacingMm(dotboard.dot_spacing_mm);
+          if (dotboard.enhance_dots !== undefined) setEnhanceDots(dotboard.enhance_dots);
+          if (dotboard.asymmetric !== undefined) setAsymmetric(dotboard.asymmetric);
+          if (dotboard.dt) setDt(dotboard.dt);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -190,13 +190,13 @@ export function usePinholeCalibration(
           }),
         });
 
-        // Save pinhole-specific settings
+        // Save dotboard-specific settings
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
-              pinhole: {
+              dotboard: {
                 pattern_cols: patternCols,
                 pattern_rows: patternRows,
                 dot_spacing_mm: dotSpacingMm,
@@ -227,7 +227,7 @@ export function usePinholeCalibration(
     validationDebounceRef.current = setTimeout(async () => {
       setValidating(true);
       try {
-        const res = await fetch('/backend/calibration/planar/validate', {
+        const res = await fetch('/backend/calibration/dotboard/validate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -259,7 +259,7 @@ export function usePinholeCalibration(
   // Generate camera model
   const generateCameraModel = useCallback(async () => {
     try {
-      const res = await fetch('/backend/calibration/planar/generate_model', {
+      const res = await fetch('/backend/calibration/dotboard/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -292,7 +292,7 @@ export function usePinholeCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/planar/job/${jobId}`);
+        const res = await fetch(`/backend/calibration/dotboard/job/${jobId}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -336,7 +336,7 @@ export function usePinholeCalibration(
     setModelLoadError(null);
     try {
       const res = await fetch(
-        `/backend/calibration/planar/model?source_path_idx=${sourcePathIdx}&camera=${camera}`
+        `/backend/calibration/dotboard/model?source_path_idx=${sourcePathIdx}&camera=${camera}`
       );
       const data = await res.json();
 
@@ -362,7 +362,7 @@ export function usePinholeCalibration(
   // Generate camera model for all cameras
   const generateCameraModelAll = useCallback(async () => {
     try {
-      const res = await fetch('/backend/calibration/planar/generate_model_all', {
+      const res = await fetch('/backend/calibration/dotboard/generate_model_all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -444,7 +444,7 @@ export function usePinholeCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/planar/job/${multiCameraJobId}`);
+        const res = await fetch(`/backend/calibration/dotboard/job/${multiCameraJobId}`);
         const data = await res.json();
 
         if (res.ok) {

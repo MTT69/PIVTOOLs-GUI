@@ -54,6 +54,7 @@ export interface CameraValidationResult {
   camera_path?: string;
   format_detected?: string;
   container_format?: boolean;
+  suggested_pattern?: string;
   error?: string;
 }
 
@@ -104,14 +105,14 @@ export interface StereoReconstructJobStatus {
 }
 
 /**
- * Hook for managing stereo pinhole calibration state and operations.
+ * Hook for managing stereo dotboard calibration state and operations.
  *
  * Stereo API:
  * - Parameters saved to config.yaml via /backend/calibration/config and /backend/update_config
- * - Validation via /backend/calibration/stereo/pinhole/validate
- * - Calibration via /backend/calibration/stereo/pinhole/generate_model
- * - Model loading via /backend/calibration/stereo/pinhole/model
- * - 3D reconstruction via /backend/calibration/stereo/pinhole/reconstruct
+ * - Validation via /backend/calibration/stereo/dotboard/validate
+ * - Calibration via /backend/calibration/stereo/dotboard/generate_model
+ * - Model loading via /backend/calibration/stereo/dotboard/model
+ * - 3D reconstruction via /backend/calibration/stereo/dotboard/reconstruct
  */
 export function useStereoCalibration(
   cameraOptions: number[],
@@ -127,8 +128,11 @@ export function useStereoCalibration(
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState(10);
   const [subfolder, setSubfolder] = useState('');
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  const [pathOrder, setPathOrder] = useState('camera_first');
 
-  // Grid params (saved to config.calibration.stereo)
+  // Grid params (saved to config.calibration.stereo_dotboard)
   const [patternCols, setPatternCols] = useState(10);
   const [patternRows, setPatternRows] = useState(10);
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
@@ -177,18 +181,21 @@ export function useStereoCalibration(
           if (calData.image_type) setImageType(calData.image_type);
           if (calData.num_images) setNumImages(calData.num_images);
           if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
+          if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
+          if (calData.camera_subfolders) setCameraSubfolders(calData.camera_subfolders);
+          if (calData.path_order) setPathOrder(calData.path_order);
         }
 
-        // Load stereo-specific settings
+        // Load stereo_dotboard-specific settings
         const cfgRes = await fetch('/backend/config');
         if (cfgRes.ok) {
           const cfgData = await cfgRes.json();
-          const stereo = cfgData.calibration?.stereo || {};
-          if (stereo.pattern_cols) setPatternCols(stereo.pattern_cols);
-          if (stereo.pattern_rows) setPatternRows(stereo.pattern_rows);
-          if (stereo.dot_spacing_mm) setDotSpacingMm(stereo.dot_spacing_mm);
-          if (stereo.enhance_dots !== undefined) setEnhanceDots(stereo.enhance_dots);
-          if (stereo.dt) setDt(stereo.dt);
+          const stereo_dotboard = cfgData.calibration?.stereo_dotboard || {};
+          if (stereo_dotboard.pattern_cols) setPatternCols(stereo_dotboard.pattern_cols);
+          if (stereo_dotboard.pattern_rows) setPatternRows(stereo_dotboard.pattern_rows);
+          if (stereo_dotboard.dot_spacing_mm) setDotSpacingMm(stereo_dotboard.dot_spacing_mm);
+          if (stereo_dotboard.enhance_dots !== undefined) setEnhanceDots(stereo_dotboard.enhance_dots);
+          if (stereo_dotboard.dt) setDt(stereo_dotboard.dt);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -214,16 +221,19 @@ export function useStereoCalibration(
             image_type: imageType,
             num_images: numImages,
             subfolder: subfolder,
+            use_camera_subfolders: useCameraSubfolders,
+            camera_subfolders: cameraSubfolders,
+            path_order: pathOrder,
           }),
         });
 
-        // Save stereo-specific settings
+        // Save stereo_dotboard-specific settings
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
-              stereo: {
+              stereo_dotboard: {
                 pattern_cols: patternCols,
                 pattern_rows: patternRows,
                 dot_spacing_mm: dotSpacingMm,
@@ -237,7 +247,7 @@ export function useStereoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -253,7 +263,7 @@ export function useStereoCalibration(
     validationDebounceRef.current = setTimeout(async () => {
       setValidating(true);
       try {
-        const res = await fetch('/backend/calibration/stereo/pinhole/validate', {
+        const res = await fetch('/backend/calibration/stereo/dotboard/validate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -283,12 +293,12 @@ export function useStereoCalibration(
   // Auto-validate on param changes
   useEffect(() => {
     validateImages();
-  }, [validateImages, imageFormat, numImages, subfolder, imageType]);
+  }, [validateImages, imageFormat, numImages, subfolder, imageType, useCameraSubfolders, cameraSubfolders, pathOrder]);
 
   // Generate stereo model
   const generateStereoModel = useCallback(async () => {
     try {
-      const res = await fetch('/backend/calibration/stereo/pinhole/generate_model', {
+      const res = await fetch('/backend/calibration/stereo/dotboard/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -328,7 +338,7 @@ export function useStereoCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/stereo/pinhole/job/${jobId}`);
+        const res = await fetch(`/backend/calibration/stereo/dotboard/job/${jobId}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -371,7 +381,7 @@ export function useStereoCalibration(
     setModelLoading(true);
     try {
       const res = await fetch(
-        `/backend/calibration/stereo/pinhole/model?source_path_idx=${sourcePathIdx}&cam1=${cam1}&cam2=${cam2}`
+        `/backend/calibration/stereo/dotboard/model?source_path_idx=${sourcePathIdx}&cam1=${cam1}&cam2=${cam2}`
       );
       const data = await res.json();
 
@@ -396,7 +406,7 @@ export function useStereoCalibration(
   // Reconstruct 3D vectors
   const reconstructVectors = useCallback(async (typeName: string = 'instantaneous') => {
     try {
-      const res = await fetch('/backend/calibration/stereo/pinhole/reconstruct', {
+      const res = await fetch('/backend/calibration/stereo/dotboard/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -437,7 +447,7 @@ export function useStereoCalibration(
 
     const pollStatus = async () => {
       try {
-        const res = await fetch(`/backend/calibration/stereo/pinhole/reconstruct/status/${reconstructJobId}`);
+        const res = await fetch(`/backend/calibration/stereo/dotboard/reconstruct/status/${reconstructJobId}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -524,6 +534,12 @@ export function useStereoCalibration(
     setNumImages,
     subfolder,
     setSubfolder,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+    pathOrder,
+    setPathOrder,
 
     // Grid params
     patternCols,

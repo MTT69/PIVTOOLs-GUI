@@ -5,6 +5,8 @@ interface ValidationState {
   error?: string;
   checked: boolean;
   suggested_pattern?: string | null;
+  suggested_pattern_b?: string | null;  // For A/B pair detection
+  suggested_mode?: 'ab_format' | 'skip_frames' | null;  // Detected pairing mode
 }
 
 export function useConfigUpdate() {
@@ -144,6 +146,8 @@ export function useAutoValidation(config: any) {
             const errors: string[] = [];
             const warnings: string[] = [];
             let suggestedPattern: string | null = null;
+            let suggestedPatternB: string | null = null;
+            let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
 
             Object.entries(details).forEach(([key, value]: [string, any]) => {
               if (value.status === 'error') {
@@ -157,6 +161,13 @@ export function useAutoValidation(config: any) {
                 if (value.suggested_pattern && !suggestedPattern) {
                   suggestedPattern = value.suggested_pattern;
                 }
+                // Capture A/B pair suggestion if available
+                if (value.suggested_pattern_b && !suggestedPatternB) {
+                  suggestedPatternB = value.suggested_pattern_b;
+                }
+                if (value.suggested_mode && !suggestedMode) {
+                  suggestedMode = value.suggested_mode;
+                }
               } else if (value.status === 'warning') {
                 const expected = value.expected_count || 0;
                 const actual = value.actual_count || 0;
@@ -169,7 +180,14 @@ export function useAutoValidation(config: any) {
               ...warnings,
             ].join('; ') || 'Image files not found';
 
-            setValidation({ valid: false, checked: true, error: errorMsg, suggested_pattern: suggestedPattern });
+            setValidation({
+              valid: false,
+              checked: true,
+              error: errorMsg,
+              suggested_pattern: suggestedPattern,
+              suggested_pattern_b: suggestedPatternB,
+              suggested_mode: suggestedMode,
+            });
           }
         } else {
           const json = await res.json();
