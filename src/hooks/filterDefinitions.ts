@@ -183,13 +183,6 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
     ]
   },
   {
-    type: 'transpose',
-    name: 'Transpose',
-    description: 'Transpose images (swap height and width dimensions)',
-    category: 'spatial',
-    parameters: []
-  },
-  {
     type: 'sbg',
     name: 'Subtract Background',
     description: 'Subtract a background image',
