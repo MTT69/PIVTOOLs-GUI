@@ -2,7 +2,7 @@
 
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { usePivRunner } from '@/hooks/usePivRunner'; 
+import { usePivJobContext } from '@/contexts/PivJobContext';
 
 // Helper to display a user-friendly path name
 const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
@@ -40,18 +40,31 @@ const RunPIV: React.FC<RunPIVProps> = ({
   title = "Run PIV",
   mode = "instantaneous"
 }) => {
-  // --- UI State ---
-  const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
-  const [varType, setVarType] = useState<string>("ux");
-  const [cmap, setCmap] = useState<string>("default");
-  const [runNum, setRunNum] = useState<number>(1);
-  const [lowerLimit, setLowerLimit] = useState<string>("");
-  const [upperLimit, setUpperLimit] = useState<string>("");
+  // Get job state from context
+  const {
+    instantaneousJob,
+    ensembleJob,
+    startJob,
+    cancelJob,
+    updateSettings,
+    instantaneousSettings,
+    ensembleSettings,
+  } = usePivJobContext();
+
+  // Select the appropriate job and settings based on mode
+  const job = mode === 'ensemble' ? ensembleJob : instantaneousJob;
+  const settings = mode === 'ensemble' ? ensembleSettings : instantaneousSettings;
+  const { isLoading, isPolling, progress, statusImage, logs } = job;
+
+  // --- UI State (local to component) ---
+  const [varType, setVarType] = useState<string>(settings.varType);
+  const [cmap, setCmap] = useState<string>(settings.cmap);
+  const [lowerLimit, setLowerLimit] = useState<string>(settings.lowerLimit);
+  const [upperLimit, setUpperLimit] = useState<string>(settings.upperLimit);
   const [showStatusImage, setShowStatusImage] = useState(true);
   const [showLogs, setShowLogs] = useState(true);
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
-  const [activePaths, setActivePaths] = useState<number[]>([]);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
   const [isCheckingOutput, setIsCheckingOutput] = useState(false);
 
@@ -61,28 +74,33 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // --- Derived State (memoized for performance) ---
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const basePaths = useMemo(() => config?.paths?.base_paths || [], [config]);
+  const activePaths = settings.activePaths;
+  const sourcePathIdx = settings.sourcePathIdx;
 
-  // Initialize activePaths when sourcePaths change
+  // Sync UI state changes to context settings
+  const handleUpdateSettings = useCallback((updates: Partial<typeof settings>) => {
+    updateSettings(mode, updates);
+  }, [mode, updateSettings]);
+
+  // Update context when local UI state changes
   useEffect(() => {
-    if (sourcePaths.length > 0) {
-      // Default: all paths active
-      setActivePaths(sourcePaths.map((_: string, i: number) => i));
+    handleUpdateSettings({ varType, cmap, lowerLimit, upperLimit, showStatusImage });
+  }, [varType, cmap, lowerLimit, upperLimit, showStatusImage, handleUpdateSettings]);
+
+  // Initialize activePaths when sourcePaths change (only if empty)
+  useEffect(() => {
+    if (sourcePaths.length > 0 && activePaths.length === 0) {
+      handleUpdateSettings({ activePaths: sourcePaths.map((_: string, i: number) => i) });
     }
-  }, [sourcePaths]);
+  }, [sourcePaths, activePaths.length, handleUpdateSettings]);
 
   // Toggle a specific path's active state
-  const togglePath = (idx: number) => {
-    setActivePaths(prev =>
-      prev.includes(idx)
-        ? prev.filter(i => i !== idx)
-        : [...prev, idx].sort((a, b) => a - b)
-    );
-  };
-
-  // --- PIV Logic from Custom Hook (moved up so run/cancel are available) ---
-  const { isLoading, isPolling, progress, statusImage, logs, run, cancel } = usePivRunner({
-    sourcePathIdx, varType, cmap, run: runNum, lowerLimit, upperLimit, showStatusImage, activePaths, mode
-  });
+  const togglePath = useCallback((idx: number) => {
+    const newPaths = activePaths.includes(idx)
+      ? activePaths.filter((i: number) => i !== idx)
+      : [...activePaths, idx].sort((a, b) => a - b);
+    handleUpdateSettings({ activePaths: newPaths });
+  }, [activePaths, handleUpdateSettings]);
 
   // Check if output data already exists before starting a run
   const handleRunClick = async () => {
@@ -108,17 +126,17 @@ const RunPIV: React.FC<RunPIVProps> = ({
         } else {
           // No existing data - run directly
           console.log('[RunPIV] No existing data, running directly');
-          run();
+          await startJob(mode, settings);
         }
       } else {
         // If check fails, just run anyway
         console.log('[RunPIV] Check failed, running anyway');
-        run();
+        await startJob(mode, settings);
       }
     } catch (error) {
       console.error("[RunPIV] Error checking for existing output:", error);
       // On error, just run anyway
-      run();
+      await startJob(mode, settings);
     } finally {
       setIsCheckingOutput(false);
     }
@@ -155,7 +173,16 @@ const RunPIV: React.FC<RunPIVProps> = ({
 
     // Start the PIV run
     console.log('[RunPIV] Starting PIV run after clear');
-    run();
+    await startJob(mode, settings);
+  };
+
+  // Handle cancel
+  const handleCancel = async () => {
+    try {
+      await cancelJob(mode);
+    } catch (error) {
+      console.error("[RunPIV] Error cancelling run:", error);
+    }
   };
 
   // --- Effects for UI Sync ---
@@ -169,7 +196,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // Only fetch available variables when PIV is running and progress > 0
   useEffect(() => {
     if (!isPolling || progress === 0) return;
-    
+
     const fetchFrameVars = async () => {
       setFrameVarsLoading(true);
       try {
@@ -179,7 +206,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
           is_uncalibrated: '1',
         });
         const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
-        
+
         // Only process if the response is OK
         if (res.ok) {
           const json = await res.json();
@@ -203,7 +230,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
         setFrameVarsLoading(false);
       }
     };
-    
+
     // Add a small delay to allow first frame to be created
     const timeoutId = setTimeout(fetchFrameVars, 1000);
     return () => clearTimeout(timeoutId);
@@ -250,7 +277,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
                   <button
                     type="button"
                     className="text-blue-600 hover:underline"
-                    onClick={() => setActivePaths(sourcePaths.map((_: string, i: number) => i))}
+                    onClick={() => handleUpdateSettings({ activePaths: sourcePaths.map((_: string, i: number) => i) })}
                   >
                     Select All
                   </button>
@@ -258,7 +285,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
                   <button
                     type="button"
                     className="text-blue-600 hover:underline"
-                    onClick={() => setActivePaths([])}
+                    onClick={() => handleUpdateSettings({ activePaths: [] })}
                   >
                     Clear All
                   </button>
@@ -393,7 +420,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
           >
             {isPolling ? "Running..." : isCheckingOutput ? "Checking..." : activePaths.length === 0 ? "Select Paths" : "Run PIV"}
           </Button>
-          <Button className="bg-red-600 hover:bg-red-700" onClick={cancel} disabled={!isPolling && !isLoading}>
+          <Button className="bg-red-600 hover:bg-red-700" onClick={handleCancel} disabled={!isPolling && !isLoading}>
             Cancel Run
           </Button>
         </div>

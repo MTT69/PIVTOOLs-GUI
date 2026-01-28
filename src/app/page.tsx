@@ -26,6 +26,7 @@ import VideoMaker from '@/components/viewer/VideoMaker';
 import Masking from '@/components/setup/Masking';
 import { Calibration } from '@/components/setup/Calibration';
 import { useAutoValidation, useConfigUpdate } from '@/hooks/useConfigUpdate';
+import { PivJobProvider } from '@/contexts/PivJobContext';
 
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
@@ -185,6 +186,7 @@ export default function Home() {
                 Configure your PIV processing pipeline with this intuitive interface. Changes are applied automatically.
               </p>
               
+              <PivJobProvider config={config}>
               <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
                 <TabsList className="grid grid-cols-7 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
@@ -284,6 +286,7 @@ export default function Home() {
                 </TabsContent>
 
               </Tabs>
+              </PivJobProvider>
             </div>
           </div>
         )}

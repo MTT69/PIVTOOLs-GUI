@@ -1,4 +1,11 @@
 // src/hooks/usePivRunner.ts
+//
+// NOTE: This hook is now deprecated. For new code, use the PivJobContext from
+// '@/contexts/PivJobContext' instead, which persists PIV job state across tab
+// navigation and page refreshes.
+//
+// This hook is kept for backwards compatibility with any components that may
+// still be using it directly.
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
