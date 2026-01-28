@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 export type FilterType = 
   | "time" | "pod"  // Batch filters
   | "clip" | "invert" | "levelize" | "lmax" | "maxnorm" 
-  | "median" | "norm" | "sbg" | "transpose" | "gaussian";  // Spatial filters
+  | "median" | "norm" | "sbg" | "gaussian";  // Spatial filters
 
 export interface ImageFilter {
   type: FilterType;
@@ -246,7 +246,6 @@ export function useImageFilters(backendUrl: string) {
       median: { size: [5, 5] },
       norm: { size: [7, 7], max_gain: 1.0 },
       sbg: { bg: null },
-      transpose: {},
       gaussian: { sigma: 1.0 },
     };
 

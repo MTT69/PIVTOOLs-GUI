@@ -89,11 +89,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const [imageFormat, setImageFormat] = useState("calib%05d.tif");
   const [imageType, setImageType] = useState("standard");
   const [numImages, setNumImages] = useState<string | number>(10);
-  const [calibrationSubfolder, setCalibrationSubfolder] = useState("");
+  const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
-  const [pathOrder, setPathOrder] = useState('camera_first');
 
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
@@ -130,13 +129,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   };
 
   // Automatic validation using unified validation hook (same as Pinhole)
-  // Pass numImages and subfolder to trigger revalidation when they change
   const validation = usePinholeValidation(
     sourcePathIdx,
     camera,
     imageFormat,
-    typeof numImages === 'number' ? numImages : parseInt(String(numImages)) || 10,
-    calibrationSubfolder
+    typeof numImages === 'number' ? numImages : parseInt(String(numImages)) || 10
   );
   const isMacOS = useIsMacOS();
   const hasUnsupportedFormat = isContainerFormat(imageFormat);
@@ -167,10 +164,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           setImageFormat(json.image_format || "calib%05d.tif");
           setImageType(json.image_type || "standard");
           setNumImages(json.num_images || 10);
-          setCalibrationSubfolder(json.subfolder || "");
+          setCalibrationSources(json.calibration_sources || []);
           setUseCameraSubfolders(json.use_camera_subfolders || false);
           setCameraSubfolders(json.camera_subfolders || []);
-          setPathOrder(json.path_order || 'camera_first');
         }
       } catch (e) {
         console.error("Failed to load calibration config:", e);
@@ -259,19 +255,38 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         <CardTitle>ChArUco Board Calibration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Source Path and Camera - 2-col grid like Pinhole */}
+        {/* Section 1: Calibration Source Path (primary input) */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Calibration Images Location</label>
+          <Input
+            value={calibrationSources[sourcePathIdx] || ""}
+            onChange={e => {
+              const newSources = [...calibrationSources];
+              newSources[sourcePathIdx] = e.target.value;
+              setCalibrationSources(newSources);
+            }}
+            onBlur={() => saveCalibrationConfig({ calibration_sources: calibrationSources })}
+            placeholder="/path/to/calibration/images"
+            className="font-mono"
+          />
+          <p className="text-xs text-muted-foreground">
+            Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
+          </p>
+        </div>
+
+        {/* Section 2: Base Path and Cameras */}
         <div className="grid md:grid-cols-2 gap-4">
           <div>
-            <label className="text-sm font-medium">Source Path</label>
+            <label className="text-sm font-medium">Base Path</label>
             <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-              <SelectTrigger><SelectValue placeholder="Pick source path" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder="Pick base path" /></SelectTrigger>
               <SelectContent>
                 {sourcePaths.map((p, i) => (
-                  <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                  <SelectItem key={i} value={String(i)}>{p}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground mt-1">Configured in Settings → Directories.</p>
+            <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
           </div>
           <div>
             <label className="text-sm font-medium">Cameras to Process</label>
@@ -283,8 +298,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           </div>
         </div>
 
-        {/* Calibration Image Settings */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Section 3: Image Configuration */}
+        <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-xs font-medium">Image Type</label>
             <Select
@@ -304,6 +319,16 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </Select>
           </div>
           <div>
+            <label className="block text-xs font-medium">Image Format</label>
+            <Input
+              type="text"
+              value={imageFormat}
+              onChange={e => setImageFormat(e.target.value)}
+              onBlur={() => saveCalibrationConfig({ image_format: imageFormat })}
+              placeholder="calib%05d.tif"
+            />
+          </div>
+          <div>
             <label className="block text-xs font-medium">Number of Images</label>
             <Input
               type="number"
@@ -318,25 +343,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 setNumImages(finalVal);
                 saveCalibrationConfig({ num_images: finalVal });
               }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Image Format</label>
-            <Input
-              type="text"
-              value={imageFormat}
-              onChange={e => setImageFormat(e.target.value)}
-              onBlur={() => saveCalibrationConfig({ image_format: imageFormat })}
-              placeholder="calib%05d.tif"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Calibration Subfolder</label>
-            <Input
-              value={calibrationSubfolder}
-              onChange={e => setCalibrationSubfolder(e.target.value)}
-              onBlur={() => saveCalibrationConfig({ subfolder: calibrationSubfolder })}
-              placeholder="(optional)"
             />
           </div>
         </div>
@@ -365,36 +371,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           </div>
         )}
 
-        {/* Camera Subfolders & Path Order - only show when using camera subfolders */}
+        {/* Camera Subfolder Names - only show when using camera subfolders */}
         {useCameraSubfolders && cameraOptions.length > 1 && (
           <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-            <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
-
-            {/* Path Order Selector */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Path Order</label>
-              <Select
-                value={pathOrder}
-                onValueChange={v => {
-                  setPathOrder(v);
-                  saveCalibrationConfig({ path_order: v });
-                }}
-              >
-                <SelectTrigger className="w-[280px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
-                  <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {pathOrder === "calibration_first"
-                  ? `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${calibrationSubfolder || 'calibration'}/${cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/`
-                  : `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/${calibrationSubfolder || 'calibration'}/`
-                }
-              </p>
-            </div>
+            <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
+            <p className="text-xs text-muted-foreground">
+              Camera subfolders are relative to the calibration source path.
+              Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/
+            </p>
 
             {/* Custom Camera Subfolder Names */}
             <div className="space-y-2">
