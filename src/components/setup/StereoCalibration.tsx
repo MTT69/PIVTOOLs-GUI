@@ -55,14 +55,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setImageType,
     numImages,
     setNumImages,
-    subfolder,
-    setSubfolder,
+    calibrationSources,
+    setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
     setCameraSubfolders,
-    pathOrder,
-    setPathOrder,
 
     // Grid params
     patternCols,
@@ -215,19 +213,37 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Section 1: Source and Camera Selection */}
+          {/* Section 1: Calibration Source Path (primary input) */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Calibration Images Location</label>
+            <Input
+              value={calibrationSources[sourcePathIdx] || ""}
+              onChange={e => {
+                const newSources = [...calibrationSources];
+                newSources[sourcePathIdx] = e.target.value;
+                setCalibrationSources(newSources);
+              }}
+              placeholder="/path/to/calibration/images"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
+            </p>
+          </div>
+
+          {/* Section 2: Base Path and Camera Selection */}
           <div className="grid md:grid-cols-3 gap-4">
             <div>
-              <label className="text-sm font-medium">Source Path</label>
+              <label className="text-sm font-medium">Base Path</label>
               <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-                <SelectTrigger><SelectValue placeholder="Pick source path" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Pick base path" /></SelectTrigger>
                 <SelectContent>
                   {sourcePaths.map((p, i) => (
-                    <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>
+                    <SelectItem key={i} value={String(i)}>{p}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground mt-1">Configured in Settings &rarr; Directories.</p>
+              <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
             </div>
             <div>
               <label className="text-sm font-medium">Camera 1</label>
@@ -257,8 +273,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Image Configuration */}
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Section 3: Image Configuration */}
+          <div className="grid md:grid-cols-3 gap-4">
             <div>
               <label className="text-sm font-medium">Image Type</label>
               <Select value={imageType} onValueChange={setImageType}>
@@ -288,14 +304,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 onChange={e => setNumImages(Number(e.target.value) || 1)}
               />
             </div>
-            <div>
-              <label className="text-sm font-medium">Subfolder (optional)</label>
-              <Input
-                value={subfolder}
-                onChange={e => setSubfolder(e.target.value)}
-                placeholder="e.g., calibration"
-              />
-            </div>
           </div>
 
           {/* Use Camera Subfolders Toggle */}
@@ -320,30 +328,14 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Camera Subfolders & Path Order - only show when using camera subfolders */}
+          {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && (
             <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Calibration Path Configuration</h4>
-
-              {/* Path Order Selector */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Path Order</label>
-                <Select value={pathOrder} onValueChange={setPathOrder}>
-                  <SelectTrigger className="w-[280px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="camera_first">Camera folder first (source/Cam1/calibration/)</SelectItem>
-                    <SelectItem value="calibration_first">Calibration folder first (source/calibration/Cam1/)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {pathOrder === "calibration_first"
-                    ? `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${subfolder || 'calibration'}/${cameraSubfolders[0] || `Cam${cam1}`}/`
-                    : `Example: ${sourcePaths[sourcePathIdx] ? basename(sourcePaths[sourcePathIdx]) : 'source'}/${cameraSubfolders[0] || `Cam${cam1}`}/${subfolder || 'calibration'}/`
-                  }
-                </p>
-              </div>
+              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
+              <p className="text-xs text-muted-foreground">
+                Camera subfolders are relative to the calibration source path.
+                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cam1}`}/
+              </p>
 
               {/* Custom Camera Subfolder Names */}
               <div className="space-y-2">

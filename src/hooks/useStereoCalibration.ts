@@ -127,10 +127,9 @@ export function useStereoCalibration(
   const [imageFormat, setImageFormat] = useState('calib%05d.tif');
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState(10);
-  const [subfolder, setSubfolder] = useState('');
+  const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
-  const [pathOrder, setPathOrder] = useState('camera_first');
 
   // Grid params (saved to config.calibration.stereo_dotboard)
   const [patternCols, setPatternCols] = useState(10);
@@ -180,10 +179,9 @@ export function useStereoCalibration(
           if (calData.image_format) setImageFormat(calData.image_format);
           if (calData.image_type) setImageType(calData.image_type);
           if (calData.num_images) setNumImages(calData.num_images);
-          if (calData.subfolder !== undefined) setSubfolder(calData.subfolder);
+          if (calData.calibration_sources) setCalibrationSources(calData.calibration_sources);
           if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
           if (calData.camera_subfolders) setCameraSubfolders(calData.camera_subfolders);
-          if (calData.path_order) setPathOrder(calData.path_order);
         }
 
         // Load stereo_dotboard-specific settings
@@ -220,10 +218,9 @@ export function useStereoCalibration(
             image_format: imageFormat,
             image_type: imageType,
             num_images: numImages,
-            subfolder: subfolder,
+            calibration_sources: calibrationSources,
             use_camera_subfolders: useCameraSubfolders,
             camera_subfolders: cameraSubfolders,
-            path_order: pathOrder,
           }),
         });
 
@@ -247,7 +244,7 @@ export function useStereoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -293,7 +290,7 @@ export function useStereoCalibration(
   // Auto-validate on param changes
   useEffect(() => {
     validateImages();
-  }, [validateImages, imageFormat, numImages, subfolder, imageType, useCameraSubfolders, cameraSubfolders, pathOrder]);
+  }, [validateImages, imageFormat, numImages, calibrationSources, imageType, useCameraSubfolders, cameraSubfolders]);
 
   // Generate stereo model
   const generateStereoModel = useCallback(async () => {
@@ -532,14 +529,12 @@ export function useStereoCalibration(
     setImageType,
     numImages,
     setNumImages,
-    subfolder,
-    setSubfolder,
+    calibrationSources,
+    setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
     setCameraSubfolders,
-    pathOrder,
-    setPathOrder,
 
     // Grid params
     patternCols,

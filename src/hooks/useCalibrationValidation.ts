@@ -54,11 +54,10 @@ export interface StereoValidationResult {
 /**
  * Hook for validating planar calibration images
  *
- * @param sourcePathIdx - Index of the source path in config
+ * @param sourcePathIdx - Index of the source path in config (maps to calibration_sources)
  * @param camera - Camera number (1-based)
  * @param filePattern - File pattern for calibration images
  * @param numImages - Number of expected images (optional, triggers revalidation when changed)
- * @param subfolder - Calibration subfolder (optional, triggers revalidation when changed)
  * @param enabled - Whether to enable validation (default: true)
  */
 export function usePinholeValidation(
@@ -66,7 +65,6 @@ export function usePinholeValidation(
   camera: number,
   filePattern: string,
   numImages: number = 10,
-  subfolder: string = '',
   enabled: boolean = true
 ): PinholeValidationResult {
   const [validation, setValidation] = useState<PinholeValidationResult>({
@@ -86,10 +84,10 @@ export function usePinholeValidation(
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const currentParamsRef = useRef({ sourcePathIdx, camera, filePattern, numImages, subfolder });
+  const currentParamsRef = useRef({ sourcePathIdx, camera, filePattern, numImages });
 
   // Always keep currentParamsRef up to date with latest values
-  currentParamsRef.current = { sourcePathIdx, camera, filePattern, numImages, subfolder };
+  currentParamsRef.current = { sourcePathIdx, camera, filePattern, numImages };
 
   useEffect(() => {
     if (!enabled) {
@@ -137,6 +135,7 @@ export function usePinholeValidation(
       try {
         // Use unified calibration validation endpoint
         // Pass all parameters directly so validation uses current values, not stale config
+        // Note: calibration paths come from calibration_sources in config
         const res = await fetch('/backend/calibration/validate_images', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -145,7 +144,6 @@ export function usePinholeValidation(
             camera: params.camera,
             image_format: params.filePattern,
             num_images: params.numImages,
-            subfolder: params.subfolder,
           }),
           signal: abortController.signal,
         });
@@ -209,7 +207,7 @@ export function usePinholeValidation(
         abortControllerRef.current.abort();
       }
     };
-  }, [sourcePathIdx, camera, filePattern, numImages, subfolder, enabled]);
+  }, [sourcePathIdx, camera, filePattern, numImages, enabled]);
 
   return validation;
 }
