@@ -958,8 +958,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             </div>
           </div>
 
-          {/* ========== SECTION 3: CURSOR POSITION (Hidden when uncalibrated) ========== */}
-          {imageSrc && !error && !isUncalibrated && (
+          {/* ========== SECTION 3: CURSOR POSITION ========== */}
+          {imageSrc && !error && (
             <div className="p-3 bg-gradient-to-r from-gray-50 to-gray-100 border rounded-lg">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-6">
@@ -987,13 +987,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-gray-600 uppercase">X:</span>
                           <span className="font-mono text-sm font-semibold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {display.x.toFixed(3)}
+                            {display.x.toFixed(3)}{isUncalibrated ? " px" : ""}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-gray-600 uppercase">Y:</span>
                           <span className="font-mono text-sm font-semibold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {display.y.toFixed(3)}
+                            {display.y.toFixed(3)}{isUncalibrated ? " px" : ""}
                           </span>
                         </div>
                         {varVal != null && (
@@ -1002,7 +1002,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               {type.includes(':') ? type.split(':').slice(1).join(':') : type}:
                             </span>
                             <span className="font-mono text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border">
-                              {varVal.toFixed(3)}
+                              {varVal.toFixed(3)}{isUncalibrated ? " px" : ""}
                             </span>
                           </div>
                         )}
@@ -1011,7 +1011,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   })()}
                 </div>
                 <div className="text-xs text-gray-500">
-                  {isMeanVar ? "Mean Statistics Mode" : `Frame ${index}`}
+                  {isMeanVar ? "Mean Statistics Mode" : isUncalibrated ? `Frame ${index} (Uncalibrated)` : `Frame ${index}`}
                 </div>
               </div>
             </div>

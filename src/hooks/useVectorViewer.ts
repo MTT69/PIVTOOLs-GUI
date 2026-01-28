@@ -1171,8 +1171,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   useEffect(() => { clearHover(); }, [imageSrc, meta, type, index, meanMode, camera, merged, clearHover]);
 
   const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
-    // Skip coordinate fetching for uncalibrated data - coordinates are not available
-    if (isUncalibrated) return;
+    // Note: Backend handles uncalibrated data by returning pixel coordinates (i, j indices)
 
     if (pendingFetchRef.current) return;
     pendingFetchRef.current = true;
@@ -1186,6 +1185,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     params.set("var_source", varSource);
     params.set("run", String(run));
     params.set("merged", merged ? "1" : "0");
+    params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
     // Add stereo params when viewing stereo data
@@ -1278,6 +1278,23 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setMagVisible(false);
       return;
     }
+
+    // Check if cursor is within the vector field plot area (not just the image)
+    const bbox = meta?.axes_bbox;
+    if (bbox) {
+      const scaleX = bbox.png_width / rect.width;
+      const scaleY = bbox.png_height / rect.height;
+      const px = x * scaleX;
+      const py = y * scaleY;
+
+      // Hide magnifier if outside plot area (in title, colorbar, axis labels)
+      if (px < bbox.left || px > bbox.left + bbox.width ||
+          py < bbox.top || py > bbox.top + bbox.height) {
+        setMagVisible(false);
+        return;
+      }
+    }
+
     setMagVisible(true);
     // Position magnifier so its center is exactly at the cursor position (using clientX/Y for fixed positioning)
     const left = e.clientX - (MAG_SIZE / 2);
@@ -1345,6 +1362,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const backendNumFramePairs = json.images?.num_frame_pairs;
         if (Number.isFinite(backendNumFramePairs) && backendNumFramePairs > 0) {
           setMaxFrameCount(backendNumFramePairs);
+          // Clamp index if it exceeds the new maxFrameCount
+          setIndex(prev => Math.min(prev, backendNumFramePairs));
         }
       } catch (err) {
         console.error("Error fetching config for frame count:", err);
@@ -1425,7 +1444,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   useEffect(() => {
     if (playing) {
       playIntervalRef.current = setInterval(() => {
-        setIndex(i => i + 1);
+        setIndex(i => i >= maxFrameCount ? 1 : i + 1);
       }, 300);
     } else if (playIntervalRef.current) {
       clearInterval(playIntervalRef.current);
@@ -1437,7 +1456,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         playIntervalRef.current = null;
       }
     };
-  }, [playing]);
+  }, [playing, maxFrameCount]);
 
   useEffect(() => {
     if (error && playing) {
