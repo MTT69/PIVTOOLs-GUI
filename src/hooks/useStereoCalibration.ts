@@ -133,11 +133,11 @@ export function useStereoCalibration(
   const [pathOrder, setPathOrder] = useState('camera_first');
 
   // Grid params (saved to config.calibration.stereo_dotboard)
-  const [patternCols, setPatternCols] = useState(10);
-  const [patternRows, setPatternRows] = useState(10);
+  // NOTE: patternCols and patternRows removed - grid is auto-detected
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [enhanceDots, setEnhanceDots] = useState(true);
   const [dt, setDt] = useState(1.0);
+  const [datumCamera, setDatumCamera] = useState(1); // Which camera defines coordinate system origin
 
   // Validation state
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
@@ -191,11 +191,11 @@ export function useStereoCalibration(
         if (cfgRes.ok) {
           const cfgData = await cfgRes.json();
           const stereo_dotboard = cfgData.calibration?.stereo_dotboard || {};
-          if (stereo_dotboard.pattern_cols) setPatternCols(stereo_dotboard.pattern_cols);
-          if (stereo_dotboard.pattern_rows) setPatternRows(stereo_dotboard.pattern_rows);
+          // NOTE: pattern_cols and pattern_rows no longer needed - auto-detected
           if (stereo_dotboard.dot_spacing_mm) setDotSpacingMm(stereo_dotboard.dot_spacing_mm);
           if (stereo_dotboard.enhance_dots !== undefined) setEnhanceDots(stereo_dotboard.enhance_dots);
           if (stereo_dotboard.dt) setDt(stereo_dotboard.dt);
+          if (stereo_dotboard.datum_camera) setDatumCamera(stereo_dotboard.datum_camera);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -228,17 +228,17 @@ export function useStereoCalibration(
         });
 
         // Save stereo_dotboard-specific settings
+        // NOTE: pattern_cols and pattern_rows no longer saved - auto-detected
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
               stereo_dotboard: {
-                pattern_cols: patternCols,
-                pattern_rows: patternRows,
                 dot_spacing_mm: dotSpacingMm,
                 enhance_dots: enhanceDots,
                 dt: dt,
+                datum_camera: datumCamera,
               },
             },
           }),
@@ -247,7 +247,7 @@ export function useStereoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, patternCols, patternRows, dotSpacingMm, enhanceDots, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, dotSpacingMm, enhanceDots, dt, datumCamera]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -541,17 +541,15 @@ export function useStereoCalibration(
     pathOrder,
     setPathOrder,
 
-    // Grid params
-    patternCols,
-    setPatternCols,
-    patternRows,
-    setPatternRows,
+    // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
     enhanceDots,
     setEnhanceDots,
     dt,
     setDt,
+    datumCamera,
+    setDatumCamera,
 
     // Validation
     validation,

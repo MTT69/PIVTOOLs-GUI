@@ -58,17 +58,15 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     pathOrder,
     setPathOrder,
 
-    // Grid params
-    patternCols,
-    setPatternCols,
-    patternRows,
-    setPatternRows,
+    // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
     enhanceDots,
     setEnhanceDots,
     dt,
     setDt,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,
@@ -138,20 +136,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   };
 
   // Local input state for debouncing
-  const [patternColsInput, setPatternColsInput] = useState(String(patternCols));
-  const [patternRowsInput, setPatternRowsInput] = useState(String(patternRows));
   const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
   const [dtInput, setDtInput] = useState(String(dt));
+  const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
 
   // Sync local inputs with hook state
-  React.useEffect(() => {
-    setPatternColsInput(String(patternCols));
-  }, [patternCols]);
-
-  React.useEffect(() => {
-    setPatternRowsInput(String(patternRows));
-  }, [patternRows]);
-
   React.useEffect(() => {
     setDotSpacingMmInput(String(dotSpacingMm));
   }, [dotSpacingMm]);
@@ -159,6 +148,10 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   React.useEffect(() => {
     setDtInput(String(dt));
   }, [dt]);
+
+  React.useEffect(() => {
+    setDatumFrameInput(String(datumFrame));
+  }, [datumFrame]);
 
   // Convert detections to format expected by CalibrationImageViewer
   const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
@@ -400,27 +393,10 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
           {/* Section 4: Grid Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-                <label className="text-sm font-medium">Pattern Cols</label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={patternColsInput}
-                  onChange={e => setPatternColsInput(e.target.value)}
-                  onBlur={() => setPatternCols(parseInt(patternColsInput) || 10)}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">Pattern Rows</label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={patternRowsInput}
-                  onChange={e => setPatternRowsInput(e.target.value)}
-                  onBlur={() => setPatternRows(parseInt(patternRowsInput) || 10)}
-                />
-              </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              Grid dimensions are automatically detected using RANSAC-based analysis.
+            </p>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="text-sm font-medium">Dot Spacing (mm)</label>
                 <Input
@@ -431,6 +407,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   onChange={e => setDotSpacingMmInput(e.target.value)}
                   onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 28.89)}
                 />
+                <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
               <div>
                 <label className="text-sm font-medium">Δt (seconds)</label>
@@ -442,6 +419,18 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   onChange={e => setDtInput(e.target.value)}
                   onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
                 />
+                <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Datum Frame</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={datumFrameInput}
+                  onChange={e => setDatumFrameInput(e.target.value)}
+                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
             </div>
             <div className="mt-3">
@@ -493,9 +482,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               numImages={numImages}
               calibrationType="dotboard"
               calibrationParams={{
-                pattern_cols: patternCols,
-                pattern_rows: patternRows,
                 enhance_dots: enhanceDots,
+                // NOTE: pattern_cols/rows removed - auto-detected
               }}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}

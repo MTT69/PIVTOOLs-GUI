@@ -92,12 +92,11 @@ export function useDotboardCalibration(
   const [pathOrder, setPathOrder] = useState('camera_first');
 
   // Grid params (saved to config)
-  const [patternCols, setPatternCols] = useState(10);
-  const [patternRows, setPatternRows] = useState(10);
+  // NOTE: patternCols and patternRows removed - grid is auto-detected
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [enhanceDots, setEnhanceDots] = useState(true);
-  const [asymmetric, setAsymmetric] = useState(false);
   const [dt, setDt] = useState(1.0);
+  const [datumFrame, setDatumFrame] = useState(1); // Which frame defines world origin
 
   // Validation state
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -153,12 +152,11 @@ export function useDotboardCalibration(
         if (cfgRes.ok) {
           const cfgData = await cfgRes.json();
           const dotboard = cfgData.calibration?.dotboard || {};
-          if (dotboard.pattern_cols) setPatternCols(dotboard.pattern_cols);
-          if (dotboard.pattern_rows) setPatternRows(dotboard.pattern_rows);
+          // NOTE: pattern_cols and pattern_rows no longer needed - auto-detected
           if (dotboard.dot_spacing_mm) setDotSpacingMm(dotboard.dot_spacing_mm);
           if (dotboard.enhance_dots !== undefined) setEnhanceDots(dotboard.enhance_dots);
-          if (dotboard.asymmetric !== undefined) setAsymmetric(dotboard.asymmetric);
           if (dotboard.dt) setDt(dotboard.dt);
+          if (dotboard.datum_frame) setDatumFrame(dotboard.datum_frame);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -191,18 +189,17 @@ export function useDotboardCalibration(
         });
 
         // Save dotboard-specific settings
+        // NOTE: pattern_cols and pattern_rows no longer saved - auto-detected
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
               dotboard: {
-                pattern_cols: patternCols,
-                pattern_rows: patternRows,
                 dot_spacing_mm: dotSpacingMm,
                 enhance_dots: enhanceDots,
-                asymmetric: asymmetric,
                 dt: dt,
+                datum_frame: datumFrame,
               },
             },
           }),
@@ -211,7 +208,7 @@ export function useDotboardCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, patternCols, patternRows, dotSpacingMm, enhanceDots, asymmetric, dt]);
+  }, [imageFormat, imageType, numImages, subfolder, useCameraSubfolders, cameraSubfolders, pathOrder, dotSpacingMm, enhanceDots, dt, datumFrame]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -552,19 +549,15 @@ export function useDotboardCalibration(
     pathOrder,
     setPathOrder,
 
-    // Grid params
-    patternCols,
-    setPatternCols,
-    patternRows,
-    setPatternRows,
+    // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
     enhanceDots,
     setEnhanceDots,
-    asymmetric,
-    setAsymmetric,
     dt,
     setDt,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,
