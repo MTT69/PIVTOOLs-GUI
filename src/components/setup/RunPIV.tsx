@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import ColormapSelect from "@/components/shared/ColormapSelect";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -308,13 +309,10 @@ const RunPIV: React.FC<RunPIVProps> = ({
             </div>
             <div>
               <label className="text-sm font-medium">Colormap</label>
-              <Select value={cmap} onValueChange={setCmap}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['default', 'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'jet', 'gray'].map(c =>
-                    <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <ColormapSelect
+                value={cmap}
+                onValueChange={setCmap}
+              />
             </div>
             <div>
               <label className="text-sm font-medium">Lower Limit</label>

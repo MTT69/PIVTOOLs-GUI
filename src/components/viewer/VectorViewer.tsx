@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import { useVectorViewer, GroupedVariables, DataSourceType } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
+import ColormapSelect from "@/components/shared/ColormapSelect";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -806,21 +807,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               {/* Colormap */}
               <div>
                 <label htmlFor="cmap" className="text-sm font-medium block mb-2">Colormap:</label>
-                <Select value={cmap} onValueChange={v => setCmap(v)}>
-                  <SelectTrigger id="cmap">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">default</SelectItem>
-                    <SelectItem value="viridis">viridis</SelectItem>
-                    <SelectItem value="plasma">plasma</SelectItem>
-                    <SelectItem value="inferno">inferno</SelectItem>
-                    <SelectItem value="magma">magma</SelectItem>
-                    <SelectItem value="cividis">cividis</SelectItem>
-                    <SelectItem value="jet">jet</SelectItem>
-                    <SelectItem value="gray">gray</SelectItem>
-                  </SelectContent>
-                </Select>
+                <ColormapSelect
+                  id="cmap"
+                  value={cmap}
+                  onValueChange={setCmap}
+                  placeholder="Select"
+                />
               </div>
 
               {/* Run */}

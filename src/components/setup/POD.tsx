@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
+import ColormapSelect from "@/components/shared/ColormapSelect";
 // useRef is imported above with React
 
 interface PODProps {
@@ -877,16 +878,11 @@ export default function POD({ config, updateConfig }: PODProps) {
                   </select>
 
                   <label className="text-sm font-medium">Colormap:</label>
-                  <select value={cmap} onChange={e => setCmap(e.target.value)} className="border rounded px-2 py-1">
-                    <option value="default">default</option>
-                    <option value="viridis">viridis</option>
-                    <option value="plasma">plasma</option>
-                    <option value="inferno">inferno</option>
-                    <option value="magma">magma</option>
-                    <option value="cividis">cividis</option>
-                    <option value="jet">jet</option>
-                    <option value="gray">gray</option>
-                  </select>
+                  <ColormapSelect
+                    value={cmap}
+                    onValueChange={setCmap}
+                    className="w-32"
+                  />
 
                   <label className="text-sm font-medium">Run:</label>
                   <Input type="number" min={1} value={runVis} onChange={e => setRunVis(Math.max(1, Number(e.target.value)))} className="w-24" />

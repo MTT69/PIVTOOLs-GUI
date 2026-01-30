@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVideoMaker } from "@/hooks/useVideoMaker";
+import ColormapSelect from "@/components/shared/ColormapSelect";
 
 // Variable label formatting helper (matches VectorViewer formatting)
 const formatVarLabel = (varName: string, group: 'piv' | 'stats'): string => {
@@ -270,31 +271,12 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
 
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Colormap</label>
-                    <Select value={cmap} onValueChange={v => setCmap(v)}>
-                      <SelectTrigger id="cmap"><SelectValue placeholder="Select colormap" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="default">default</SelectItem>
-                        <SelectItem value="viridis">viridis</SelectItem>
-                        <SelectItem value="plasma">plasma</SelectItem>
-                        <SelectItem value="inferno">inferno</SelectItem>
-                        <SelectItem value="magma">magma</SelectItem>
-                        <SelectItem value="cividis">cividis</SelectItem>
-                        <SelectItem value="jet">jet</SelectItem>
-                        <SelectItem value="gray">gray</SelectItem>
-                        <SelectItem value="bone">bone</SelectItem>
-                        <SelectItem value="copper">copper</SelectItem>
-                        <SelectItem value="pink">pink</SelectItem>
-                        <SelectItem value="spring">spring</SelectItem>
-                        <SelectItem value="summer">summer</SelectItem>
-                        <SelectItem value="autumn">autumn</SelectItem>
-                        <SelectItem value="winter">winter</SelectItem>
-                        <SelectItem value="hot">hot</SelectItem>
-                        <SelectItem value="cool">cool</SelectItem>
-                        <SelectItem value="Wistia">Wistia</SelectItem>
-                        <SelectItem value="twilight">twilight</SelectItem>
-                        <SelectItem value="hsv">hsv</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <ColormapSelect
+                      id="cmap"
+                      value={cmap}
+                      onValueChange={setCmap}
+                      placeholder="Select colormap"
+                    />
                   </div>
 
                   <div className="space-y-2">
