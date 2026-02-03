@@ -85,7 +85,7 @@ export function useDotboardCalibration(
   // Image config (saved to config)
   const [imageFormat, setImageFormat] = useState('calib%05d.tif');
   const [imageType, setImageType] = useState('standard');
-  const [numImages, setNumImages] = useState(10);
+  const [numImages, setNumImages] = useState<string>("10");
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
@@ -139,7 +139,7 @@ export function useDotboardCalibration(
           const calData = await calRes.json();
           if (calData.image_format) setImageFormat(calData.image_format);
           if (calData.image_type) setImageType(calData.image_type);
-          if (calData.num_images) setNumImages(calData.num_images);
+          if (calData.num_images) setNumImages(String(calData.num_images));
           if (calData.calibration_sources !== undefined) setCalibrationSources(calData.calibration_sources);
           if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
           if (calData.camera_subfolders !== undefined) setCameraSubfolders(calData.camera_subfolders);
@@ -178,7 +178,7 @@ export function useDotboardCalibration(
           body: JSON.stringify({
             image_format: imageFormat,
             image_type: imageType,
-            num_images: numImages,
+            num_images: parseInt(numImages) || 10,
             calibration_sources: calibrationSources,
             use_camera_subfolders: useCameraSubfolders,
             camera_subfolders: cameraSubfolders,

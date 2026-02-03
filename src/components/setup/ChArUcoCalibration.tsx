@@ -88,7 +88,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const [showImageViewer, setShowImageViewer] = useState(false);
   const [imageFormat, setImageFormat] = useState("calib%05d.tif");
   const [imageType, setImageType] = useState("standard");
-  const [numImages, setNumImages] = useState<string | number>(10);
+  const [numImages, setNumImages] = useState<string>("10");
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
@@ -133,7 +133,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     sourcePathIdx,
     camera,
     imageFormat,
-    typeof numImages === 'number' ? numImages : parseInt(String(numImages)) || 10
+    parseInt(numImages) || 10
   );
   const isMacOS = useIsMacOS();
   const hasUnsupportedFormat = isContainerFormat(imageFormat);
@@ -163,7 +163,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         if (res.ok) {
           setImageFormat(json.image_format || "calib%05d.tif");
           setImageType(json.image_type || "standard");
-          setNumImages(json.num_images || 10);
+          setNumImages(String(json.num_images || 10));
           setCalibrationSources(json.calibration_sources || []);
           setUseCameraSubfolders(json.use_camera_subfolders || false);
           setCameraSubfolders(json.camera_subfolders || []);
@@ -334,13 +334,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               type="number"
               min={1}
               value={numImages}
-              onChange={e => {
-                const val = e.target.value;
-                setNumImages(val === '' ? '' : Number(val));
-              }}
+              onChange={e => setNumImages(e.target.value)}
               onBlur={() => {
-                const finalVal = numImages === '' || Number(numImages) < 1 ? 10 : Number(numImages);
-                setNumImages(finalVal);
+                const finalVal = parseInt(numImages) || 10;
+                setNumImages(String(finalVal));
                 saveCalibrationConfig({ num_images: finalVal });
               }}
             />
@@ -574,7 +571,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             backendUrl="/backend"
             sourcePathIdx={sourcePathIdx}
             camera={camera}
-            numImages={typeof numImages === 'number' ? numImages : 10}
+            numImages={parseInt(numImages) || 10}
             calibrationType="charuco"
             calibrationParams={{
               squares_h: parseInt(squaresH) || 10,

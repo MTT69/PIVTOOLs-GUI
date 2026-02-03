@@ -61,6 +61,7 @@ export function useCalibrationImageViewer(
   const prefetchInProgressRef = useRef<Set<string>>(new Set());
   const prefetchAbortControllerRef = useRef<AbortController | null>(null);
   const currentTargetIdxRef = useRef<number>(idx);
+  const frameCountRef = useRef<number>(0);
 
   // Generate cache key
   const getCacheKey = useCallback((frameIdx: number) => {
@@ -161,9 +162,13 @@ export function useCalibrationImageViewer(
     prefetchAbortControllerRef.current = abortController;
     const signal = abortController.signal;
 
-    // Prefetch forward
+    // Prefetch forward (with upper bound check)
     for (let i = 1; i <= count; i++) {
-      prefetchFrame(currentIdx + i, signal);
+      const targetIdx = currentIdx + i;
+      if (frameCountRef.current > 0 && targetIdx > frameCountRef.current) {
+        break;  // Stop if we exceed known frame count
+      }
+      prefetchFrame(targetIdx, signal);
     }
     // Prefetch backward
     for (let i = 1; i <= Math.min(count, 2); i++) {
@@ -220,6 +225,7 @@ export function useCalibrationImageViewer(
         setWidth(json.width);
         setHeight(json.height);
         setFrameCount(json.frame_count);
+        frameCountRef.current = json.frame_count;
         setStats(json.stats);
 
         if (autoLimits && json.stats) {

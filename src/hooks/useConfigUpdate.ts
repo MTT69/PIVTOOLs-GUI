@@ -1,9 +1,26 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 
-interface ValidationState {
+/** Validation result for a single pattern (A or B) */
+export interface PatternValidation {
+  index: number;
+  label: string;  // "A", "B", or "pattern"
+  pattern: string;
   valid: boolean;
-  error?: string;
+  found_count?: number | 'container';
+  error?: string | null;
+  suggested_pattern?: string | null;
+  sample_files?: string[];
+}
+
+export interface ValidationState {
+  valid: boolean;
+  error?: string | null;
   checked: boolean;
+  /** Per-pattern validation results (new) */
+  patternValidations?: PatternValidation[];
+  /** Warning if A/B file counts differ significantly */
+  abCountWarning?: string | null;
+  // Legacy fields for backward compatibility
   suggested_pattern?: string | null;
   suggested_pattern_b?: string | null;  // For A/B pair detection
   suggested_mode?: 'ab_format' | 'skip_frames' | null;  // Detected pairing mode
@@ -117,12 +134,18 @@ export function useAutoValidation(config: any) {
 
         if (res.ok) {
           const json = await res.json();
+          const details = json.details || {};
+
+          // Extract per-pattern validations and A/B count warning from first camera
+          const firstCamera = Object.values(details)[0] as any;
+          const patternValidations: PatternValidation[] = firstCamera?.pattern_validations || [];
+          const abCountWarning = firstCamera?.ab_count_warning || null;
 
           if (json.valid) {
             // Check for color images or subset processing
             const messages: string[] = [];
 
-            Object.values(json.details || {}).forEach((detail: any) => {
+            Object.values(details).forEach((detail: any) => {
               if (detail.color_detected) {
                 messages.push('Color images will be converted to grayscale');
               }
@@ -132,17 +155,25 @@ export function useAutoValidation(config: any) {
               if (detail.indexing_warning) {
                 messages.push(detail.indexing_warning);
               }
+              if (detail.ab_count_warning) {
+                messages.push(detail.ab_count_warning);
+              }
             });
 
             const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
 
-            setValidation({ valid: true, checked: true, error: message });
+            setValidation({
+              valid: true,
+              checked: true,
+              error: message,
+              patternValidations,
+              abCountWarning,
+            });
 
             // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
             // We don't preload here to avoid loading the wrong format (jpeg vs png)
           } else {
             // Build detailed error message from validation results
-            const details = json.details || {};
             const errors: string[] = [];
             const warnings: string[] = [];
             let suggestedPattern: string | null = null;
@@ -157,11 +188,11 @@ export function useAutoValidation(config: any) {
                     ? `Found ${value.actual_count}/${value.expected_count} files`
                     : 'Cannot read files');
                 errors.push(`${key}: ${errorDetail}`);
-                // Capture first suggested pattern from any camera
+                // Capture first suggested pattern from any camera (legacy)
                 if (value.suggested_pattern && !suggestedPattern) {
                   suggestedPattern = value.suggested_pattern;
                 }
-                // Capture A/B pair suggestion if available
+                // Capture A/B pair suggestion if available (legacy)
                 if (value.suggested_pattern_b && !suggestedPatternB) {
                   suggestedPatternB = value.suggested_pattern_b;
                 }
@@ -184,6 +215,9 @@ export function useAutoValidation(config: any) {
               valid: false,
               checked: true,
               error: errorMsg,
+              patternValidations,
+              abCountWarning,
+              // Legacy fields
               suggested_pattern: suggestedPattern,
               suggested_pattern_b: suggestedPatternB,
               suggested_mode: suggestedMode,

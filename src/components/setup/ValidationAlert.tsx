@@ -1,16 +1,26 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
+import { PatternValidation } from "@/hooks/useConfigUpdate";
+
+/**
+ * Base validation state that ValidationAlert accepts.
+ * This is compatible with both ValidationState from useConfigUpdate
+ * and PinholeValidationResult from useCalibrationValidation.
+ */
+interface BaseValidationState {
+  valid: boolean;
+  checked: boolean;
+  error?: string | null;
+  suggested_pattern?: string | null;
+  suggested_pattern_b?: string | null;
+  suggested_mode?: 'ab_format' | 'skip_frames' | null;
+  patternValidations?: PatternValidation[];
+  abCountWarning?: string | null;
+}
 
 interface ValidationAlertProps {
-  validation: {
-    valid: boolean;
-    checked: boolean;
-    error?: string | null;
-    suggested_pattern?: string | null;
-    suggested_pattern_b?: string | null;  // For A/B pair detection
-    suggested_mode?: 'ab_format' | 'skip_frames' | null;  // Detected pairing mode
-  };
+  validation: BaseValidationState;
   /** Custom success message to display instead of default */
   customSuccessMessage?: string;
   /** Optional count of found items to display */
@@ -42,6 +52,21 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
         : "Image files found and validated successfully!";
 
+    // Check for A/B count warning (validation passed but counts differ)
+    if (validation.abCountWarning) {
+      return (
+        <Alert className="border-yellow-500 bg-yellow-50">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <AlertDescription className="text-sm text-yellow-800">
+            {message}
+            <div className="mt-1 text-yellow-700">
+              <strong>Warning:</strong> {validation.abCountWarning}
+            </div>
+          </AlertDescription>
+        </Alert>
+      );
+    }
+
     return (
       <Alert className="border-green-500 bg-green-50">
         <CheckCircle className="h-4 w-4 text-green-600" />
@@ -54,13 +79,38 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
 
   // Error state
   if (validation.checked && !validation.valid && validation.error) {
+    // Check if we have per-pattern validations with individual suggestions
+    // In this case, show a simpler overall message since suggestions are shown inline
+    const hasPerPatternSuggestions = validation.patternValidations?.some(
+      pv => !pv.valid && pv.suggested_pattern
+    );
+
+    // Count invalid patterns
+    const invalidPatterns = validation.patternValidations?.filter(pv => !pv.valid) || [];
+    const invalidCount = invalidPatterns.length;
+    const totalPatterns = validation.patternValidations?.length || 0;
+
+    // Build a cleaner error summary when per-pattern details are shown inline
+    let errorSummary = validation.error;
+    if (hasPerPatternSuggestions && totalPatterns > 0) {
+      if (invalidCount === totalPatterns) {
+        errorSummary = totalPatterns === 1
+          ? "Pattern validation failed"
+          : "All patterns failed validation";
+      } else {
+        const failedLabels = invalidPatterns.map(p => `Pattern ${p.label}`).join(', ');
+        errorSummary = `${failedLabels} failed validation`;
+      }
+    }
+
     return (
       <Alert variant="destructive">
         <XCircle className="h-4 w-4" />
         <AlertTitle>Validation Failed</AlertTitle>
         <AlertDescription className="text-sm">
-          {validation.error}
-          {validation.suggested_pattern && onApplySuggestedPattern && (
+          {errorSummary}
+          {/* Only show legacy global suggestion if no per-pattern suggestions */}
+          {!hasPerPatternSuggestions && validation.suggested_pattern && onApplySuggestedPattern && (
             <div className="mt-2 flex items-center gap-2">
               <span className="text-muted-foreground">Did you mean:</span>
               <Button

@@ -274,7 +274,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 type="number"
                 min={1}
                 value={numImages}
-                onChange={e => setNumImages(Number(e.target.value) || 1)}
+                onChange={e => setNumImages(e.target.value)}
+                onBlur={() => {
+                  const finalVal = parseInt(numImages) || 10;
+                  setNumImages(String(finalVal));
+                }}
               />
             </div>
           </div>
@@ -471,7 +475,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={camera}
-              numImages={numImages}
+              numImages={parseInt(numImages) || 10}
               calibrationType="dotboard"
               calibrationParams={{
                 enhance_dots: enhanceDots,

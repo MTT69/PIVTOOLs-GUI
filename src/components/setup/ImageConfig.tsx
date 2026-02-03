@@ -8,9 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Image as ImageIcon, AlertTriangle, Info } from "lucide-react";
-import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { Plus, Minus, Image as ImageIcon, AlertTriangle, Info, CheckCircle, XCircle } from "lucide-react";
+import { useConfigUpdate, PatternValidation, ValidationState } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
+import { cn } from "@/lib/utils";
 
 // Helper to detect image type from format pattern
 const detectImageType = (pattern: string | undefined): string => {
@@ -69,7 +70,7 @@ const deriveABPatterns = (pattern: string): [string, string] => {
 interface ImageConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  validation: { valid: boolean; error?: string; checked: boolean; suggested_pattern?: string | null };
+  validation: ValidationState;
   sectionsToShow?: ('core' | 'patterns')[];
 }
 
@@ -420,7 +421,24 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     min="1"
                     value={numCameras}
                     onChange={e => setNumCameras(e.target.value.replace(/[^0-9]/g, ''))}
-                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
+                    onBlur={() => {
+                      const camCount = Number(numCameras) || 1;
+                      let adjustedSubfolders: string[];
+
+                      if (camCount === 1) {
+                        // Single camera: no subfolders needed
+                        adjustedSubfolders = [];
+                      } else if (camCount < cameraSubfolders.length) {
+                        // Reduced camera count: trim array
+                        adjustedSubfolders = cameraSubfolders.slice(0, camCount);
+                      } else {
+                        // Same or more cameras: keep existing
+                        adjustedSubfolders = cameraSubfolders;
+                      }
+
+                      setCameraSubfolders(adjustedSubfolders);
+                      saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, adjustedSubfolders, rawPatterns, vectorPattern);
+                    }}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     Total number of cameras in your setup
@@ -733,37 +751,87 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <Label className="font-semibold">Raw Image Pattern{timeResolved ? "" : "s"}</Label>
                 </div>
                 <div className="space-y-3 mt-2">
-                  {rawPatterns.map((p, i) => (
-                    <div key={i} className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          className="font-mono"
-                          value={p}
-                          onChange={e => {
-                            const nextPatterns = [...rawPatterns];
-                            nextPatterns[i] = e.target.value;
-                            setRawPatterns(nextPatterns);
-                          }}
-                          onBlur={() => {
-                            saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-                          }}
-                        />
-                        {!timeResolved && rawPatterns.length > 1 && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => {
-                              const nextPatterns = rawPatterns.filter((_, idx) => idx !== i);
+                  {rawPatterns.map((p, i) => {
+                    // Get per-pattern validation for this index
+                    const patternValidation = validation.patternValidations?.[i];
+                    const isValid = patternValidation?.valid;
+                    const hasValidation = patternValidation !== undefined && validation.checked;
+
+                    return (
+                      <div key={i} className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          {/* Pattern label for A/B mode */}
+                          {rawPatterns.length === 2 && (
+                            <span className="text-xs font-medium text-muted-foreground w-4">
+                              {i === 0 ? 'A' : 'B'}
+                            </span>
+                          )}
+                          <Input
+                            className={cn(
+                              "font-mono flex-1",
+                              hasValidation && isValid === false && "border-red-500 focus-visible:ring-red-500",
+                              hasValidation && isValid === true && "border-green-500 focus-visible:ring-green-500"
+                            )}
+                            value={p}
+                            onChange={e => {
+                              const nextPatterns = [...rawPatterns];
+                              nextPatterns[i] = e.target.value;
                               setRawPatterns(nextPatterns);
-                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
                             }}
-                          >
-                            <Minus className="h-4 w-4" />
-                          </Button>
+                            onBlur={() => {
+                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+                            }}
+                          />
+                          {/* Per-pattern validation indicator */}
+                          {hasValidation && (
+                            isValid
+                              ? <CheckCircle className="h-5 w-5 text-green-500 shrink-0" />
+                              : <XCircle className="h-5 w-5 text-red-500 shrink-0" />
+                          )}
+                          {!timeResolved && rawPatterns.length > 1 && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                const nextPatterns = rawPatterns.filter((_, idx) => idx !== i);
+                                setRawPatterns(nextPatterns);
+                                saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
+                              }}
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+
+                        {/* Per-pattern "Did you mean" suggestion */}
+                        {hasValidation && !isValid && patternValidation?.suggested_pattern && (
+                          <div className="flex items-center gap-2 text-sm ml-5">
+                            <span className="text-muted-foreground">Did you mean:</span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const nextPatterns = [...rawPatterns];
+                                nextPatterns[i] = patternValidation.suggested_pattern!;
+                                setRawPatterns(nextPatterns);
+                                saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
+                              }}
+                              className="font-mono text-xs text-blue-600 border-blue-300 hover:bg-blue-50"
+                            >
+                              {patternValidation.suggested_pattern}
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Per-pattern error message (if no suggestion) */}
+                        {hasValidation && !isValid && !patternValidation?.suggested_pattern && patternValidation?.error && (
+                          <p className="text-xs text-red-600 ml-5">
+                            {patternValidation.error}
+                          </p>
                         )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
 
                   {/* Validation Status */}
                   <ValidationAlert

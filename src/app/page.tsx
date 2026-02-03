@@ -67,6 +67,7 @@ export default function Home() {
               source_paths: json.paths?.source_paths || [],
               camera_numbers: json.paths?.camera_numbers || [],
               camera_count: json.paths?.camera_count,
+              camera_subfolders: json.paths?.camera_subfolders || [],
             },
             images: json.images || {},
             batches: json.batches || {},

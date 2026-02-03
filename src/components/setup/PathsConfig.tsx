@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Folder, Plus, X, CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { useConfigUpdate, ValidationState } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
 
 interface PathsConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  validation: { valid: boolean; error?: string; checked: boolean };
+  validation: ValidationState;
 }
 
 export default function PathsConfig({ config, updateConfig, validation }: PathsConfigProps) {

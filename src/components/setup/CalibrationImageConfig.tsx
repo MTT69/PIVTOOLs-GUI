@@ -51,7 +51,7 @@ export default function CalibrationImageConfig({
 }: CalibrationImageConfigProps) {
   // Config state
   const [imageFormat, setImageFormat] = useState("calib%05d.tif");
-  const [numImages, setNumImages] = useState(10);
+  const [numImages, setNumImages] = useState<string>("10");
   const [imageType, setImageType] = useState("standard");
   const [zeroBasedIndexing, setZeroBasedIndexing] = useState(false);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(true);
@@ -73,7 +73,7 @@ export default function CalibrationImageConfig({
 
       if (res.ok) {
         setImageFormat(json.image_format || "calib%05d.tif");
-        setNumImages(json.num_images || 10);
+        setNumImages(String(json.num_images || 10));
         setImageType(json.image_type || "standard");
         setZeroBasedIndexing(json.zero_based_indexing || false);
         setUseCameraSubfolders(json.use_camera_subfolders ?? true);
@@ -103,7 +103,7 @@ export default function CalibrationImageConfig({
       if (res.ok) {
         // Update local state from response
         if (json.image_format) setImageFormat(json.image_format);
-        if (json.num_images) setNumImages(json.num_images);
+        if (json.num_images) setNumImages(String(json.num_images));
         if (json.image_type) setImageType(json.image_type);
         if (json.zero_based_indexing !== undefined) setZeroBasedIndexing(json.zero_based_indexing);
         if (json.use_camera_subfolders !== undefined) setUseCameraSubfolders(json.use_camera_subfolders);
@@ -156,14 +156,14 @@ export default function CalibrationImageConfig({
       setValidation(json);
 
       // Notify parent of validation result
-      const frameCount = typeof json.found_count === 'number' ? json.found_count : numImages;
+      const frameCount = typeof json.found_count === 'number' ? json.found_count : (parseInt(numImages) || 10);
       onValidationChange?.(json.valid, frameCount);
 
     } catch (e: any) {
       setValidation({
         valid: false,
         found_count: 0,
-        expected_count: numImages,
+        expected_count: parseInt(numImages) || 10,
         camera_path: "",
         first_image_preview: null,
         image_size: null,
@@ -278,8 +278,12 @@ export default function CalibrationImageConfig({
               type="number"
               min={1}
               value={numImages}
-              onChange={e => setNumImages(Number(e.target.value) || 1)}
-              onBlur={() => saveConfig({ num_images: numImages })}
+              onChange={e => setNumImages(e.target.value)}
+              onBlur={() => {
+                const finalVal = parseInt(numImages) || 10;
+                setNumImages(String(finalVal));
+                saveConfig({ num_images: finalVal });
+              }}
               className="mt-1"
             />
           </div>
