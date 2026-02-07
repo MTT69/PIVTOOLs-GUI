@@ -22,7 +22,7 @@ import { useImageFilters } from '@/hooks/useImageFilters';
 import { FilterSelector, FilterEditor } from '@/components/FilterComponents';
 import ZoomableCanvas from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
-import { basename } from "@/lib/utils";
+import { basename, cn } from "@/lib/utils";
 
 interface ImagePairViewerProps {
   backendUrl?: string;
@@ -79,36 +79,36 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   // Play/Frame navigation state
   const [playing, setPlaying] = useState(false);
-  const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const playingRef = useRef(false); // Ref to avoid stale closure in playback loop
+  const indexRef = useRef(index); // Ref to track current index without re-creating interval
 
-  // Calculate number of frame pairs (not image files)
+  // Playback source: determines which image pipeline gates frame advancement
+  const [playbackSource, setPlaybackSource] = useState<"raw" | "processed">("raw");
+
+  // Number of frame pairs (computed by backend from stride config)
   const maxFrames = useMemo(() => {
-    const numImages = config?.images?.num_images || 100;
-    const imageFormat = config?.images?.image_format;
-    const timeResolved = config?.images?.time_resolved || false;
-
-    // A/B format (2 patterns)
-    if (Array.isArray(imageFormat) && imageFormat.length === 2) {
-      return numImages;
-    }
-
-    // Time-resolved: sequential overlapping pairs
-    if (timeResolved) {
-      return Math.max(0, numImages - 1);
-    }
-
-    // Skip frames: non-overlapping pairs
-    return Math.floor(numImages / 2);
-  }, [config?.images?.num_images, config?.images?.image_format, config?.images?.time_resolved]);
+    return config?.images?.num_frame_pairs || config?.images?.num_images || 100;
+  }, [config?.images?.num_frame_pairs, config?.images?.num_images]);
 
   const [isImageLoading, setIsImageLoading] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 1, 2, 5, 10
+  const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 0.5, 1, 2, 5, 10
+
+  // Keep refs in sync with state for use in playback loop
+  useEffect(() => {
+    indexRef.current = index;
+  }, [index]);
+
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
   const [batchSize, setBatchSize] = useState<string>('30');
 
   // --- Hooks for Logic ---
-  const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding } =
-    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale);
+  // Disable raw fetching during processed playback to avoid bandwidth competition
+  const rawFetchEnabled = !(playing && playbackSource === "processed");
+  const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding, isFrameCached } =
+    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale, rawFetchEnabled);
   const {
     filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame,
     procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage,
@@ -158,18 +158,23 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // The frontend prefetch buffer in useImagePair loads frames as user navigates
 
   // Auto-fetch processed images when frame/camera/source changes
+  // Skip during playback when synced to "raw" to avoid unnecessary processing and flashing
   useEffect(() => {
     const fetchProcessedForCurrentFrame = async () => {
+      // Skip processing calls during playback if:
+      // 1. No filters are applied
+      // 2. Playback is synced to "raw" (processed panel should just show last available frame)
+      if (playing && (filters.length === 0 || playbackSource === "raw")) {
+        return;
+      }
+
       if (filters.length > 0) {
         await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx, procAutoScale);
-      } else {
-        // Clear processed images if no filters are applied
-        // This is handled in useImageFilters by setting procImgA and procImgB to null
       }
     };
 
     fetchProcessedForCurrentFrame();
-  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length, procAutoScale]);
+  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length, procAutoScale, playing, playbackSource]);
 
   // Reset manual adjustment flags when auto-scale is re-enabled
   useEffect(() => {
@@ -237,7 +242,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             batches: { size: validSize }
           }),
         });
-        console.log('Batch size updated to', validSize);
       } catch (e) {
         console.error('Failed to save batch size', e);
       }
@@ -252,7 +256,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
           batches: { size: num }
         }),
       });
-      console.log('Batch size updated to', num);
     } catch (e) {
       console.error('Failed to save batch size', e);
     }
@@ -343,33 +346,75 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [loading, playing]);
 
-  // Play/Pause functionality with smart prefetching
+  // Play/Pause functionality with adaptive frame timing and strict data-ready gating
+  // Uses refs to avoid recreating interval on every frame change
+  // IMPORTANT: Frame counter ONLY advances when data for the NEXT frame is actually ready
   useEffect(() => {
     if (playing) {
-      // Prefetch ahead based on playback speed
-      const prefetchCount = Math.max(5, Math.ceil(playbackSpeed * 3));
-      prefetchSurrounding(index, prefetchCount);
+      // Prefetch more frames ahead based on playback speed
+      const prefetchCount = Math.max(8, Math.ceil(playbackSpeed * 5));
+      prefetchSurrounding(indexRef.current, prefetchCount);
 
-      const advanceFrame = () => {
-        setIndex(prev => {
-          const next = prev >= maxFrames ? 1 : prev + 1;
-          // Prefetch frames ahead while playing
-          prefetchSurrounding(next, prefetchCount);
-          return next;
-        });
+      let lastFrameTime = performance.now();
+      let animationFrameId: number | null = null;
+      let consecutiveSkips = 0;  // Track stalls for re-triggering prefetch
+
+      const advanceFrame = (currentTime: number) => {
+        if (!playingRef.current) return;
+
+        const targetInterval = 1000 / playbackSpeed;
+        const elapsed = currentTime - lastFrameTime;
+
+        if (elapsed >= targetInterval) {
+          const currentIdx = indexRef.current;
+          const nextIdx = currentIdx >= maxFrames ? 1 : currentIdx + 1;
+
+          // Check if next frame data is ready based on playback source
+          let frameReady = false;
+          if (playbackSource === "raw") {
+            // Raw mode: STRICT - only advance if next frame is actually cached
+            // Do NOT use loading state as fallback (causes frame/display mismatch)
+            frameReady = isFrameCached(nextIdx);
+          } else {
+            // Processed mode: check if processed images are ready
+            // Only advance when processing is complete (or no filters configured)
+            frameReady = !procLoading && (procImgA !== null || filters.length === 0);
+          }
+
+          // Only advance if next frame data is ready
+          if (frameReady) {
+            // Update frame
+            setIndex(nextIdx);
+
+            // Prefetch frames ahead while playing
+            prefetchSurrounding(nextIdx, prefetchCount);
+
+            lastFrameTime = currentTime;
+            consecutiveSkips = 0;
+          } else {
+            // Frame not ready - trigger more prefetching if we're stalling
+            consecutiveSkips++;
+            if (consecutiveSkips >= 2 && playbackSource === "raw") {
+              prefetchSurrounding(currentIdx, prefetchCount);
+            }
+          }
+        }
+
+        // Continue the animation loop
+        animationFrameId = requestAnimationFrame(advanceFrame);
       };
 
-      // Calculate interval based on playback speed (FPS)
-      const intervalMs = 1000 / playbackSpeed;
-      playIntervalRef.current = setInterval(advanceFrame, intervalMs);
-    } else if (playIntervalRef.current) {
-      clearInterval(playIntervalRef.current);
-      playIntervalRef.current = null;
+      // Start the animation loop
+      animationFrameId = requestAnimationFrame(advanceFrame);
+
+      // Cleanup
+      return () => {
+        if (animationFrameId !== null) {
+          cancelAnimationFrame(animationFrameId);
+        }
+      };
     }
-    return () => {
-      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
-    };
-  }, [playing, maxFrames, playbackSpeed, index, prefetchSurrounding]);
+  }, [playing, maxFrames, playbackSpeed, prefetchSurrounding, playbackSource, isFrameCached, procLoading, procImgA, filters.length]);
 
   return (
     <Card>
@@ -561,7 +606,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
           </Button>
           <div className="flex items-center gap-2">
-            <Label className="text-xs whitespace-nowrap">Playback Speed:</Label>
+            <Label className="text-xs whitespace-nowrap">Speed:</Label>
             <Select
               value={String(playbackSpeed)}
               onValueChange={(v) => setPlaybackSpeed(Number(v))}
@@ -575,7 +620,24 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 <SelectItem value="1">1 FPS</SelectItem>
                 <SelectItem value="2">2 FPS</SelectItem>
                 <SelectItem value="5">5 FPS</SelectItem>
-                <SelectItem value="10">10 FPS</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="text-xs whitespace-nowrap">Sync To:</Label>
+            <Select
+              value={playbackSource}
+              onValueChange={(v) => setPlaybackSource(v as "raw" | "processed")}
+              disabled={playing}
+            >
+              <SelectTrigger className="w-28 h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="raw">Raw</SelectItem>
+                <SelectItem value="processed" disabled={filters.length === 0}>
+                  Processed
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -603,9 +665,13 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             <div className="space-y-3 p-3 border rounded-md">
               <div className="flex items-center gap-2 justify-between">
                 <div className="flex items-center gap-2">
-                  <Label>View</Label>
-                  <Button size="sm" variant={rawToggle === "A" ? "default" : "outline"} onClick={() => setRawToggle("A")}>A</Button>
-                  <Button size="sm" variant={rawToggle === "B" ? "default" : "outline"} onClick={() => setRawToggle("B")}>B</Button>
+                  <span className={cn("text-sm font-medium", rawToggle === "A" ? "text-primary" : "text-muted-foreground")}>A</span>
+                  <Switch
+                    id="raw-toggle"
+                    checked={rawToggle === "B"}
+                    onCheckedChange={(checked) => setRawToggle(checked ? "B" : "A")}
+                  />
+                  <span className={cn("text-sm font-medium", rawToggle === "B" ? "text-primary" : "text-muted-foreground")}>B</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch id="raw-auto-scale" checked={rawAutoScale} onCheckedChange={setRawAutoScale} />
@@ -743,7 +809,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <p className="text-white mt-2 text-sm">Processing filters...</p>
                 </div>
               )}
-              {!procLoading && needsProcessing && hasTemporalFilters && (
+              {!procLoading && needsProcessing && hasTemporalFilters && !playing && (
                 <div className="absolute inset-0 bg-gray-100/90 flex flex-col items-center justify-center rounded-lg border border-gray-300">
                   <p className="text-gray-600 text-sm mb-3">Frame not yet processed</p>
                   <Button
@@ -754,18 +820,24 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   </Button>
                 </div>
               )}
-              {!procLoading && !needsProcessing && !procImgA && !procImgB && filters.length === 0 && (
+              {!procLoading && !needsProcessing && !procImgA && !procImgB && filters.length === 0 && !playing && (
                 <div className="absolute inset-0 bg-gray-50/80 flex flex-col items-center justify-center rounded-lg">
                   <p className="text-gray-500 text-sm">No filters configured</p>
                 </div>
               )}
             </div>
             <div className="space-y-3 p-3 border rounded-md">
-                <div className="flex items-center gap-2">
-                  <Label>View</Label>
-                  <Button size="sm" variant={procToggle === "A" ? "default" : "outline"} onClick={() => setProcToggle("A")}>A</Button>
-                  <Button size="sm" variant={procToggle === "B" ? "default" : "outline"} onClick={() => setProcToggle("B")}>B</Button>
-                  <div className="flex items-center gap-2 ml-auto">
+                <div className="flex items-center gap-2 justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className={cn("text-sm font-medium", procToggle === "A" ? "text-primary" : "text-muted-foreground")}>A</span>
+                    <Switch
+                      id="proc-toggle"
+                      checked={procToggle === "B"}
+                      onCheckedChange={(checked) => setProcToggle(checked ? "B" : "A")}
+                    />
+                    <span className={cn("text-sm font-medium", procToggle === "B" ? "text-primary" : "text-muted-foreground")}>B</span>
+                  </div>
+                  <div className="flex items-center gap-2">
                     <Switch id="proc-auto-scale" checked={procAutoScale} onCheckedChange={setProcAutoScale} />
                     <Label htmlFor="proc-auto-scale" className="text-sm">Auto Scale</Label>
                   </div>

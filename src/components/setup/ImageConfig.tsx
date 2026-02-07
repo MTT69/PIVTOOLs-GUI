@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,42 +30,60 @@ const isContainerFormat = (pattern: string | undefined): boolean => {
   return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims') || lower.includes('.cine');
 };
 
-// Helper to detect LaVision multi-camera formats (all cameras in one file)
-const isMultiCameraContainer = (imageType: string): boolean => {
-  return imageType === "lavision_set" || imageType === "lavision_im7";
-};
-
 // Helper to derive A/B pattern pair from a single pattern
 const deriveABPatterns = (pattern: string): [string, string] => {
-  // Helper to preserve case when replacing A<->B
   const replacePreservingCase = (str: string, from: string, to: string): string => {
-    // Match the pattern with captured case
     const regex = new RegExp(`([_-])${from}(\\.[a-zA-Z]+)$`, 'i');
     const match = str.match(regex);
     if (!match) return str;
-    // Preserve the case of the original letter
     const originalChar = str.charAt(str.indexOf(match[0]) + 1);
     const isUpperCase = originalChar === originalChar.toUpperCase();
     const replacement = isUpperCase ? to.toUpperCase() : to.toLowerCase();
     return str.replace(regex, `$1${replacement}$2`);
   };
 
-  // If pattern contains _A or -A, derive B version
   if (/[_-]A\.[a-zA-Z]+$/i.test(pattern)) {
     const patternB = replacePreservingCase(pattern, 'A', 'B');
     return [pattern, patternB];
   }
-  // If pattern contains _B or -B, derive A version
   if (/[_-]B\.[a-zA-Z]+$/i.test(pattern)) {
     const patternA = replacePreservingCase(pattern, 'B', 'A');
     return [patternA, pattern];
   }
-  // Default: add _A and _B suffixes before extension
   const extMatch = pattern.match(/\.[a-zA-Z]+$/i);
   const ext = extMatch ? extMatch[0] : '.tif';
   const base = pattern.replace(/\.[a-zA-Z]+$/i, '');
   return [`${base}_A${ext}`, `${base}_B${ext}`];
 };
+
+// Preset → stride mapping
+const PRESET_STRIDES: Record<string, { fs: number; ps: number }> = {
+  ab_format:     { fs: 0, ps: 1 },
+  pre_paired:    { fs: 0, ps: 1 },
+  time_resolved: { fs: 1, ps: 1 },
+  skip_frames:   { fs: 1, ps: 2 },
+};
+
+// Compute number of frame pairs from strides
+const computeNumPairs = (numImages: number, fs: number, ps: number): number => {
+  if (fs === 0) return numImages;
+  if (ps <= 0) return 0;
+  return Math.max(0, Math.floor((numImages - 1 - fs) / ps) + 1);
+};
+
+interface SaveOverrides {
+  numImages?: string;
+  numCameras?: string;
+  pairingPreset?: string;
+  startIndex?: number;
+  frameStride?: number;
+  pairStride?: number;
+  cameraSubfolders?: string[];
+  rawPatterns?: string[];
+  vectorPattern?: string;
+  imageType?: string;
+  useCameraSubfoldersIM7?: boolean;
+}
 
 interface ImageConfigProps {
   config: any;
@@ -77,17 +95,23 @@ interface ImageConfigProps {
 export default function ImageConfig({ config, updateConfig, validation, sectionsToShow = ['core', 'patterns'] }: ImageConfigProps) {
   const [numImages, setNumImages] = useState<string>("");
   const [numCameras, setNumCameras] = useState<string>("1");
-  const [timeResolved, setTimeResolved] = useState<boolean>(false);
+  const [pairingPreset, setPairingPreset] = useState<string>("ab_format");
+  const [frameStride, setFrameStride] = useState<number>(0);
+  const [pairStride, setPairStride] = useState<number>(1);
+  const [startIndex, setStartIndex] = useState<number>(1);
   const [rawPatterns, setRawPatterns] = useState<string[]>([]);
   const [vectorPattern, setVectorPattern] = useState<string>("");
   const [savingMeta, setSavingMeta] = useState<string>("");
   const [isMacOS, setIsMacOS] = useState(false);
   const [hasUnsupportedFormat, setHasUnsupportedFormat] = useState(false);
-  const [zeroBasedIndexing, setZeroBasedIndexing] = useState<boolean>(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
-  const [nonTimeResolvedMode, setNonTimeResolvedMode] = useState<string>("ab_format"); // "ab_format" or "skip_frames"
-  const [imageType, setImageType] = useState<string>("standard"); // "standard", "cine", "lavision_set", "lavision_im7"
-  const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false); // For IM7: one camera per file in subfolders
+  const [imageType, setImageType] = useState<string>("standard");
+  const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
+  const [framePairPreview, setFramePairPreview] = useState<any>(null);
+  // String editing states for number inputs (lets user clear and retype)
+  const [frameStrideStr, setFrameStrideStr] = useState<string>("0");
+  const [pairStrideStr, setPairStrideStr] = useState<string>("1");
+  const [startIndexStr, setStartIndexStr] = useState<string>("1");
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
@@ -105,128 +129,113 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       setHasUnsupportedFormat(false);
       return;
     }
-
     const imageFormat = config.images?.image_format;
     if (!imageFormat) {
       setHasUnsupportedFormat(false);
       return;
     }
-
     const formats = Array.isArray(imageFormat) ? imageFormat : [imageFormat];
     const unsupported = formats.some((fmt: string) => {
       const lower = fmt.toLowerCase();
       return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims');
     });
-
-    console.log('Unsupported format check:', { isMacOS, imageFormat, unsupported });
     setHasUnsupportedFormat(unsupported);
   }, [isMacOS, config.images?.image_format]);
 
-  // Log when parent validation state changes (for debugging)
-  useEffect(() => {
-    if (sectionsToShow.includes('patterns')) {
-      console.log('ImageConfig: Parent validation state changed:', validation);
-    }
-  }, [validation, sectionsToShow]);
-
+  // Load config into state
   useEffect(() => {
     const images = config.images || {};
     const paths = config.paths || {};
 
-    // Debug: Log what we're receiving
-    console.log('ImageConfig received paths:', paths);
-    console.log('Camera count from config:', paths.camera_count);
-
     setNumImages(images.num_images !== undefined ? String(images.num_images) : "");
 
-    // Derive camera count from camera_count field or camera_numbers array length
     const cameraCount = paths.camera_count !== undefined
       ? paths.camera_count
       : (Array.isArray(paths.camera_numbers) ? paths.camera_numbers.length : 1);
     setNumCameras(String(cameraCount));
 
-    setTimeResolved(!!images.time_resolved);
-    setZeroBasedIndexing(!!images.zero_based_indexing);
+    // New stride-based config
+    setPairingPreset(images.pairing_preset || "ab_format");
+    const si = images.start_index ?? 1;
+    const fs = images.frame_stride ?? 0;
+    const ps = images.pair_stride ?? 1;
+    setStartIndex(si);
+    setFrameStride(fs);
+    setPairStride(ps);
+    setStartIndexStr(String(si));
+    setFrameStrideStr(String(fs));
+    setPairStrideStr(String(ps));
+
     setCameraSubfolders(paths.camera_subfolders || []);
     setUseCameraSubfoldersIM7(!!images.use_camera_subfolders);
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
-    // Detect image type from config or format pattern
     const detectedType = images.image_type || detectImageType(
       Array.isArray(images.image_format) ? images.image_format[0] : images.image_format
     );
     setImageType(detectedType);
 
+    // Load patterns
     const rawFmt = images.image_format;
-    if (images.time_resolved) {
-      // Time-resolved: always single format
-      if (typeof rawFmt === 'string') setRawPatterns([rawFmt]);
-      else if (Array.isArray(rawFmt) && rawFmt.length) setRawPatterns([rawFmt[0]]);
-      else setRawPatterns(['B%05d.tif']);
+    if (Array.isArray(rawFmt)) {
+      setRawPatterns(rawFmt);
+    } else if (typeof rawFmt === 'string') {
+      setRawPatterns([rawFmt]);
     } else {
-      // Non-time-resolved: detect mode from format
-      if (Array.isArray(rawFmt) && rawFmt.length === 2) {
-        // A/B format
-        setRawPatterns(rawFmt);
-        setNonTimeResolvedMode("ab_format");
-      } else if (Array.isArray(rawFmt) && rawFmt.length === 1) {
-        // Single pattern - could be skip_frames OR container format
-        // For container formats, don't force a mode - pairing is handled internally
-        setRawPatterns([rawFmt[0]]);
-        // Only set skip_frames mode for non-container formats
-        if (!isContainerFormat(rawFmt[0])) {
-          setNonTimeResolvedMode("skip_frames");
-        }
-      } else if (typeof rawFmt === 'string') {
-        // Single string - could be skip_frames OR container format
-        setRawPatterns([rawFmt]);
-        // Only set skip_frames mode for non-container formats
-        if (!isContainerFormat(rawFmt)) {
-          setNonTimeResolvedMode("skip_frames");
-        }
-      } else {
-        // Default to A/B format
-        setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
-        setNonTimeResolvedMode("ab_format");
-      }
+      setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
     }
   }, [config]);
 
-  // Validation is now handled by useAutoValidation hook in parent
+  // Fetch frame pair preview
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch('/backend/preview_frame_pairs?count=5');
+        if (response.ok) {
+          const data = await response.json();
+          setFramePairPreview(data);
+        }
+      } catch {
+        // Ignore errors
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [config.images?.num_images, config.images?.start_index, config.images?.frame_stride,
+      config.images?.pair_stride, config.images?.pairing_preset, config.images?.image_format]);
 
-  // Validation is now handled by useAutoValidation hook in parent - no local validation needed
-
-  const saveConfig = async (
-    nextNumImages: string,
-    nextNumCameras: string,
-    nextTimeResolved: boolean,
-    nextZeroBasedIndexing: boolean,
-    nextCameraSubfolders: string[],
-    nextRawPatterns: string[],
-    nextVectorPattern: string,
-    nextImageType?: string,
-  ) => {
+  const saveConfig = async (overrides: SaveOverrides = {}) => {
     setSavingMeta("Saving...");
-    const effectiveImageType = nextImageType || imageType;
+    const ni = overrides.numImages ?? numImages;
+    const nc = overrides.numCameras ?? numCameras;
+    const preset = overrides.pairingPreset ?? pairingPreset;
+    const si = overrides.startIndex ?? startIndex;
+    const fs = overrides.frameStride ?? frameStride;
+    const ps = overrides.pairStride ?? pairStride;
+    const csf = overrides.cameraSubfolders ?? cameraSubfolders;
+    const rp = overrides.rawPatterns ?? rawPatterns;
+    const vp = overrides.vectorPattern ?? vectorPattern;
+    const it = overrides.imageType ?? imageType;
+    const ucsfIM7 = overrides.useCameraSubfoldersIM7 ?? useCameraSubfoldersIM7;
 
-    // Generate default camera_numbers array based on camera count
-    const camCount = Number(nextNumCameras) || 1;
+    const camCount = Number(nc) || 1;
     const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
     const payload = {
       images: {
-        num_images: nextNumImages === "" ? null : Number(nextNumImages),
-        time_resolved: nextTimeResolved,
-        zero_based_indexing: nextZeroBasedIndexing,
-        image_format: nextTimeResolved ? nextRawPatterns[0] : nextRawPatterns,
-        vector_format: [nextVectorPattern],
-        image_type: effectiveImageType,
-        use_camera_subfolders: useCameraSubfoldersIM7,
+        num_images: ni === "" ? null : Number(ni),
+        start_index: si,
+        frame_stride: fs,
+        pair_stride: ps,
+        pairing_preset: preset,
+        image_format: rp,
+        vector_format: [vp],
+        image_type: it,
+        use_camera_subfolders: ucsfIM7,
       },
       paths: {
         camera_count: camCount,
         camera_numbers: cameraNumbers,
-        camera_subfolders: nextCameraSubfolders,
+        camera_subfolders: csf,
       },
     };
 
@@ -240,7 +249,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
       }
       setSavingMeta("Saved successfully!");
-      // Note: validation will be triggered automatically by the useEffect watching config changes
     } else {
       setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
     }
@@ -248,40 +256,49 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     setTimeout(() => setSavingMeta(""), 2000);
   };
 
-  const handleToggleTimeResolved = (isTimeResolved: boolean) => {
-    setTimeResolved(isTimeResolved);
-    
-    // For container formats, don't transform patterns - just toggle the flag
-    // Container formats handle frame pairing internally
-    const currentPattern = rawPatterns[0] || "";
-    if (isContainerFormat(currentPattern)) {
-      // Keep the pattern as-is, just save the time_resolved change
-      saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-      return;
-    }
-    
-    // Standard format: transform patterns based on time-resolved mode
-    let newPatterns: string[];
-    if (isTimeResolved) {
-      const newPattern = (rawPatterns[0] || "B%05d.tif").replace(/_A\.tif$/i, ".tif");
-      newPatterns = [newPattern];
-      setRawPatterns(newPatterns);
+  const handlePresetChange = (newPreset: string) => {
+    setPairingPreset(newPreset);
+
+    const strides = PRESET_STRIDES[newPreset];
+    let newFs = strides?.fs ?? frameStride;
+    let newPs = strides?.ps ?? pairStride;
+
+    if (newPreset !== "custom") {
+      setFrameStride(newFs);
+      setPairStride(newPs);
+      setFrameStrideStr(String(newFs));
+      setPairStrideStr(String(newPs));
     } else {
-      if (rawPatterns.length === 1) {
-        const base = rawPatterns[0].replace(/\.tif$/i, "");
-        newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
-      } else {
-        newPatterns = ['B%05d_A.tif', 'B%05d_B.tif'];
+      newFs = frameStride;
+      newPs = pairStride;
+    }
+
+    // Transform patterns if needed (standard image type only)
+    let newPatterns = [...rawPatterns];
+    if (imageType === "standard") {
+      if (newPreset === "ab_format") {
+        // Switch to A/B: derive A/B patterns from first pattern
+        if (rawPatterns.length === 1) {
+          newPatterns = deriveABPatterns(rawPatterns[0]);
+        }
+      } else if (rawPatterns.length === 2) {
+        // Switch from A/B to single pattern: strip _A suffix
+        const stripped = rawPatterns[0].replace(/_A\.([a-zA-Z]+)$/i, '.$1');
+        newPatterns = [stripped];
       }
       setRawPatterns(newPatterns);
     }
-    // Save with the new patterns, not stale rawPatterns
-    saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+
+    saveConfig({
+      pairingPreset: newPreset,
+      frameStride: newFs,
+      pairStride: newPs,
+      rawPatterns: newPatterns,
+    });
   };
 
   const handleCameraSubfolderChange = (index: number, value: string) => {
     const newSubfolders = [...cameraSubfolders];
-    // Ensure array is long enough
     while (newSubfolders.length <= index) {
       newSubfolders.push("");
     }
@@ -290,13 +307,50 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   };
 
   const saveCameraSubfolders = () => {
-    saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
+    saveConfig();
   };
-
-  // Removed - validation handled by parent hook
 
   const showCore = sectionsToShow.includes('core');
   const showPatterns = sectionsToShow.includes('patterns');
+
+  // Compute pairs for display
+  const n = parseInt(numImages || '0');
+  const numPairs = computeNumPairs(n, frameStride, pairStride);
+
+  // Get preset options for current image type
+  const getPresetOptions = () => {
+    switch (imageType) {
+      case "cine":
+        return [
+          { value: "time_resolved", label: "Overlapping Pairs (1+2, 2+3, 3+4)" },
+          { value: "skip_frames", label: "Consecutive Pairs (1+2, 3+4, 5+6)" },
+          { value: "custom", label: "Custom..." },
+        ];
+      case "lavision_set":
+      case "lavision_im7":
+        return [
+          { value: "pre_paired", label: "Pre-paired A+B (built into each file)" },
+          { value: "time_resolved", label: "Overlapping Pairs (across files)" },
+          { value: "skip_frames", label: "Consecutive Pairs (across files)" },
+          { value: "custom", label: "Custom..." },
+        ];
+      default: // standard
+        return [
+          { value: "ab_format", label: "A/B File Pairs (1A+1B, 2A+2B, ...)" },
+          { value: "skip_frames", label: "Consecutive Pairs (1+2, 3+4, 5+6)" },
+          { value: "time_resolved", label: "Overlapping Pairs (1+2, 2+3, 3+4)" },
+          { value: "custom", label: "Custom..." },
+        ];
+    }
+  };
+
+  // Pairs description for helper text
+  const getPairsDescription = (): string => {
+    const fileWord = imageType === "cine" ? "frames" : imageType.startsWith("lavision") ? "entries" : "files";
+    if (pairingPreset === "ab_format") return `${numImages} ${fileWord} → ${numPairs} frame pairs (A+B sets)`;
+    if (pairingPreset === "pre_paired") return `${numImages} ${fileWord} → ${numPairs} frame pairs (internal A+B)`;
+    return `${numImages} ${fileWord} → ${numPairs} pairs`;
+  };
 
   return (
     <div className="space-y-6">
@@ -334,32 +388,55 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     value={imageType}
                     onValueChange={(value) => {
                       setImageType(value);
-                      // Set default format pattern based on type
                       let defaultFormat = "";
-                      let defaultTimeResolved = timeResolved;
+                      let defaultPreset = pairingPreset;
+                      let defaultFs = frameStride;
+                      let defaultPs = pairStride;
+                      let defaultSi = startIndex;
+
                       switch(value) {
                         case "cine":
                           defaultFormat = "Camera%d.cine";
-                          // CINE typically time-resolved
-                          defaultTimeResolved = true;
+                          defaultPreset = "time_resolved";
+                          defaultFs = 1; defaultPs = 1; defaultSi = 1;
                           break;
                         case "lavision_set":
                           defaultFormat = "data.set";
-                          defaultTimeResolved = false;
+                          defaultPreset = "pre_paired";
+                          defaultFs = 0; defaultPs = 1;
                           break;
                         case "lavision_im7":
                           defaultFormat = "B%05d.im7";
-                          defaultTimeResolved = false;
+                          defaultPreset = "pre_paired";
+                          defaultFs = 0; defaultPs = 1;
                           break;
                         default:
-                          defaultFormat = timeResolved ? "B%05d.tif" : "B%05d_A.tif";
+                          defaultFormat = "B%05d_A.tif";
+                          defaultPreset = "ab_format";
+                          defaultFs = 0; defaultPs = 1;
                       }
-                      const newPatterns = value === "standard" && !defaultTimeResolved
+
+                      const newPatterns = value === "standard" && defaultPreset === "ab_format"
                         ? ["B%05d_A.tif", "B%05d_B.tif"]
                         : [defaultFormat];
+
                       setRawPatterns(newPatterns);
-                      setTimeResolved(defaultTimeResolved);
-                      saveConfig(numImages, numCameras, defaultTimeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern, value);
+                      setPairingPreset(defaultPreset);
+                      setFrameStride(defaultFs);
+                      setPairStride(defaultPs);
+                      setStartIndex(defaultSi);
+                      setFrameStrideStr(String(defaultFs));
+                      setPairStrideStr(String(defaultPs));
+                      setStartIndexStr(String(defaultSi));
+
+                      saveConfig({
+                        imageType: value,
+                        pairingPreset: defaultPreset,
+                        frameStride: defaultFs,
+                        pairStride: defaultPs,
+                        startIndex: defaultSi,
+                        rawPatterns: newPatterns,
+                      });
                     }}
                   >
                     <SelectTrigger id="image_type" className="w-full mt-1">
@@ -387,27 +464,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     min="0"
                     value={numImages}
                     onChange={e => setNumImages(e.target.value)}
-                    onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
+                    onBlur={() => saveConfig()}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    {imageType === "cine"
-                      ? (timeResolved
-                          ? `${numImages} frames → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (overlapping)`
-                          : `${numImages} frames → ${Math.floor((parseInt(numImages || '0')) / 2)} pairs (skip)`)
-                      : imageType === "lavision_set"
-                        ? (timeResolved
-                            ? `${numImages} entries → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (across entries)`
-                            : `${numImages} entries → ${numImages} frame pairs (A+B in each entry)`)
-                        : imageType === "lavision_im7"
-                          ? (timeResolved
-                              ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} pairs (across files)`
-                              : `${numImages} files → ${numImages} frame pairs (A+B in each file)`)
-                          : timeResolved
-                            ? `${numImages} files → ${Math.max(0, parseInt(numImages || '0') - 1)} frame pairs (sequential)`
-                            : nonTimeResolvedMode === "ab_format"
-                              ? `${numImages} files → ${numImages} frame pairs (A+B sets)`
-                              : `${numImages} files → ${Math.floor((parseInt(numImages || '0')) / 2)} frame pairs (skip)`
-                    }
+                    {getPairsDescription()}
                   </p>
                 </div>
               </div>
@@ -426,18 +486,15 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       let adjustedSubfolders: string[];
 
                       if (camCount === 1) {
-                        // Single camera: no subfolders needed
                         adjustedSubfolders = [];
                       } else if (camCount < cameraSubfolders.length) {
-                        // Reduced camera count: trim array
                         adjustedSubfolders = cameraSubfolders.slice(0, camCount);
                       } else {
-                        // Same or more cameras: keep existing
                         adjustedSubfolders = cameraSubfolders;
                       }
 
                       setCameraSubfolders(adjustedSubfolders);
-                      saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, adjustedSubfolders, rawPatterns, vectorPattern);
+                      saveConfig({ cameraSubfolders: adjustedSubfolders });
                     }}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
@@ -445,7 +502,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   </p>
                 </div>
               </div>
-              
+
               {Number(numCameras) > 1 && imageType === "standard" && (
                 <div className="mt-4">
                   <div className="flex items-center gap-2 mb-2">
@@ -487,26 +544,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       checked={useCameraSubfoldersIM7}
                       onCheckedChange={(checked) => {
                         setUseCameraSubfoldersIM7(checked);
-                        // Immediate save with current values
-                        const camCount = Number(numCameras) || 1;
-                        const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
-                        const payload = {
-                          images: {
-                            num_images: numImages === "" ? null : Number(numImages),
-                            time_resolved: timeResolved,
-                            zero_based_indexing: zeroBasedIndexing,
-                            image_format: timeResolved ? rawPatterns[0] : rawPatterns,
-                            vector_format: [vectorPattern],
-                            image_type: imageType,
-                            use_camera_subfolders: checked,
-                          },
-                          paths: {
-                            camera_count: camCount,
-                            camera_numbers: cameraNumbers,
-                            camera_subfolders: cameraSubfolders,
-                          },
-                        };
-                        updateConfigBackend(payload);
+                        saveConfig({ useCameraSubfoldersIM7: checked });
                       }}
                     />
                     <Label htmlFor="im7_use_camera_subfolders">
@@ -560,161 +598,137 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </p>
               )}
 
-              <div className="mt-4 flex flex-col gap-3">
-                {/* CINE: Show pairing mode selector (both time-resolved and skip supported) */}
-                {imageType === "cine" && (
-                  <div>
-                    <Label htmlFor="cine_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
-                    <Select
-                      value={timeResolved ? "time_resolved" : "skip"}
-                      onValueChange={(value) => {
-                        const isTimeResolved = value === "time_resolved";
-                        setTimeResolved(isTimeResolved);
-                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-                      }}
-                    >
-                      <SelectTrigger id="cine_pairing_mode" className="w-full mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="time_resolved">Time Resolved (1+2, 2+3, 3+4...)</SelectItem>
-                        <SelectItem value="skip">Skip Frames (1+2, 3+4, 5+6...)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {timeResolved
-                        ? "Sequential overlapping pairs - typical for high-speed PIV"
-                        : "Non-overlapping pairs - typical for double-pulse laser PIV"
-                      }
-                    </p>
-                  </div>
-                )}
+              {/* Frame Pairing Section */}
+              <div className="mt-6 space-y-4">
+                <div>
+                  <Label htmlFor="pairing_preset" className="text-sm font-semibold">Frame Pairing Mode</Label>
+                  <Select
+                    value={pairingPreset}
+                    onValueChange={handlePresetChange}
+                  >
+                    <SelectTrigger id="pairing_preset" className="w-full mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getPresetOptions().map(opt => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {pairingPreset === "ab_format" && "Separate A and B files with same index"}
+                    {pairingPreset === "pre_paired" && "Each file contains both A and B frames internally"}
+                    {pairingPreset === "skip_frames" && "Non-overlapping consecutive pairs from single sequence"}
+                    {pairingPreset === "time_resolved" && "Sequential overlapping pairs - typical for high-speed PIV"}
+                    {pairingPreset === "custom" && "Custom frame stride and pair stride values"}
+                  </p>
+                </div>
 
-                {/* LaVision .im7: Show pairing mode selector (time-resolved supported) */}
-                {imageType === "lavision_im7" && (
-                  <div>
-                    <Label htmlFor="im7_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
-                    <Select
-                      value={timeResolved ? "time_resolved" : "paired"}
-                      onValueChange={(value) => {
-                        const isTimeResolved = value === "time_resolved";
-                        setTimeResolved(isTimeResolved);
-                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-                      }}
-                    >
-                      <SelectTrigger id="im7_pairing_mode" className="w-full mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="paired">Pre-paired A+B (each file contains both frames)</SelectItem>
-                        <SelectItem value="time_resolved">Time Resolved (pair across files: 1+2, 2+3...)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {timeResolved
-                        ? "Each .im7 has one frame per camera - pairs formed across consecutive files"
-                        : "Each .im7 contains both A and B frames per camera"
-                      }
-                    </p>
-                  </div>
-                )}
-
-                {/* LaVision .set: Show pairing mode selector (time-resolved now supported) */}
-                {imageType === "lavision_set" && (
-                  <div>
-                    <Label htmlFor="set_pairing_mode" className="text-sm">Frame Pairing Mode</Label>
-                    <Select
-                      value={timeResolved ? "time_resolved" : "paired"}
-                      onValueChange={(value) => {
-                        const isTimeResolved = value === "time_resolved";
-                        setTimeResolved(isTimeResolved);
-                        saveConfig(numImages, numCameras, isTimeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-                      }}
-                    >
-                      <SelectTrigger id="set_pairing_mode" className="w-full mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="paired">Pre-paired A+B (each entry contains both frames)</SelectItem>
-                        <SelectItem value="time_resolved">Time Resolved (pair across entries: 1+2, 2+3...)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {timeResolved
-                        ? "Each .set entry has one frame per camera - pairs formed across consecutive entries"
-                        : "Each .set entry contains both A and B frames per camera"
-                      }
-                    </p>
-                  </div>
-                )}
-
-                {/* Standard formats: show time-resolved toggle */}
-                {imageType === "standard" && (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id="time_resolved"
-                        checked={timeResolved}
-                        onCheckedChange={handleToggleTimeResolved}
+                {/* Custom stride inputs */}
+                {pairingPreset === "custom" && (
+                  <div className="ml-4 grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="frame_stride" className="text-sm">Frame Stride</Label>
+                      <Input
+                        id="frame_stride"
+                        type="text"
+                        inputMode="numeric"
+                        value={frameStrideStr}
+                        onChange={e => setFrameStrideStr(e.target.value)}
+                        onBlur={() => {
+                          const val = Math.max(0, parseInt(frameStrideStr) || 0);
+                          setFrameStride(val);
+                          setFrameStrideStr(String(val));
+                          saveConfig({ frameStride: val });
+                        }}
                       />
-                      <Label htmlFor="time_resolved">Time Resolved (sequential overlapping pairs)</Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Gap between frame A and frame B within a pair
+                      </p>
                     </div>
-
-                    {!timeResolved && (
-                      <div className="ml-6 space-y-2">
-                        <div>
-                          <Label htmlFor="non_time_resolved_mode" className="text-sm">Pairing Mode</Label>
-                          <Select
-                            value={nonTimeResolvedMode}
-                            onValueChange={(value) => {
-                              setNonTimeResolvedMode(value);
-                              // Update patterns based on mode (only for standard formats)
-                              let newPatterns: string[];
-                              if (value === "ab_format") {
-                                // A/B format: create two patterns from the first pattern
-                                const base = (rawPatterns[0] || "B%05d").replace(/\.tif$/i, "").replace(/_[AB]$/i, "");
-                                newPatterns = [`${base}_A.tif`, `${base}_B.tif`];
-                              } else {
-                                // Skip frames: use single pattern
-                                const pattern = rawPatterns[0] || "B%05d.tif";
-                                newPatterns = [pattern.replace(/_[AB]\.tif$/i, ".tif")];
-                              }
-                              setRawPatterns(newPatterns);
-                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
-                            }}
-                          >
-                            <SelectTrigger id="non_time_resolved_mode" className="w-full mt-1">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="ab_format">A/B Format (B00001_A + B00001_B)</SelectItem>
-                              <SelectItem value="skip_frames">Skip Frames (1+2, 3+4, 5+6, ...)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {nonTimeResolvedMode === "ab_format"
-                              ? "Separate A and B files with same index"
-                              : "Non-overlapping pairs from single sequence"
-                            }
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </>
+                    <div>
+                      <Label htmlFor="pair_stride" className="text-sm">Pair Stride</Label>
+                      <Input
+                        id="pair_stride"
+                        type="text"
+                        inputMode="numeric"
+                        value={pairStrideStr}
+                        onChange={e => setPairStrideStr(e.target.value)}
+                        onBlur={() => {
+                          const val = Math.max(1, parseInt(pairStrideStr) || 1);
+                          setPairStride(val);
+                          setPairStrideStr(String(val));
+                          saveConfig({ pairStride: val });
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        How much the start frame advances between pairs
+                      </p>
+                    </div>
+                  </div>
                 )}
 
-                {/* Zero-based indexing: only show for standard formats */}
-                {imageType === "standard" && (
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      id="zero_based"
-                      checked={zeroBasedIndexing}
-                      onCheckedChange={(checked) => {
-                        setZeroBasedIndexing(checked);
-                        saveConfig(numImages, numCameras, timeResolved, checked, cameraSubfolders, rawPatterns, vectorPattern);
+                {/* Start Index */}
+                <div className="flex items-center gap-3">
+                  <Label className="text-sm">First Frame Number:</Label>
+                  <div className="flex gap-1">
+                    <Button
+                      variant={startIndex === 0 ? "default" : "outline"}
+                      size="sm"
+                      className="w-10"
+                      onClick={() => {
+                        setStartIndex(0);
+                        setStartIndexStr("0");
+                        saveConfig({ startIndex: 0 });
                       }}
-                    />
-                    <Label htmlFor="zero_based">Zero-based Indexing (start at 0)</Label>
+                    >
+                      0
+                    </Button>
+                    <Button
+                      variant={startIndex === 1 ? "default" : "outline"}
+                      size="sm"
+                      className="w-10"
+                      onClick={() => {
+                        setStartIndex(1);
+                        setStartIndexStr("1");
+                        saveConfig({ startIndex: 1 });
+                      }}
+                    >
+                      1
+                    </Button>
+                  </div>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    className="w-20"
+                    value={startIndexStr}
+                    onChange={e => setStartIndexStr(e.target.value)}
+                    onBlur={() => {
+                      const val = Math.max(0, parseInt(startIndexStr) || 0);
+                      setStartIndex(val);
+                      setStartIndexStr(String(val));
+                      saveConfig({ startIndex: val });
+                    }}
+                  />
+                </div>
+
+                {/* Frame Pair Preview */}
+                {framePairPreview && framePairPreview.pairs?.length > 0 && (
+                  <div className="p-3 bg-muted/50 rounded-md border">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">
+                      Preview (first {framePairPreview.pairs.length} of {framePairPreview.total_pairs} pairs)
+                    </p>
+                    <div className="space-y-0.5 font-mono text-xs">
+                      {framePairPreview.pairs.map((pair: any) => (
+                        <div key={pair.pair} className="text-muted-foreground">
+                          <span className="text-foreground font-medium">Pair {pair.pair}:</span>{" "}
+                          {pair.frame_a} + {pair.frame_b}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2 font-medium">
+                      Total: {framePairPreview.total_pairs} pairs from {framePairPreview.num_images} images
+                    </p>
                   </div>
                 )}
               </div>
@@ -748,11 +762,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
               ) : (
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Label className="font-semibold">Raw Image Pattern{timeResolved ? "" : "s"}</Label>
+                  <Label className="font-semibold">Raw Image Pattern{pairingPreset === "ab_format" ? "s" : ""}</Label>
                 </div>
                 <div className="space-y-3 mt-2">
                   {rawPatterns.map((p, i) => {
-                    // Get per-pattern validation for this index
                     const patternValidation = validation.patternValidations?.[i];
                     const isValid = patternValidation?.valid;
                     const hasValidation = patternValidation !== undefined && validation.checked;
@@ -760,7 +773,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     return (
                       <div key={i} className="space-y-1">
                         <div className="flex items-center gap-2">
-                          {/* Pattern label for A/B mode */}
                           {rawPatterns.length === 2 && (
                             <span className="text-xs font-medium text-muted-foreground w-4">
                               {i === 0 ? 'A' : 'B'}
@@ -778,24 +790,21 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                               nextPatterns[i] = e.target.value;
                               setRawPatterns(nextPatterns);
                             }}
-                            onBlur={() => {
-                              saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern);
-                            }}
+                            onBlur={() => saveConfig()}
                           />
-                          {/* Per-pattern validation indicator */}
                           {hasValidation && (
                             isValid
                               ? <CheckCircle className="h-5 w-5 text-green-500 shrink-0" />
                               : <XCircle className="h-5 w-5 text-red-500 shrink-0" />
                           )}
-                          {!timeResolved && rawPatterns.length > 1 && (
+                          {pairingPreset !== "ab_format" && rawPatterns.length > 1 && (
                             <Button
                               variant="ghost"
                               size="icon"
                               onClick={() => {
                                 const nextPatterns = rawPatterns.filter((_, idx) => idx !== i);
                                 setRawPatterns(nextPatterns);
-                                saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
+                                saveConfig({ rawPatterns: nextPatterns });
                               }}
                             >
                               <Minus className="h-4 w-4" />
@@ -803,7 +812,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                           )}
                         </div>
 
-                        {/* Per-pattern "Did you mean" suggestion */}
                         {hasValidation && !isValid && patternValidation?.suggested_pattern && (
                           <div className="flex items-center gap-2 text-sm ml-5">
                             <span className="text-muted-foreground">Did you mean:</span>
@@ -814,7 +822,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                                 const nextPatterns = [...rawPatterns];
                                 nextPatterns[i] = patternValidation.suggested_pattern!;
                                 setRawPatterns(nextPatterns);
-                                saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, nextPatterns, vectorPattern);
+                                saveConfig({ rawPatterns: nextPatterns });
                               }}
                               className="font-mono text-xs text-blue-600 border-blue-300 hover:bg-blue-50"
                             >
@@ -823,7 +831,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                           </div>
                         )}
 
-                        {/* Per-pattern error message (if no suggestion) */}
                         {hasValidation && !isValid && !patternValidation?.suggested_pattern && patternValidation?.error && (
                           <p className="text-xs text-red-600 ml-5">
                             {patternValidation.error}
@@ -833,41 +840,29 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     );
                   })}
 
-                  {/* Validation Status */}
                   <ValidationAlert
                     validation={validation}
-                    currentMode={nonTimeResolvedMode as 'ab_format' | 'skip_frames'}
+                    currentMode={pairingPreset === 'ab_format' ? 'ab_format' : 'skip_frames'}
                     onApplySuggestedPattern={(pattern, patternB, suggestedMode) => {
                       let newPatterns: string[];
-
-                      // Determine if we should use A/B mode
                       const shouldUseABMode =
-                        suggestedMode === 'ab_format' ||
-                        nonTimeResolvedMode === 'ab_format';
+                        suggestedMode === 'ab_format' || pairingPreset === 'ab_format';
 
-                      if (shouldUseABMode && !timeResolved) {
-                        // Preserve or apply A/B mode
+                      if (shouldUseABMode) {
                         if (patternB) {
-                          // Backend provided both patterns
                           newPatterns = [pattern, patternB];
                         } else {
-                          // Derive B from A (or vice versa)
                           newPatterns = deriveABPatterns(pattern);
                         }
-                        // Update mode if it changed
-                        if (nonTimeResolvedMode !== 'ab_format') {
-                          setNonTimeResolvedMode('ab_format');
-                        }
                       } else {
-                        // Single pattern (time-resolved or skip-frames mode)
                         newPatterns = [pattern];
                       }
 
                       setRawPatterns(newPatterns);
-                      saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, newPatterns, vectorPattern);
+                      saveConfig({ rawPatterns: newPatterns });
                     }}
                   />
-                  {!timeResolved && (
+                  {pairingPreset !== "ab_format" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -892,7 +887,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   className="font-mono mt-2"
                   value={vectorPattern}
                   onChange={e => setVectorPattern(e.target.value)}
-                  onBlur={() => saveConfig(numImages, numCameras, timeResolved, zeroBasedIndexing, cameraSubfolders, rawPatterns, vectorPattern)}
+                  onBlur={() => saveConfig()}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   Output filename pattern for processed vector fields

@@ -286,6 +286,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     setType,
     run,
     setRun,
+    runInput,
+    setRunInput,
+    runError,
+    setRunError,
+    availableRuns,
+    validateAndSetRun,
     lower,
     setLower,
     upper,
@@ -363,7 +369,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     MAG_SIZE,
     dpr,
     effectiveDir,
-    prefetchSurrounding,
     // New data source management
     dataSource,
     setDataSource,
@@ -394,8 +399,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
   // Additional UI state for improved controls
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
-  const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 0.5, 1, 2, 5, 10
-  const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Collapsible section states
   const [showCoordinates, setShowCoordinates] = useState(false);
@@ -514,34 +517,6 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   // Derived values from merging job details
   const mergingProgress = mergingDetails?.progress || 0;
   const mergingError = mergingDetails?.error || null;
-
-  // Improved Play/Pause functionality with smart prefetching
-  useEffect(() => {
-    if (playing && !isMeanVar) {
-      // Prefetch ahead based on playback speed
-      const prefetchCount = Math.max(5, Math.ceil(playbackSpeed * 3));
-      prefetchSurrounding(index, prefetchCount);
-
-      const advanceFrame = () => {
-        setIndex(prev => {
-          const next = prev >= maxFrameCount ? 1 : prev + 1;
-          // Prefetch frames ahead while playing
-          prefetchSurrounding(next, prefetchCount);
-          return next;
-        });
-      };
-
-      // Calculate interval based on playback speed (FPS)
-      const intervalMs = 1000 / playbackSpeed;
-      playIntervalRef.current = setInterval(advanceFrame, intervalMs);
-    } else if (playIntervalRef.current) {
-      clearInterval(playIntervalRef.current);
-      playIntervalRef.current = null;
-    }
-    return () => {
-      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
-    };
-  }, [playing, maxFrameCount, playbackSpeed, isMeanVar, index, prefetchSurrounding]);
 
   // Stop playing on error
   useEffect(() => {
@@ -820,11 +795,23 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 <label htmlFor="run" className="text-sm font-medium block mb-2">Run:</label>
                 <Input
                   id="run"
-                  type="number"
-                  min={1}
-                  value={run}
-                  onChange={e => setRun(Math.max(1, Number(e.target.value)))}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={runInput}
+                  onChange={e => setRunInput(e.target.value)}
+                  onBlur={() => validateAndSetRun(runInput)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      validateAndSetRun(runInput);
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  className={runError ? "border-red-500" : ""}
                 />
+                {runError && (
+                  <p className="text-xs text-red-500 mt-1">{runError}</p>
+                )}
               </div>
             </div>
 
@@ -1085,13 +1072,20 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   height={MAG_SIZE * dpr}
                 />
 
-                {/* Loading overlay */}
+                {/* Loading overlay - full overlay when paused, corner indicator when playing */}
                 {loading && !playing && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-60 rounded">
                     <div className="flex flex-col items-center gap-2">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                       <span className="text-gray-600 text-sm">Rendering...</span>
                     </div>
+                  </div>
+                )}
+                {/* Subtle corner loading indicator during playback */}
+                {loading && playing && (
+                  <div className="absolute top-3 right-3 flex items-center gap-2 bg-white bg-opacity-80 px-2 py-1 rounded shadow">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    <span className="text-gray-600 text-xs">Loading...</span>
                   </div>
                 )}
               </div>
@@ -1140,34 +1134,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrameCount}</span>
                   </div>
 
-                  {/* Play button with speed control */}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant={playing ? "default" : "outline"}
-                      onClick={() => setPlaying(!playing)}
-                      className="flex items-center gap-1"
-                    >
-                      {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
-                    </Button>
-
-                    <Select
-                      value={String(playbackSpeed)}
-                      onValueChange={(v) => setPlaybackSpeed(Number(v))}
-                      disabled={playing}
-                    >
-                      <SelectTrigger className="w-24 h-8">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="0.5">0.5 FPS</SelectItem>
-                        <SelectItem value="1">1 FPS</SelectItem>
-                        <SelectItem value="2">2 FPS</SelectItem>
-                        <SelectItem value="5">5 FPS</SelectItem>
-                        <SelectItem value="10">10 FPS</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* Play button - advances as fast as frames load, capped at ~3 FPS */}
+                  <Button
+                    size="sm"
+                    variant={playing ? "default" : "outline"}
+                    onClick={() => setPlaying(!playing)}
+                    className="flex items-center gap-1"
+                  >
+                    {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
+                  </Button>
                 </div>
               )}
             </>

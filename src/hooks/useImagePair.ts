@@ -21,7 +21,8 @@ export function useImagePair(
   camera: string,
   index: number,
   imageFormat: 'jpeg' | 'png' = 'jpeg',
-  autoLimits: boolean = false
+  autoLimits: boolean = false,
+  enabled: boolean = true  // When false, disables auto-fetching (e.g., during processed playback)
 ) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -268,6 +269,11 @@ export function useImagePair(
 
   // Auto-fetch when parameters change with abort controller for cancellation
   useEffect(() => {
+    // Skip fetch when disabled (e.g., during processed playback to avoid bandwidth competition)
+    if (!enabled) {
+      return;
+    }
+
     const abortController = new AbortController();
     let cancelled = false;
 
@@ -398,13 +404,19 @@ export function useImagePair(
       cancelled = true;
       abortController.abort();
     };
-  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches, enabled]);
 
   // Clear prefetch buffer and cancel prefetches when source/camera/format changes
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
   }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches]);
+
+  // Check if a frame is in the prefetch cache
+  const isFrameCached = useCallback((idx: number): boolean => {
+    const cacheKey = getCacheKey(idx);
+    return prefetchBufferRef.current.has(cacheKey);
+  }, [getCacheKey]);
 
   return {
     loading,
@@ -421,6 +433,7 @@ export function useImagePair(
     reload: fetchPair,
     prefetchFrame,
     prefetchSurrounding,
-    cancelPrefetches
+    cancelPrefetches,
+    isFrameCached
   };
 }

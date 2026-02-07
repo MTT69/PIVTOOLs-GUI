@@ -92,8 +92,8 @@ export function useAutoValidation(config: any) {
       cameraSubfolders: config?.paths?.camera_subfolders,
       cameraCount: config?.paths?.camera_count,
       numImages: config?.images?.num_images,
-      timeResolved: config?.images?.time_resolved,
-      zeroBasedIndexing: config?.images?.zero_based_indexing,
+      startIndex: config?.images?.start_index,
+      pairingPreset: config?.images?.pairing_preset,
     });
 
     // Skip if nothing changed
@@ -245,8 +245,8 @@ export function useAutoValidation(config: any) {
     config?.paths?.camera_subfolders,
     config?.paths?.camera_count,
     config?.images?.num_images,
-    config?.images?.time_resolved,
-    config?.images?.zero_based_indexing,
+    config?.images?.start_index,
+    config?.images?.pairing_preset,
   ]);
 
   return validation;

@@ -154,15 +154,18 @@ export function useImageFilters(backendUrl: string) {
   }, [backendUrl, filters]);
 
   // Auto-processing function that checks cache for batch filters, processes spatial filters on demand
+  // NOTE: We intentionally do NOT clear images at the start - keep showing previous frame until new one is ready
+  // This prevents grey flash during playback
   const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
-    // Clear processed images while processing
-    setProcImgA(null);
-    setProcImgB(null);
-    setProcStats(null);
     setNeedsProcessing(false);
+    setProcLoading(true);
 
-    // If no filters, nothing to do
+    // If no filters, clear images and return
     if (filters.length === 0) {
+      setProcImgA(null);
+      setProcImgB(null);
+      setProcStats(null);
+      setProcLoading(false);
       return;
     }
 
@@ -193,14 +196,12 @@ export function useImageFilters(backendUrl: string) {
             setNeedsProcessing(false);
           } else {
             // Cache miss - signal that batch processing is needed
-            setProcImgA(null);
-            setProcImgB(null);
+            // NOTE: Don't clear images here - keep showing old image during playback
             setNeedsProcessing(true);
           }
         } else {
           // No pre-processed images available - signal that batch processing is needed
-          setProcImgA(null);
-          setProcImgB(null);
+          // NOTE: Don't clear images here - keep showing old image during playback
           setNeedsProcessing(true);
         }
       } else {
@@ -230,6 +231,8 @@ export function useImageFilters(backendUrl: string) {
       // Clear processed images on error
       setProcImgA(null);
       setProcImgB(null);
+    } finally {
+      setProcLoading(false);
     }
   }, [backendUrl, filters]);
 

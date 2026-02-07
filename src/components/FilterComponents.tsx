@@ -44,7 +44,13 @@ export function FilterEditor({
             <Input
               type="number"
               value={value ?? param.default}
-              onChange={(e) => onUpdate(index, { [param.key]: parseFloat(e.target.value) })}
+              onChange={(e) => {
+                const parsed = parseFloat(e.target.value);
+                // Only update if we have a valid number (ignore empty/invalid input)
+                if (!isNaN(parsed)) {
+                  onUpdate(index, { [param.key]: parsed });
+                }
+              }}
               min={param.min}
               max={param.max}
               step={param.step}
@@ -65,7 +71,10 @@ export function FilterEditor({
                 value={tupleValue[0]}
                 onChange={(e) => {
                   const newVal = parseInt(e.target.value);
-                  onUpdate(index, { [param.key]: [newVal, tupleValue[1]] });
+                  // Only update if we have a valid number (ignore empty/invalid input)
+                  if (!isNaN(newVal)) {
+                    onUpdate(index, { [param.key]: [newVal, tupleValue[1]] });
+                  }
                 }}
                 min={param.min}
                 max={param.max}
@@ -78,7 +87,10 @@ export function FilterEditor({
                 value={tupleValue[1]}
                 onChange={(e) => {
                   const newVal = parseInt(e.target.value);
-                  onUpdate(index, { [param.key]: [tupleValue[0], newVal] });
+                  // Only update if we have a valid number (ignore empty/invalid input)
+                  if (!isNaN(newVal)) {
+                    onUpdate(index, { [param.key]: [tupleValue[0], newVal] });
+                  }
                 }}
                 min={param.min}
                 max={param.max}

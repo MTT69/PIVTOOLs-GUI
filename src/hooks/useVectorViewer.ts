@@ -205,7 +205,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [pendingIndex, setPendingIndex] = useState<number>(index);
   const [pointerDown, setPointerDown] = useState<boolean>(false);
   const commitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [limitsLoading, setLimitsLoading] = useState(false);
   const [meanMode, setMeanMode] = useState<boolean>(false);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -245,6 +244,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
+  // Track available runs for validation
+  const [availableRuns, setAvailableRuns] = useState<number[]>([]);
+  // Separate state for run input to allow empty string while typing
+  const [runInput, setRunInput] = useState<string>("1");
+  // Error message for invalid run
+  const [runError, setRunError] = useState<string | null>(null);
 
   // Prefetch buffer for smooth playback
   const prefetchBufferRef = useRef<Map<string, { image: string; meta: any }>>(new Map());
@@ -390,11 +395,24 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Functions
   const fetchImage = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const basePath = effectiveDir;
       if (!basePath) throw new Error("Please provide a base path");
+
+      // Check prefetch buffer first for instant display
+      const cacheKey = `${effectiveDir}-${camera}-${index}-${type}-${run}`;
+      const cached = prefetchBufferRef.current.get(cacheKey);
+      if (cached) {
+        setImageSrc(cached.image);
+        setMeta(cached.meta);
+        setLoading(false);
+        // Note: prefetching is handled by the auto-render effect
+        return true;
+      }
+
+      // Not in cache - fetch from server
+      setLoading(true);
 
       // Parse the type to get source and variable name
       const { varSource, varName } = parseVarType(type);
@@ -437,6 +455,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || "Failed to fetch vector plot");
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
+
+      // Store in prefetch buffer for future use
+      if (json.image) {
+        prefetchBufferRef.current.set(cacheKey, {
+          image: json.image,
+          meta: json.meta
+        });
+      }
+
       // Only update run if it's actually different to avoid re-render loops
       if (json.meta && json.meta.run != null) {
         const parsed = Number(json.meta.run);
@@ -469,10 +496,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const basePath = effectiveDir;
       if (!basePath) return;
 
+      // Parse the type to get source and variable name (match fetchImage behavior)
+      const { varSource, varName } = parseVarType(type);
+
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", String(frameIdx));
-      params.set("var", type);
+      params.set("var", varName);           // Use parsed variable name
+      params.set("var_source", varSource);  // Add missing var_source parameter
       params.set("cmap", cmap);
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
@@ -523,7 +554,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources, parseVarType]);
 
   // Prefetch surrounding frames for smooth playback
   const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
@@ -537,6 +568,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
   }, [prefetchFrame]);
 
+  // Check if a frame is in the prefetch cache
+  const isFrameInCache = useCallback((idx: number): boolean => {
+    const cacheKey = `${effectiveDir}-${camera}-${idx}-${type}-${run}`;
+    return prefetchBufferRef.current.has(cacheKey);
+  }, [effectiveDir, camera, type, run]);
+
   // Track last fetched path/camera to avoid redundant fetches
   const lastFetchedAvailabilityRef = useRef<string | null>(null);
 
@@ -547,11 +584,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
     // Skip if we already fetched for this path/camera (unless forced)
     if (!force && lastFetchedAvailabilityRef.current === fetchKey) {
-      console.log("fetchAvailableDataSources: skipping (already fetched for", fetchKey, ")");
       return;
     }
 
-    console.log("fetchAvailableDataSources: fetching for", fetchKey);
     setAvailabilityLoading(true);
     try {
       const basePath = effectiveDir;
@@ -568,8 +603,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (res.ok && json.available) {
         // Mark as fetched for this path/camera
         lastFetchedAvailabilityRef.current = fetchKey;
-
-        console.log("fetchAvailableDataSources: received", json.available);
         setAvailableDataSources(json.available);
 
         // Track file-based stereo data detection
@@ -578,10 +611,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         }
 
         // Auto-select first available data source if current is not available
-        // Use functional update to get current dataSource value
         setDataSource(currentDataSource => {
           const current = json.available[currentDataSource as keyof AvailableDataSources];
-          console.log(`fetchAvailableDataSources: current=${currentDataSource}, exists=${current?.exists}`);
           if (!current?.exists) {
             // Priority order for auto-selection - prefer stereo (for stereo setups), then calibrated over uncalibrated
             const priorityOrder: DataSourceType[] = [
@@ -598,7 +629,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
             ];
             for (const source of priorityOrder) {
               if (json.available[source]?.exists) {
-                console.log(`fetchAvailableDataSources: auto-selecting ${source}`);
                 return source;
               }
             }
@@ -1382,13 +1412,70 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   useEffect(() => {
     if (!effectiveDir || meanMode) return;
     fetchAvailableRuns().then(runs => {
+      setAvailableRuns(runs);
       if (runs.length > 0) {
         const maxRun = Math.max(...runs);
         setRun(maxRun);
+        setRunInput(String(maxRun));
         setHasRendered(true);
       }
     }).catch(() => {});
   }, [effectiveDir, meanMode, fetchAvailableRuns]);
+
+  // Sync runInput when run changes from other sources (e.g., API response)
+  useEffect(() => {
+    setRunInput(String(run));
+  }, [run]);
+
+  // Validate and commit run value
+  const validateAndSetRun = useCallback((value: string) => {
+    setRunError(null);
+    const numValue = parseInt(value, 10);
+
+    if (value.trim() === "" || isNaN(numValue)) {
+      // Empty or invalid - reset to current run
+      setRunInput(String(run));
+      return;
+    }
+
+    if (numValue < 1) {
+      setRunError("Run must be at least 1");
+      setRunInput("1");
+      setRun(1);
+      return;
+    }
+
+    if (availableRuns.length > 0) {
+      const maxRun = Math.max(...availableRuns);
+      if (numValue > maxRun) {
+        setRunError(`Run ${numValue} not available. Max run is ${maxRun}.`);
+        setRunInput(String(maxRun));
+        setRun(maxRun);
+        return;
+      }
+      if (!availableRuns.includes(numValue)) {
+        setRunError(`Run ${numValue} not available. Available runs: ${availableRuns.join(", ")}`);
+        // Find the closest available run
+        const closest = availableRuns.reduce((prev, curr) =>
+          Math.abs(curr - numValue) < Math.abs(prev - numValue) ? curr : prev
+        );
+        setRunInput(String(closest));
+        setRun(closest);
+        return;
+      }
+    }
+
+    setRun(numValue);
+    setRunInput(String(numValue));
+  }, [run, availableRuns]);
+
+  // Auto-clear run error after 3 seconds
+  useEffect(() => {
+    if (runError) {
+      const timer = setTimeout(() => setRunError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [runError]);
 
   useEffect(() => {
     if (!hasRendered || !(effectiveDir || basePaths.length > 0)) return;
@@ -1441,20 +1528,50 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     fetchEnsembleImage,
   ]);
 
+  // Simple sequential playback: only advance when current frame finishes loading
+  // Frame counter stays in sync with display because we wait for load completion
+  const playingRef = useRef(playing);
+  const indexRef = useRef(index);
+  const loadingRef = useRef(loading);
+  const lastAdvanceTimeRef = useRef(0);
+
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { indexRef.current = index; }, [index]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+
+  // Playback effect: advance frame when loading completes
   useEffect(() => {
-    if (playing) {
-      playIntervalRef.current = setInterval(() => {
-        setIndex(i => i >= maxFrameCount ? 1 : i + 1);
-      }, 300);
-    } else if (playIntervalRef.current) {
-      clearInterval(playIntervalRef.current);
-      playIntervalRef.current = null;
-    }
-    return () => {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
+    if (!playing) return;
+
+    const MIN_INTERVAL = 333; // Cap at ~3 FPS max
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const tryAdvance = () => {
+      if (!playingRef.current) return;
+
+      // Only advance when not loading (current frame is displayed)
+      if (!loadingRef.current) {
+        const now = performance.now();
+        const elapsed = now - lastAdvanceTimeRef.current;
+
+        if (elapsed >= MIN_INTERVAL) {
+          // Advance to next frame
+          const currentIdx = indexRef.current;
+          const nextIdx = currentIdx >= maxFrameCount ? 1 : currentIdx + 1;
+          setIndex(nextIdx);
+          lastAdvanceTimeRef.current = now;
+        }
       }
+
+      // Check again soon
+      timeoutId = setTimeout(tryAdvance, 50);
+    };
+
+    // Start the loop
+    tryAdvance();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [playing, maxFrameCount]);
 
@@ -1688,6 +1805,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setType,
     run,
     setRun,
+    runInput,
+    setRunInput,
+    runError,
+    setRunError,
+    availableRuns,
+    validateAndSetRun,
     lower,
     setLower,
     upper,
@@ -1771,6 +1894,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     clearOperationsList,
     effectiveDir,
     prefetchSurrounding,
+    isFrameInCache,
     // New data source management
     dataSource,
     setDataSource,

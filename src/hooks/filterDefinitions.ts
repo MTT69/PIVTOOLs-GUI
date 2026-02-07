@@ -36,42 +36,43 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   },
   
   // Spatial Filters
-  {
-    type: 'clip',
-    name: 'Clip Filter',
-    description: 'Clip pixel intensities to threshold or median-based range',
-    category: 'spatial',
-    parameters: [
-      {
-        name: 'Auto-threshold (std devs)',
-        key: 'n',
-        type: 'number',
-        default: 2.0,
-        min: 0.5,
-        max: 5.0,
-        step: 0.1,
-        description: 'Number of standard deviations for auto-threshold'
-      }
-    ]
-  },
-  {
-    type: 'invert',
-    name: 'Invert',
-    description: 'Invert image intensities',
-    category: 'spatial',
-    parameters: [
-      {
-        name: 'Offset',
-        key: 'offset',
-        type: 'number',
-        default: 255,
-        min: 0,
-        max: 65535,
-        step: 1,
-        description: 'Scalar value to subtract pixels from'
-      }
-    ]
-  },
+  // COMMENTED OUT: Unused filters (clip, invert)
+  // {
+  //   type: 'clip',
+  //   name: 'Clip Filter',
+  //   description: 'Clip pixel intensities to threshold or median-based range',
+  //   category: 'spatial',
+  //   parameters: [
+  //     {
+  //       name: 'Auto-threshold (std devs)',
+  //       key: 'n',
+  //       type: 'number',
+  //       default: 2.0,
+  //       min: 0.5,
+  //       max: 5.0,
+  //       step: 0.1,
+  //       description: 'Number of standard deviations for auto-threshold'
+  //     }
+  //   ]
+  // },
+  // {
+  //   type: 'invert',
+  //   name: 'Invert',
+  //   description: 'Invert image intensities',
+  //   category: 'spatial',
+  //   parameters: [
+  //     {
+  //       name: 'Offset',
+  //       key: 'offset',
+  //       type: 'number',
+  //       default: 255,
+  //       min: 0,
+  //       max: 65535,
+  //       step: 1,
+  //       description: 'Scalar value to subtract pixels from'
+  //     }
+  //   ]
+  // },
   {
     type: 'gaussian',
     name: 'Gaussian Blur',
@@ -182,36 +183,37 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
       }
     ]
   },
-  {
-    type: 'sbg',
-    name: 'Subtract Background',
-    description: 'Subtract a background image',
-    category: 'spatial',
-    parameters: [
-      {
-        name: 'Background Path',
-        key: 'bg',
-        type: 'text',
-        default: null,
-        description: 'Path to background image (leave empty for none)'
-      }
-    ]
-  },
-  {
-    type: 'levelize',
-    name: 'Levelize',
-    description: 'Normalize by dividing by white reference image',
-    category: 'spatial',
-    parameters: [
-      {
-        name: 'White Reference Path',
-        key: 'white',
-        type: 'text',
-        default: null,
-        description: 'Path to white reference image'
-      }
-    ]
-  }
+  // COMMENTED OUT: Unused filters (sbg, levelize)
+  // {
+  //   type: 'sbg',
+  //   name: 'Subtract Background',
+  //   description: 'Subtract a background image',
+  //   category: 'spatial',
+  //   parameters: [
+  //     {
+  //       name: 'Background Path',
+  //       key: 'bg',
+  //       type: 'text',
+  //       default: null,
+  //       description: 'Path to background image (leave empty for none)'
+  //     }
+  //   ]
+  // },
+  // {
+  //   type: 'levelize',
+  //   name: 'Levelize',
+  //   description: 'Normalize by dividing by white reference image',
+  //   category: 'spatial',
+  //   parameters: [
+  //     {
+  //       name: 'White Reference Path',
+  //       key: 'white',
+  //       type: 'text',
+  //       default: null,
+  //       description: 'Path to white reference image'
+  //     }
+  //   ]
+  // }
 ];
 
 export function getFilterDefinition(type: FilterType): FilterDefinition | undefined {

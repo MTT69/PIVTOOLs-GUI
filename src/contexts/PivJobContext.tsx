@@ -44,6 +44,7 @@ interface PivJobContextType {
   ensembleJob: PivJobState;
   startJob: (mode: 'instantaneous' | 'ensemble', settings: PivJobSettings) => Promise<void>;
   cancelJob: (mode: 'instantaneous' | 'ensemble') => Promise<void>;
+  resetJob: (mode: 'instantaneous' | 'ensemble') => void;
   updateSettings: (mode: 'instantaneous' | 'ensemble', settings: Partial<PivJobSettings>) => void;
   instantaneousSettings: PivJobSettings;
   ensembleSettings: PivJobSettings;
@@ -501,11 +502,34 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
     setSettings(prev => ({ ...prev, ...newSettings }));
   }, []);
 
+  const resetJob = useCallback((mode: 'instantaneous' | 'ensemble') => {
+    const setJob = mode === 'instantaneous' ? setInstantaneousJob : setEnsembleJob;
+    const lastImageUpdateRef = mode === 'instantaneous' ? instantaneousLastImageUpdateRef : ensembleLastImageUpdateRef;
+    const nextFrameIndexRef = mode === 'instantaneous' ? instantaneousNextFrameIndexRef : ensembleNextFrameIndexRef;
+    const availableFramesRef = mode === 'instantaneous' ? instantaneousAvailableFramesRef : ensembleAvailableFramesRef;
+
+    // Reset refs
+    lastImageUpdateRef.current = 0;
+    nextFrameIndexRef.current = 0;
+    availableFramesRef.current = [];
+
+    // Reset job state to default (but keep jobId null since we're just clearing the display)
+    setJob({
+      jobId: null,
+      isPolling: false,
+      isLoading: false,
+      progress: 0,
+      logs: '',
+      statusImage: { src: null, error: null },
+    });
+  }, []);
+
   const value: PivJobContextType = {
     instantaneousJob,
     ensembleJob,
     startJob,
     cancelJob,
+    resetJob,
     updateSettings,
     instantaneousSettings,
     ensembleSettings,

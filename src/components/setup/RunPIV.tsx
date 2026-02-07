@@ -47,6 +47,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
     ensembleJob,
     startJob,
     cancelJob,
+    resetJob,
     updateSettings,
     instantaneousSettings,
     ensembleSettings,
@@ -420,6 +421,13 @@ const RunPIV: React.FC<RunPIVProps> = ({
           </Button>
           <Button className="bg-red-600 hover:bg-red-700" onClick={handleCancel} disabled={!isPolling && !isLoading}>
             Cancel Run
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => resetJob(mode)}
+            disabled={isPolling || isLoading || (!logs && !statusImage.src && progress === 0)}
+          >
+            Clear Output
           </Button>
         </div>
 
