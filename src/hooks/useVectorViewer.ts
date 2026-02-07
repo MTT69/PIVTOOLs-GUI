@@ -173,10 +173,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Merging is NOT allowed for stereo (already 3D combined data)
   const canMerge = useMemo(() => !isUncalibrated && !isEnsemble && !isStereoData && !isStereo, [isUncalibrated, isEnsemble, isStereoData, isStereo]);
   const canViewMerged = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
-  const canCalculateStatistics = useMemo(() => !isUncalibrated && !isEnsemble && !isStatistics, [isUncalibrated, isEnsemble, isStatistics]);
-  const canViewStatistics = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
   // For unified dropdown: check if current variable is from mean_stats
   const isMeanVar = useMemo(() => type.startsWith('mean:'), [type]);
+  const canCalculateStatistics = useMemo(() => !isUncalibrated && !isEnsemble && !isStatistics && !isMeanVar, [isUncalibrated, isEnsemble, isStatistics, isMeanVar]);
+  const canViewStatistics = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
   // hasFrameNavigation: hide frame controls for ensemble, statistics, AND mean variables
   const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
 
@@ -254,6 +254,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Prefetch buffer for smooth playback
   const prefetchBufferRef = useRef<Map<string, { image: string; meta: any }>>(new Map());
   const prefetchInProgressRef = useRef<Set<string>>(new Set());
+  // Settings version counter: incremented when rendering-relevant settings change to invalidate prefetch cache
+  const settingsVersionRef = useRef<number>(0);
+
+  // Invalidate prefetch cache when rendering-affecting settings change
+  useEffect(() => {
+    settingsVersionRef.current += 1;
+    prefetchBufferRef.current.clear();
+    prefetchInProgressRef.current.clear();
+  }, [cmap, lower, upper, xOffset, yOffset, xlimMin, xlimMax, ylimMin, ylimMax, plotTitle, isUncalibrated, merged, isStereoData]);
 
   // Helper to parse type value into source and variable name
   // Format: "source:varname" or just "varname" (defaults to "inst")
@@ -401,7 +410,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
 
       // Check prefetch buffer first for instant display
-      const cacheKey = `${effectiveDir}-${camera}-${index}-${type}-${run}`;
+      const cacheKey = `${effectiveDir}-${camera}-${index}-${type}-${run}-v${settingsVersionRef.current}`;
       const cached = prefetchBufferRef.current.get(cacheKey);
       if (cached) {
         setImageSrc(cached.image);
@@ -483,7 +492,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Prefetch a single frame for smooth playback
   const prefetchFrame = useCallback(async (frameIdx: number) => {
-    const cacheKey = `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}`;
+    const cacheKey = `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-v${settingsVersionRef.current}`;
 
     // Skip if already in buffer or being fetched
     if (prefetchBufferRef.current.has(cacheKey) || prefetchInProgressRef.current.has(cacheKey)) {
@@ -570,7 +579,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Check if a frame is in the prefetch cache
   const isFrameInCache = useCallback((idx: number): boolean => {
-    const cacheKey = `${effectiveDir}-${camera}-${idx}-${type}-${run}`;
+    const cacheKey = `${effectiveDir}-${camera}-${idx}-${type}-${run}-v${settingsVersionRef.current}`;
     return prefetchBufferRef.current.has(cacheKey);
   }, [effectiveDir, camera, type, run]);
 
@@ -1526,6 +1535,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     fetchImage,
     fetchStatsImage,
     fetchEnsembleImage,
+    xOffset,
+    yOffset,
+    xlimMin,
+    xlimMax,
+    ylimMin,
+    ylimMax,
+    plotTitle,
   ]);
 
   // Simple sequential playback: only advance when current frame finishes loading
@@ -1648,6 +1664,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (result.success) {
         // Use the backend's simplified transformation list
         setAppliedTransforms(result.pending_transformations || []);
+        // Invalidate prefetch cache so the re-render fetches fresh data from backend
+        settingsVersionRef.current += 1;
+        prefetchBufferRef.current.clear();
+        prefetchInProgressRef.current.clear();
         // Reload the image
         await handleRender();
       } else {
@@ -1679,6 +1699,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const result = await response.json();
       if (result.success) {
         setAppliedTransforms([]);
+        // Invalidate prefetch cache so the re-render fetches fresh data from backend
+        settingsVersionRef.current += 1;
+        prefetchBufferRef.current.clear();
+        prefetchInProgressRef.current.clear();
         // Reload the image
         await handleRender();
       } else {
@@ -1687,6 +1711,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         if (errorMsg.includes("No original backup") || errorMsg.includes("nothing to undo")) {
           // Just clear the UI list silently - the data is already permanently transformed
           setAppliedTransforms([]);
+          // Invalidate prefetch cache
+          settingsVersionRef.current += 1;
+          prefetchBufferRef.current.clear();
+          prefetchInProgressRef.current.clear();
           // Still reload the image to ensure display is current
           await handleRender();
         } else {
@@ -1715,6 +1743,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     estimated_remaining?: number;
     error?: string;
   } | null>(null);
+  const transformPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyTransformationToAllFrames = useCallback(async (transformations: string[]) => {
     try {
@@ -1759,13 +1788,18 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
       const response = await fetch(`${backendUrl}/plot/transform_all_frames/status/${jobId}`);
+      if (!response.ok) {
+        setError(`Transform status check failed: ${response.statusText}`);
+        setTransformationJob(null);
+        return; // Stop polling on HTTP error
+      }
       const status = await response.json();
 
       setTransformationJob(status);
 
       if (status.status === "running" || status.status === "starting") {
-        // Continue polling
-        setTimeout(() => pollTransformationStatus(jobId), 1000);
+        // Continue polling (store timer for cleanup)
+        transformPollTimerRef.current = setTimeout(() => pollTransformationStatus(jobId), 1000);
       } else if (status.status === "completed") {
         // Clear the operations list from UI state
         setAppliedTransforms([]);
@@ -1787,13 +1821,30 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           console.error('Failed to clear transform operations from config:', err);
         }
 
+        // Invalidate prefetch cache so re-render fetches fresh data
+        settingsVersionRef.current += 1;
+        prefetchBufferRef.current.clear();
+        prefetchInProgressRef.current.clear();
         // Reload current frame to show changes
         await handleRender();
+      } else if (status.status === "failed") {
+        setError(`Batch transform failed: ${status.error || "Unknown error"}`);
       }
     } catch (e: any) {
+      // Network error - stop polling
       setError(`Failed to check transformation status: ${e?.message ?? "Unknown error"}`);
+      setTransformationJob(null);
     }
   }, [backendUrl, handleRender, camera]);
+
+  // Cleanup polling timer on unmount
+  useEffect(() => {
+    return () => {
+      if (transformPollTimerRef.current) {
+        clearTimeout(transformPollTimerRef.current);
+      }
+    };
+  }, []);
 
   return {
     basePaths,

@@ -17,6 +17,7 @@ const AVAILABLE_STATISTICS = {
     { id: "mean_divergence", label: "Mean Divergence" },
     { id: "mean_stresses", label: "Stresses" },  // Full stress tensor (uu, vv, uv + ww, uw, vw for stereo)
     { id: "mean_tke", label: "Mean TKE" },
+    { id: "mean_peak_height", label: "Mean Peak Height" },
   ],
   instantaneous: [
     { id: "inst_velocity", label: "Inst. Velocity" },
@@ -131,6 +132,33 @@ const getFilteredVars = (
     mean_stats: allVars.mean_stats,
     ensemble: [],
   };
+};
+
+// Unit lookup for hover tooltip (calibrated mode)
+const VARIABLE_UNITS: Record<string, string> = {
+  // Velocities
+  ux: "m/s", uy: "m/s", uz: "m/s",
+  mean_ux: "m/s", mean_uy: "m/s", mean_uz: "m/s",
+  // Fluctuations
+  u_prime: "m/s", v_prime: "m/s", w_prime: "m/s",
+  // Mean stresses
+  uu: "m\u00B2/s\u00B2", vv: "m\u00B2/s\u00B2", ww: "m\u00B2/s\u00B2",
+  uv: "m\u00B2/s\u00B2", uw: "m\u00B2/s\u00B2", vw: "m\u00B2/s\u00B2",
+  // Instantaneous stresses
+  uu_inst: "m\u00B2/s\u00B2", vv_inst: "m\u00B2/s\u00B2", ww_inst: "m\u00B2/s\u00B2",
+  uv_inst: "m\u00B2/s\u00B2", uw_inst: "m\u00B2/s\u00B2", vw_inst: "m\u00B2/s\u00B2",
+  // Ensemble stresses
+  UU_stress: "m\u00B2/s\u00B2", VV_stress: "m\u00B2/s\u00B2", WW_stress: "m\u00B2/s\u00B2",
+  UV_stress: "m\u00B2/s\u00B2", UW_stress: "m\u00B2/s\u00B2", VW_stress: "m\u00B2/s\u00B2",
+  // TKE
+  tke: "m\u00B2/s\u00B2",
+  // Vorticity / divergence
+  vorticity: "1/s", divergence: "1/s",
+  // Gamma (dimensionless)
+  gamma1: "", gamma2: "",
+  // Peak magnitude (dimensionless)
+  peak_mag: "", peakheight: "",
+  mean_peak_height: "",
 };
 
 // Inline Vector Merging Hook
@@ -438,6 +466,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     }
   }, [hoverData]);
 
+  // Clear stale hover data when data source changes (coordinates/units will differ)
+  useEffect(() => {
+    setLastValidHover(null);
+  }, [dataSource]);
+
   // Use statistics calculation hook (with config for checkbox/gamma sync)
   const {
     processMerged,
@@ -461,7 +494,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     basePathIdx,
     cameraOptions,
     maxFrameCount,
-    config  // Pass config for initializing from enabled_methods and gamma_radius
+    config,  // Pass config for initializing from enabled_methods and gamma_radius
+    dataSource  // Pass dataSource directly to avoid race with config sync
   );
 
   // Derived values from job details
@@ -792,9 +826,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
               {/* Run */}
               <div>
-                <label htmlFor="run" className="text-sm font-medium block mb-2">Run:</label>
+                <label htmlFor="pass" className="text-sm font-medium block mb-2">Pass:</label>
                 <Input
-                  id="run"
+                  id="pass"
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -966,13 +1000,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-gray-600 uppercase">X:</span>
                           <span className="font-mono text-sm font-semibold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {display.x.toFixed(3)}{isUncalibrated ? " px" : ""}
+                            {display.x.toFixed(3)}{isUncalibrated ? " px" : " mm"}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-gray-600 uppercase">Y:</span>
                           <span className="font-mono text-sm font-semibold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {display.y.toFixed(3)}{isUncalibrated ? " px" : ""}
+                            {display.y.toFixed(3)}{isUncalibrated ? " px" : " mm"}
                           </span>
                         </div>
                         {varVal != null && (
@@ -981,7 +1015,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               {type.includes(':') ? type.split(':').slice(1).join(':') : type}:
                             </span>
                             <span className="font-mono text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border">
-                              {varVal.toFixed(3)}{isUncalibrated ? " px" : ""}
+                              {(() => {
+                                const varName = type.includes(':') ? type.split(':').slice(1).join(':') : type;
+                                const unit = isUncalibrated ? "px" : (VARIABLE_UNITS[varName] ?? "m/s");
+                                return `${varVal.toFixed(3)}${unit ? ` ${unit}` : ""}`;
+                              })()}
                             </span>
                           </div>
                         )}
@@ -1201,8 +1239,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - For calibrated data (including merged), not statistics or stereo */}
-              {canTransform && !isStatistics && !isStereoData && (
+              {/* Transforms - For calibrated data (including merged), not statistics/mean vars or stereo */}
+              {canTransform && !isStatistics && !isMeanVar && !isStereoData && (
                 <Button
                   variant={showTransforms ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
@@ -1514,10 +1552,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Transforms Panel - For calibrated data (including merged), not statistics or stereo */}
-            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isStereoData && (
+            {/* Transforms Panel - For calibrated data (including merged), not statistics/mean vars or stereo */}
+            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isMeanVar && !isStereoData && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
+                <p className="text-xs text-purple-700 mb-3">
+                  Transforms modify calibrated vector data (.mat files) on disk. Preview changes on a single frame, then apply to all frames. Statistics should be recalculated after transforming.
+                </p>
 
                 {/* Data source indicator */}
                 <div className="mb-3 text-sm text-purple-700">

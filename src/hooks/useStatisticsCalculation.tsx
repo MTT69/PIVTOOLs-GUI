@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { DataSourceType } from './useVectorViewer';
 
 // All valid statistic keys (1:1 mapping with config)
 const ALL_STAT_KEYS = [
   "mean_velocity", "mean_stresses", "mean_tke",
-  "mean_vorticity", "mean_divergence", "inst_velocity", "inst_stresses",
+  "mean_vorticity", "mean_divergence", "mean_peak_height",
+  "inst_velocity", "inst_stresses",
   "inst_vorticity", "inst_divergence", "inst_gamma"
 ];
 
@@ -53,7 +55,8 @@ export function useStatisticsCalculation(
   basePathIdx: number = 0,
   cameraOptions: number[] = [],
   imageCount: number = 1000,
-  config?: any
+  config?: any,
+  dataSource?: DataSourceType
 ) {
   // --- State Initialization ---
 
@@ -251,8 +254,8 @@ export function useStatisticsCalculation(
           base_path_idx: basePathIdx,
           process_merged: processMerged,
           workflow: workflow,
-          type_name: config?.statistics?.type_name || 'instantaneous',
-          source_endpoint: sourceEndpoint,
+          type_name: dataSource?.includes('ensemble') ? 'ensemble' : (config?.statistics?.type_name || 'instantaneous'),
+          source_endpoint: dataSource ? (dataSource.includes('stereo') ? 'stereo' : (dataSource.includes('merged') ? 'merged' : 'regular')) : sourceEndpoint,
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
       });
