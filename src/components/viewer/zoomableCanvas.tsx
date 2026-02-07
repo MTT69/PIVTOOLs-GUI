@@ -38,8 +38,20 @@ export default function ZoomableCanvas({
 }: ZoomableCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const cmap = useMemo(() => buildColormap(colormap), [colormap]);
+
+  // Pre-build a Uint32Array LUT for fast pixel writes (ABGR for little-endian)
+  const cmapLUT = useMemo(() => {
+    if (!cmap) return null;
+    const lut = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const r = cmap[i * 3], g = cmap[i * 3 + 1], b = cmap[i * 3 + 2];
+      lut[i] = (255 << 24) | (b << 16) | (g << 8) | r; // ABGR for little-endian
+    }
+    return lut;
+  }, [cmap]);
 
   // Use props for zoom state, with defaults
   const scale = zoomLevel ?? 1;
@@ -82,12 +94,20 @@ export default function ZoomableCanvas({
       const dataVmin = (vmin / 100) * maxDataVal;
       const dataVmax = (vmax / 100) * maxDataVal;
       const range = Math.max(1e-9, dataVmax - dataVmin);
-      for (let i = 0; i < width * height; i++) {
-        const t = Math.max(0, Math.min(1, (Number(data[i]) - dataVmin) / range));
-        const idx = Math.floor(t * 255);
-        const j = i * 4;
-        [out[j], out[j+1], out[j+2]] = [cmap[idx * 3], cmap[idx * 3 + 1], cmap[idx * 3 + 2]];
-        out[j + 3] = 255;
+      if (cmapLUT) {
+        const out32 = new Uint32Array(out.buffer);
+        for (let i = 0; i < width * height; i++) {
+          const t = Math.max(0, Math.min(1, (Number(data[i]) - dataVmin) / range));
+          out32[i] = cmapLUT[Math.floor(t * 255)];
+        }
+      } else {
+        for (let i = 0; i < width * height; i++) {
+          const t = Math.max(0, Math.min(1, (Number(data[i]) - dataVmin) / range));
+          const idx = Math.floor(t * 255);
+          const j = i * 4;
+          [out[j], out[j+1], out[j+2]] = [cmap[idx * 3], cmap[idx * 3 + 1], cmap[idx * 3 + 2]];
+          out[j + 3] = 255;
+        }
       }
       ctx.putImageData(new ImageData(out, width, height), 0, 0);
     } else if (imgEl) {
@@ -101,14 +121,24 @@ export default function ZoomableCanvas({
         const data = imgData.data;
         const out = new Uint8ClampedArray(data.length);
         const range = Math.max(1e-9, pixelVmax - pixelVmin);
-        for (let i = 0; i < data.length; i += 4) {
-          const I = data[i]; // Use red channel as intensity
-          const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
-          const idx = Math.floor(t * 255);
-          out[i] = cmap[idx * 3];
-          out[i + 1] = cmap[idx * 3 + 1];
-          out[i + 2] = cmap[idx * 3 + 2];
-          out[i + 3] = 255;
+        if (cmapLUT) {
+          const out32 = new Uint32Array(out.buffer);
+          const pixelCount = canvas.width * canvas.height;
+          for (let i = 0; i < pixelCount; i++) {
+            const I = data[i * 4]; // Use red channel as intensity
+            const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
+            out32[i] = cmapLUT[Math.floor(t * 255)];
+          }
+        } else {
+          for (let i = 0; i < data.length; i += 4) {
+            const I = data[i]; // Use red channel as intensity
+            const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
+            const idx = Math.floor(t * 255);
+            out[i] = cmap[idx * 3];
+            out[i + 1] = cmap[idx * 3 + 1];
+            out[i + 2] = cmap[idx * 3 + 2];
+            out[i + 3] = 255;
+          }
         }
         ctx.putImageData(new ImageData(out, canvas.width, canvas.height), 0, 0);
       } catch (e) {
@@ -117,7 +147,32 @@ export default function ZoomableCanvas({
     } else {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
-  }, [raw, imgEl, vmin, vmax, cmap]);
+  }, [raw, imgEl, vmin, vmax, cmap, cmapLUT]);
+
+  // Draw overlay dots on a dedicated canvas (much faster than SVG <circle> elements)
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Size canvas to match the image dimensions (not the display dimensions)
+    const w = raw?.width || imgEl?.naturalWidth || 0;
+    const h = raw?.height || imgEl?.naturalHeight || 0;
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!overlayPoints || overlayPoints.length === 0) return;
+
+    ctx.fillStyle = overlayColor;
+    ctx.globalAlpha = 0.8;
+    for (const pt of overlayPoints) {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }, [overlayPoints, overlayColor, overlayRadius, raw, imgEl]);
 
   const fitToView = () => {
     const wrapper = wrapperRef.current;
@@ -230,27 +285,15 @@ export default function ZoomableCanvas({
           <>
             <div style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: "0 0" }}>
               <canvas ref={canvasRef} />
-              {/* Detection overlay points */}
-              {overlayPoints && overlayPoints.length > 0 && (
-                <svg
-                  className="absolute top-0 left-0 pointer-events-none"
-                  style={{
-                    width: raw?.width || imgEl?.naturalWidth || 0,
-                    height: raw?.height || imgEl?.naturalHeight || 0,
-                  }}
-                >
-                  {overlayPoints.map((pt, i) => (
-                    <circle
-                      key={i}
-                      cx={pt.x}
-                      cy={pt.y}
-                      r={overlayRadius}
-                      fill={overlayColor}
-                      fillOpacity={0.8}
-                    />
-                  ))}
-                </svg>
-              )}
+              {/* Detection overlay points (canvas-based for performance) */}
+              <canvas
+                ref={overlayCanvasRef}
+                className="absolute top-0 left-0 pointer-events-none"
+                style={{
+                  width: raw?.width || imgEl?.naturalWidth || 0,
+                  height: raw?.height || imgEl?.naturalHeight || 0,
+                }}
+              />
             </div>
             {useGrid && <div className="absolute inset-0 pointer-events-none" style={{
               backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`,
