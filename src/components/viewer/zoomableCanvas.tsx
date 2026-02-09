@@ -9,6 +9,13 @@ interface OverlayPoint {
   y: number;
 }
 
+export interface MarkerPoint {
+  x: number;
+  y: number;
+  color: string;
+  label?: string;
+}
+
 interface ZoomableCanvasProps {
   raw?: RawImage | null;
   src?: string | null;
@@ -28,17 +35,23 @@ interface ZoomableCanvasProps {
   overlayPoints?: OverlayPoint[];
   overlayColor?: string;
   overlayRadius?: number;
+  // Click mode for point selection
+  onImageClick?: (imageX: number, imageY: number) => void;
+  clickMode?: boolean;
+  markerPoints?: MarkerPoint[];
 }
 
 export default function ZoomableCanvas({
   raw, src, error, vmin, vmax, colormap, title,
   useGrid, gridSize = 16, gridThickness = 1,
   zoomLevel, panX, panY, onZoomChange,
-  overlayPoints, overlayColor = '#ff0000', overlayRadius = 8
+  overlayPoints, overlayColor = '#ff0000', overlayRadius = 8,
+  onImageClick, clickMode = false, markerPoints
 }: ZoomableCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const markerCanvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const cmap = useMemo(() => buildColormap(colormap), [colormap]);
 
@@ -174,6 +187,71 @@ export default function ZoomableCanvas({
     }
   }, [overlayPoints, overlayColor, overlayRadius, raw, imgEl]);
 
+  // Draw marker points (labeled circles + crosshairs for point selection)
+  useEffect(() => {
+    const canvas = markerCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = raw?.width || imgEl?.naturalWidth || 0;
+    const h = raw?.height || imgEl?.naturalHeight || 0;
+    if (w === 0 || h === 0) return;
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!markerPoints || markerPoints.length === 0) return;
+
+    // Scale marker size relative to image (min 16, max 40, ~1.5% of smallest dimension)
+    const baseDim = Math.min(w, h);
+    const r = Math.max(16, Math.min(40, Math.round(baseDim * 0.015)));
+    const crossLen = r * 1.8;
+    const fontSize = Math.max(10, Math.round(r * 0.7));
+
+    for (const pt of markerPoints) {
+      // Crosshair lines (white with dark outline for contrast)
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'black';
+      ctx.beginPath();
+      ctx.moveTo(pt.x - crossLen, pt.y);
+      ctx.lineTo(pt.x + crossLen, pt.y);
+      ctx.moveTo(pt.x, pt.y - crossLen);
+      ctx.lineTo(pt.x, pt.y + crossLen);
+      ctx.stroke();
+
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'white';
+      ctx.beginPath();
+      ctx.moveTo(pt.x - crossLen, pt.y);
+      ctx.lineTo(pt.x + crossLen, pt.y);
+      ctx.moveTo(pt.x, pt.y - crossLen);
+      ctx.lineTo(pt.x, pt.y + crossLen);
+      ctx.stroke();
+
+      // Filled circle
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = pt.color;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2.5;
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+
+      // Label
+      if (pt.label) {
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pt.label, pt.x, pt.y);
+      }
+    }
+  }, [markerPoints, raw, imgEl]);
+
   const fitToView = () => {
     const wrapper = wrapperRef.current;
     const imgW = raw?.width || imgEl?.naturalWidth;
@@ -195,15 +273,24 @@ export default function ZoomableCanvas({
     }
   }, [raw, imgEl]);
 
+  // Track click start for click mode (to distinguish clicks from drags)
+  const clickStartPos = useRef({ x: 0, y: 0 });
+
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
     if (!rect) return;
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     if (boxZoomMode) {
+      // Box zoom takes priority — works even when clickMode is active
       setIsSelecting(true);
       selectionStart.current = { x: mouseX, y: mouseY };
       setSelectionRect({ x: mouseX, y: mouseY, w: 0, h: 0 });
+    } else if (clickMode) {
+      clickStartPos.current = { x: mouseX, y: mouseY };
+      // Still allow drag in click mode for repositioning
+      setIsDragging(true);
+      lastPos.current = { x: e.clientX, y: e.clientY };
     } else {
       setIsDragging(true);
       lastPos.current = { x: e.clientX, y: e.clientY };
@@ -229,7 +316,23 @@ export default function ZoomableCanvas({
     onZoomChange?.(scale, offset.x + dx, offset.y + dy);
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent) => {
+    // Click mode: detect single click (mouse hasn't moved much)
+    if (clickMode && onImageClick && isDragging) {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (rect) {
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const dx = mouseX - clickStartPos.current.x;
+        const dy = mouseY - clickStartPos.current.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 5) {
+          // Convert screen coords to image coords
+          const imageX = (mouseX - offset.x) / scale;
+          const imageY = (mouseY - offset.y) / scale;
+          onImageClick(imageX, imageY);
+        }
+      }
+    }
     if (isSelecting && selectionRect && selectionRect.w > 10 && selectionRect.h > 10) {
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
@@ -263,7 +366,7 @@ export default function ZoomableCanvas({
     setSelectionRect(null);
   };
 
-  const cursor = boxZoomMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab');
+  const cursor = boxZoomMode ? 'zoom-in' : clickMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab');
 
   return (
     <div className="flex flex-col h-full">
@@ -288,6 +391,15 @@ export default function ZoomableCanvas({
               {/* Detection overlay points (canvas-based for performance) */}
               <canvas
                 ref={overlayCanvasRef}
+                className="absolute top-0 left-0 pointer-events-none"
+                style={{
+                  width: raw?.width || imgEl?.naturalWidth || 0,
+                  height: raw?.height || imgEl?.naturalHeight || 0,
+                }}
+              />
+              {/* Marker points (labeled circles for point selection) */}
+              <canvas
+                ref={markerCanvasRef}
                 className="absolute top-0 left-0 pointer-events-none"
                 style={{
                   width: raw?.width || imgEl?.naturalWidth || 0,

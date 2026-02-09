@@ -121,6 +121,9 @@ export function useDotboardCalibration(
   const [vectorJobId, setVectorJobId] = useState<string | null>(null);
   const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
 
+  // Guard: prevent auto-save/validate from firing before initial config load completes
+  const configLoadedRef = useRef(false);
+
   // Refs for debouncing and polling
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,6 +160,7 @@ export function useDotboardCalibration(
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      configLoadedRef.current = true;
     };
     loadConfig();
   }, []);
@@ -204,8 +208,9 @@ export function useDotboardCalibration(
     }, 500);
   }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame]);
 
-  // Auto-save when params change
+  // Auto-save when params change (skip until initial config load completes)
   useEffect(() => {
+    if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
 

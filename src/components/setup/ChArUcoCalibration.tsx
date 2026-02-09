@@ -13,6 +13,13 @@ import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/use
 import { useToast } from "@/components/ui/use-toast";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import {
+  GCInlineControls,
+  useGlobalCoordinates,
+  getGlobalCoordMarkers,
+  getGlobalCoordViewerTarget,
+  handleGlobalCoordPointSelect,
+} from "@/components/setup/GlobalCoordinateSetup";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -83,6 +90,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     cameraOptions,
     sourcePaths
   );
+
+  // Global coordinate system
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
+  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
+  const gcIsSelecting = gc.selectionMode !== "none";
 
   // Calibration image settings state (unified from calibration block)
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -570,7 +582,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <CalibrationImageViewer
             backendUrl="/backend"
             sourcePathIdx={sourcePathIdx}
-            camera={camera}
+            camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
             numImages={parseInt(numImages) || 10}
             calibrationType="charuco"
             calibrationParams={{
@@ -584,6 +596,19 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             savedDetections={savedDetections}
             showSavedOverlay={showOverlay}
             onSavedOverlayChange={setShowOverlay}
+            pointSelectMode={gcIsSelecting}
+            onPointSelect={(px, py, cam, frame) => handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
+            selectedMarkers={getGlobalCoordMarkers(gc, gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera, 1)}
+            externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+            externalFrame={gcIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+            settingsBarExtras={
+              <GCInlineControls
+                gc={gc}
+                currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+                cameraOptions={cameraOptions}
+                onCameraChange={setCamera}
+              />
+            }
           />
         )}
 

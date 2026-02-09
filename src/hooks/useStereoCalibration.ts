@@ -162,6 +162,9 @@ export function useStereoCalibration(
   // Active camera for image viewer
   const [activeCam, setActiveCam] = useState<number>(1);
 
+  // Guard: prevent auto-save/validate from firing before initial config load completes
+  const configLoadedRef = useRef(false);
+
   // Refs for debouncing and polling
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,6 +201,7 @@ export function useStereoCalibration(
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      configLoadedRef.current = true;
     };
     loadConfig();
   }, []);
@@ -246,8 +250,9 @@ export function useStereoCalibration(
     }, 500);
   }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumCamera, datumFrame]);
 
-  // Auto-save when params change
+  // Auto-save when params change (skip until initial config load completes)
   useEffect(() => {
+    if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
 

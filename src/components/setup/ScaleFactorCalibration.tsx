@@ -6,6 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
 import { useScaleFactorCalibration } from "@/hooks/useScaleFactorCalibration";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { useGlobalCoordinates } from "@/hooks/useGlobalCoordinates";
 
 interface ScaleFactorCalibrationProps {
   config: any;
@@ -49,6 +52,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     sourcePaths,
     imageCount
   );
+
+  // Global coordinate system
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
 
   // Vector type selector
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
@@ -180,6 +186,17 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           />
         </div>
 
+
+        {/* Global Coordinates toggle (full controls available on dotboard/charuco image viewer) */}
+        <div className="flex items-center gap-2">
+          <Switch checked={gc.enabled} onCheckedChange={gc.setEnabled} />
+          <Label className="text-sm">Global Coordinate System</Label>
+          {gc.enabled && (
+            <span className="text-xs text-muted-foreground">
+              (Set origin/feature points in Dotboard or ChArUco image viewer)
+            </span>
+          )}
+        </div>
 
         {/* Status indicator (same as dotboard) */}
         <div className="mb-2">

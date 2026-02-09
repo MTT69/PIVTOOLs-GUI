@@ -11,6 +11,13 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react"
 import { useDotboardCalibration, FrameDetection } from "@/hooks/useDotboardCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import {
+  GCInlineControls,
+  useGlobalCoordinates,
+  getGlobalCoordMarkers,
+  getGlobalCoordViewerTarget,
+  handleGlobalCoordPointSelect,
+} from "@/components/setup/GlobalCoordinateSetup";
 
 interface DotboardCalibrationProps {
   config: any;
@@ -97,6 +104,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     loadModel,
     calibrateVectors,
   } = calibration;
+
+  // Global coordinate system
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
+  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
+  const gcIsSelecting = gc.selectionMode !== "none";
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -461,7 +473,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             <CalibrationImageViewer
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
-              camera={camera}
+              camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
               numImages={parseInt(numImages) || 10}
               calibrationType="dotboard"
               calibrationParams={{
@@ -470,6 +482,19 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
+              pointSelectMode={gcIsSelecting}
+              onPointSelect={(px, py, cam, frame) => handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
+              selectedMarkers={getGlobalCoordMarkers(gc, gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera, 1)}
+              externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+              externalFrame={gcIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+              settingsBarExtras={
+                <GCInlineControls
+                  gc={gc}
+                  currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+                  cameraOptions={cameraOptions}
+                  onCameraChange={setCamera}
+                />
+              }
             />
           )}
 

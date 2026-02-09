@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useCalibrationImageViewer } from '@/hooks/useCalibrationImageViewer';
-import ZoomableCanvas from './zoomableCanvas';
+import ZoomableCanvas, { MarkerPoint } from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 
 // Loading spinner component
@@ -41,6 +41,15 @@ export interface CalibrationImageViewerProps {
   onSavedOverlayChange?: (show: boolean) => void;
   // Stereo-specific props
   stereoParams?: { cam1: number; cam2: number };
+  // Point selection mode
+  onPointSelect?: (pixelX: number, pixelY: number, camera: number, frame: number) => void;
+  pointSelectMode?: boolean;
+  selectedMarkers?: MarkerPoint[];
+  // External control of camera/frame
+  externalCamera?: number;
+  externalFrame?: number;
+  // Extra controls rendered in the settings bar
+  settingsBarExtras?: React.ReactNode;
 }
 
 export default function CalibrationImageViewer({
@@ -56,6 +65,12 @@ export default function CalibrationImageViewer({
   showSavedOverlay = false,
   onSavedOverlayChange,
   stereoParams,
+  onPointSelect,
+  pointSelectMode = false,
+  selectedMarkers,
+  externalCamera,
+  externalFrame,
+  settingsBarExtras,
 }: CalibrationImageViewerProps) {
   // Frame navigation state
   const [index, setIndex] = useState(1);
@@ -164,6 +179,20 @@ export default function CalibrationImageViewer({
   }, [playing, maxFrames, playbackSpeed, index, prefetchSurrounding]);
 
 
+  // Sync external frame control
+  useEffect(() => {
+    if (externalFrame !== undefined && externalFrame !== index) {
+      setIndex(externalFrame);
+    }
+  }, [externalFrame]);
+
+  // Handle image click for point selection
+  const handleImageClick = (imageX: number, imageY: number) => {
+    if (pointSelectMode && onPointSelect) {
+      onPointSelect(imageX, imageY, externalCamera ?? camera, index);
+    }
+  };
+
   // Compute overlay points from saved detections for current frame
   const savedOverlayPoints = useMemo(() => {
     if (!showSavedOverlay || !savedDetections) return undefined;
@@ -267,6 +296,9 @@ export default function CalibrationImageViewer({
             panY={panY}
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
+            clickMode={pointSelectMode}
+            onImageClick={handleImageClick}
+            markerPoints={selectedMarkers}
           />
           {loading && !playing && (
             <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
@@ -394,6 +426,9 @@ export default function CalibrationImageViewer({
             panY={panY}
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
+            clickMode={pointSelectMode}
+            onImageClick={handleImageClick}
+            markerPoints={selectedMarkers}
           />
           {loading && !playing && (
             <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
@@ -470,6 +505,9 @@ export default function CalibrationImageViewer({
               </Button>
             </div>
           </div>
+
+          {/* Extra controls (e.g. global coordinate inline controls) */}
+          {settingsBarExtras}
         </div>
 
         {/* Contrast Slider */}
