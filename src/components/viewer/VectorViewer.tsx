@@ -393,7 +393,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     appliedTransforms,
     setAppliedTransforms,
     clearTransforms,
-    clearOperationsList,
+    transformCameras,
+    setTransformCameras,
     MAG_SIZE,
     dpr,
     effectiveDir,
@@ -1586,7 +1587,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_lr')}>Flip Horizontal</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('flip_ud')}>Flip Vertical</Button>
                     <Button size="sm" variant="outline" onClick={() => applyTransformation('swap_ux_uy')}>Swap UX/UY</Button>
-                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux_uy')}>Invert UX/UY</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux')}>Invert UX</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_uy')}>Invert UY</Button>
+                    <Button size="sm" variant="outline" onClick={() => applyTransformation('invert_ux_uy')}>Invert UX & UY</Button>
                   </div>
 
                   {/* Scale Velocities */}
@@ -1685,37 +1688,51 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </div>
                   </div>
 
+                  {/* Camera selection for batch transforms */}
+                  {cameraOptions.length > 1 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200">
+                      <label className="text-sm font-semibold text-gray-700 mr-2">Cameras:</label>
+                      {cameraOptions.map((cam: number) => (
+                        <label key={cam} className="flex items-center gap-1 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={transformCameras.includes(cam)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setTransformCameras(prev => [...prev, cam].sort((a, b) => a - b));
+                              } else {
+                                setTransformCameras(prev => prev.filter(c => c !== cam));
+                              }
+                            }}
+                          />
+                          Cam {cam}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Apply to all frames buttons */}
                   <div className="flex items-center gap-3 pt-2 border-t border-purple-200">
                     <Button
                       size="default"
                       onClick={() => applyTransformationToAllFrames(appliedTransforms)}
-                      disabled={loading || appliedTransforms.length === 0}
+                      disabled={loading || appliedTransforms.length === 0 || transformCameras.length === 0}
                       className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M21 14h-5a2 2 0 0 1-2-2V7" />
                         <path d="M14 2L7 9l7 7" />
                       </svg>
-                      Apply to All Frames
-                    </Button>
-                    <Button
-                      size="default"
-                      variant="outline"
-                      onClick={clearOperationsList}
-                      disabled={appliedTransforms.length === 0}
-                      title="Clear the pending operations list without modifying files"
-                    >
-                      Clear List
+                      Apply to All Frames{cameraOptions.length > 1 && transformCameras.length < cameraOptions.length ? ` (${transformCameras.length} cam${transformCameras.length !== 1 ? 's' : ''})` : ''}
                     </Button>
                     <Button
                       size="default"
                       variant="destructive"
                       onClick={clearTransforms}
-                      disabled={loading}
-                      title="Undo transforms from current frame (restores original data)"
+                      disabled={loading && appliedTransforms.length === 0}
+                      title="Restore original data and clear pending operations list"
                     >
-                      Undo Frame
+                      Clear Transforms
                     </Button>
                   </div>
                 </div>

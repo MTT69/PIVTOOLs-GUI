@@ -126,11 +126,18 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     return config?.paths?.camera_numbers || [];
   }, [config]);
   const [camera, setCamera] = useState<number>(() => cameraOptions.length > 0 ? cameraOptions[0] : 1);
+  // Camera selection for batch transforms (defaults to all cameras)
+  const [transformCameras, setTransformCameras] = useState<number[]>(cameraOptions);
   useEffect(() => {
     if (cameraOptions.length === 0) return;
     if (!cameraOptions.includes(camera)) setCamera(cameraOptions[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions.length, cameraOptions[0]]);
+
+  // Sync transformCameras when cameraOptions change
+  useEffect(() => {
+    setTransformCameras(cameraOptions);
+  }, [cameraOptions]);
 
   // New unified data source state
   const [dataSource, setDataSource] = useState<DataSourceType>("calibrated_instantaneous");
@@ -1734,10 +1741,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
   }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
 
-  // Clear the operations list without calling backend (just UI state)
-  const clearOperationsList = useCallback(() => {
-    setAppliedTransforms([]);
-  }, []);
+  // clearOperationsList removed — clearTransforms now handles both backend restore and UI list clearing
 
   const [transformationJob, setTransformationJob] = useState<{
     job_id: string;
@@ -1768,6 +1772,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           transformations,
           merged: merged,
           image_count: maxFrameCount,
+          cameras: transformCameras.length < cameraOptions.length ? transformCameras : undefined,
         }),
       });
       const result = await response.json();
@@ -1789,7 +1794,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, merged, maxFrameCount]);
+  }, [backendUrl, effectiveDir, camera, merged, maxFrameCount, transformCameras, cameraOptions]);
 
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
@@ -1947,7 +1952,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     appliedTransforms,
     setAppliedTransforms,
     clearTransforms,
-    clearOperationsList,
+    transformCameras,
+    setTransformCameras,
     effectiveDir,
     prefetchSurrounding,
     isFrameInCache,
