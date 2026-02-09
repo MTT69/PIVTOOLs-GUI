@@ -77,6 +77,10 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     setMinCorners,
     dt,
     setDt,
+    datumCamera,
+    setDatumCamera,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,
@@ -169,6 +173,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   const [markerRatioInput, setMarkerRatioInput] = useState(String(markerRatio));
   const [minCornersInput, setMinCornersInput] = useState(String(minCorners));
   const [dtInput, setDtInput] = useState(String(dt));
+  const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
 
   // Sync local inputs with hook state
   React.useEffect(() => {
@@ -194,6 +199,10 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   React.useEffect(() => {
     setDtInput(String(dt));
   }, [dt]);
+
+  React.useEffect(() => {
+    setDatumFrameInput(String(datumFrame));
+  }, [datumFrame]);
 
   // Convert detections to format expected by CalibrationImageViewer
   // Use active camera's detections
@@ -501,7 +510,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
           {/* Section 5: Detection Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">Detection Parameters</h3>
-            <div className="grid md:grid-cols-3 gap-4">
+            <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
                 <label className="text-sm font-medium">ArUco Dictionary</label>
                 <Select value={arucoDict} onValueChange={setArucoDict}>
@@ -533,6 +542,28 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   onChange={e => setDtInput(e.target.value)}
                   onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
                 />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Reference Camera</label>
+                <Select value={String(datumCamera)} onValueChange={v => setDatumCamera(Number(v))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Camera 1</SelectItem>
+                    <SelectItem value="2">Camera 2</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Coordinate system origin</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Datum Frame</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={datumFrameInput}
+                  onChange={e => setDatumFrameInput(e.target.value)}
+                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
               </div>
             </div>
           </div>

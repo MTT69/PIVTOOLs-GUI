@@ -134,9 +134,9 @@ export function useStereoCalibration(
   // Grid params (saved to config.calibration.stereo_dotboard)
   // NOTE: patternCols and patternRows removed - grid is auto-detected
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
-  const [enhanceDots, setEnhanceDots] = useState(true);
   const [dt, setDt] = useState(1.0);
   const [datumCamera, setDatumCamera] = useState(1); // Which camera defines coordinate system origin
+  const [datumFrame, setDatumFrame] = useState(1); // Which calibration image defines world origin
 
   // Validation state
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
@@ -191,9 +191,9 @@ export function useStereoCalibration(
           const stereo_dotboard = cfgData.calibration?.stereo_dotboard || {};
           // NOTE: pattern_cols and pattern_rows no longer needed - auto-detected
           if (stereo_dotboard.dot_spacing_mm) setDotSpacingMm(stereo_dotboard.dot_spacing_mm);
-          if (stereo_dotboard.enhance_dots !== undefined) setEnhanceDots(stereo_dotboard.enhance_dots);
           if (stereo_dotboard.dt) setDt(stereo_dotboard.dt);
           if (stereo_dotboard.datum_camera) setDatumCamera(stereo_dotboard.datum_camera);
+          if (stereo_dotboard.datum_frame) setDatumFrame(stereo_dotboard.datum_frame);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -233,9 +233,9 @@ export function useStereoCalibration(
             calibration: {
               stereo_dotboard: {
                 dot_spacing_mm: dotSpacingMm,
-                enhance_dots: enhanceDots,
                 dt: dt,
                 datum_camera: datumCamera,
+                datum_frame: datumFrame,
               },
             },
           }),
@@ -244,7 +244,7 @@ export function useStereoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, enhanceDots, dt, datumCamera]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumCamera, datumFrame]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -539,12 +539,12 @@ export function useStereoCalibration(
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
     dt,
     setDt,
     datumCamera,
     setDatumCamera,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,

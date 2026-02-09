@@ -254,12 +254,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Prefetch buffer for smooth playback
   const prefetchBufferRef = useRef<Map<string, { image: string; meta: any }>>(new Map());
   const prefetchInProgressRef = useRef<Set<string>>(new Set());
-  // Settings version counter: incremented when rendering-relevant settings change to invalidate prefetch cache
-  const settingsVersionRef = useRef<number>(0);
+  // Build a cache key that includes all rendering-relevant parameters.
+  // This ensures cache entries are invalidated when ANY display setting changes,
+  // without relying on effect ordering for a version counter.
+  const buildCacheKey = useCallback((frameIdx: number) => {
+    return `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-${cmap}-${lower}-${upper}-${xOffset}-${yOffset}-${xlimMinRef.current}-${xlimMaxRef.current}-${ylimMinRef.current}-${ylimMaxRef.current}-${plotTitleRef.current}-${isUncalibrated}-${merged}-${isStereoData}`;
+  }, [effectiveDir, camera, type, run, cmap, lower, upper, xOffset, yOffset, isUncalibrated, merged, isStereoData]);
 
   // Invalidate prefetch cache when rendering-affecting settings change
   useEffect(() => {
-    settingsVersionRef.current += 1;
     prefetchBufferRef.current.clear();
     prefetchInProgressRef.current.clear();
   }, [cmap, lower, upper, xOffset, yOffset, xlimMin, xlimMax, ylimMin, ylimMax, plotTitle, isUncalibrated, merged, isStereoData]);
@@ -410,7 +413,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
 
       // Check prefetch buffer first for instant display
-      const cacheKey = `${effectiveDir}-${camera}-${index}-${type}-${run}-v${settingsVersionRef.current}`;
+      const cacheKey = buildCacheKey(index);
       const cached = prefetchBufferRef.current.get(cacheKey);
       if (cached) {
         setImageSrc(cached.image);
@@ -488,11 +491,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType, isStereoData, availableDataSources]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType, isStereoData, availableDataSources, buildCacheKey]);
 
   // Prefetch a single frame for smooth playback
   const prefetchFrame = useCallback(async (frameIdx: number) => {
-    const cacheKey = `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-v${settingsVersionRef.current}`;
+    const cacheKey = buildCacheKey(frameIdx);
 
     // Skip if already in buffer or being fetched
     if (prefetchBufferRef.current.has(cacheKey) || prefetchInProgressRef.current.has(cacheKey)) {
@@ -563,7 +566,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources, parseVarType]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources, parseVarType, buildCacheKey]);
 
   // Prefetch surrounding frames for smooth playback
   const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
@@ -579,9 +582,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Check if a frame is in the prefetch cache
   const isFrameInCache = useCallback((idx: number): boolean => {
-    const cacheKey = `${effectiveDir}-${camera}-${idx}-${type}-${run}-v${settingsVersionRef.current}`;
+    const cacheKey = buildCacheKey(idx);
     return prefetchBufferRef.current.has(cacheKey);
-  }, [effectiveDir, camera, type, run]);
+  }, [buildCacheKey]);
 
   // Track last fetched path/camera to avoid redundant fetches
   const lastFetchedAvailabilityRef = useRef<string | null>(null);
@@ -1117,6 +1120,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to update offsets");
+      // Server-side datum changed - clear cache to force fresh render
+      prefetchBufferRef.current.clear();
+      prefetchInProgressRef.current.clear();
       void fetchCurrentView();
     } catch (e: any) {
       setError(`Failed to update offsets: ${e.message}`);
@@ -1149,6 +1155,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to set datum");
+      // Server-side datum changed - clear cache to force fresh render
+      prefetchBufferRef.current.clear();
+      prefetchInProgressRef.current.clear();
     } catch (e: any) {
       setError(`Failed to set datum: ${e.message}`);
     }
@@ -1665,7 +1674,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         // Use the backend's simplified transformation list
         setAppliedTransforms(result.pending_transformations || []);
         // Invalidate prefetch cache so the re-render fetches fresh data from backend
-        settingsVersionRef.current += 1;
         prefetchBufferRef.current.clear();
         prefetchInProgressRef.current.clear();
         // Reload the image
@@ -1700,7 +1708,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (result.success) {
         setAppliedTransforms([]);
         // Invalidate prefetch cache so the re-render fetches fresh data from backend
-        settingsVersionRef.current += 1;
         prefetchBufferRef.current.clear();
         prefetchInProgressRef.current.clear();
         // Reload the image
@@ -1712,8 +1719,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           // Just clear the UI list silently - the data is already permanently transformed
           setAppliedTransforms([]);
           // Invalidate prefetch cache
-          settingsVersionRef.current += 1;
-          prefetchBufferRef.current.clear();
+            prefetchBufferRef.current.clear();
           prefetchInProgressRef.current.clear();
           // Still reload the image to ensure display is current
           await handleRender();
@@ -1822,7 +1828,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         }
 
         // Invalidate prefetch cache so re-render fetches fresh data
-        settingsVersionRef.current += 1;
         prefetchBufferRef.current.clear();
         prefetchInProgressRef.current.clear();
         // Reload current frame to show changes

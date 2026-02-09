@@ -93,7 +93,6 @@ export function useDotboardCalibration(
   // Grid params (saved to config)
   // NOTE: patternCols and patternRows removed - grid is auto-detected
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
-  const [enhanceDots, setEnhanceDots] = useState(true);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1); // Which frame defines world origin
 
@@ -152,7 +151,6 @@ export function useDotboardCalibration(
           const dotboard = cfgData.calibration?.dotboard || {};
           // NOTE: pattern_cols and pattern_rows no longer needed - auto-detected
           if (dotboard.dot_spacing_mm) setDotSpacingMm(dotboard.dot_spacing_mm);
-          if (dotboard.enhance_dots !== undefined) setEnhanceDots(dotboard.enhance_dots);
           if (dotboard.dt) setDt(dotboard.dt);
           if (dotboard.datum_frame) setDatumFrame(dotboard.datum_frame);
         }
@@ -194,7 +192,6 @@ export function useDotboardCalibration(
             calibration: {
               dotboard: {
                 dot_spacing_mm: dotSpacingMm,
-                enhance_dots: enhanceDots,
                 dt: dt,
                 datum_frame: datumFrame,
               },
@@ -205,7 +202,7 @@ export function useDotboardCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, enhanceDots, dt, datumFrame]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -547,8 +544,6 @@ export function useDotboardCalibration(
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
     dt,
     setDt,
     datumFrame,

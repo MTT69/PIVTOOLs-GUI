@@ -59,8 +59,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
     dt,
     setDt,
     datumFrame,
@@ -429,17 +427,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
             </div>
-            <div className="mt-3">
-              <label className="flex items-center text-sm font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enhanceDots}
-                  onChange={e => setEnhanceDots(e.target.checked)}
-                  className="mr-2"
-                />
-                Enhance Dots (for low contrast images)
-              </label>
-            </div>
           </div>
 
           {/* Section 5: Image Viewer Toggle */}
@@ -478,7 +465,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               numImages={parseInt(numImages) || 10}
               calibrationType="dotboard"
               calibrationParams={{
-                enhance_dots: enhanceDots,
                 // NOTE: pattern_cols/rows removed - auto-detected
               }}
               savedDetections={savedDetections}

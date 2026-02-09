@@ -65,12 +65,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
     setDotSpacingMm,
-    enhanceDots,
-    setEnhanceDots,
     dt,
     setDt,
     datumCamera,
     setDatumCamera,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,
@@ -159,6 +159,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   // Local input state for debouncing
   const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
   const [dtInput, setDtInput] = useState(String(dt));
+  const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
 
   // Sync local inputs with hook state
   React.useEffect(() => {
@@ -168,6 +169,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   React.useEffect(() => {
     setDtInput(String(dt));
   }, [dt]);
+
+  React.useEffect(() => {
+    setDatumFrameInput(String(datumFrame));
+  }, [datumFrame]);
 
   // Convert detections to format expected by CalibrationImageViewer
   // Use active camera's detections
@@ -466,17 +471,17 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">Coordinate system origin</p>
               </div>
-            </div>
-            <div className="mt-3">
-              <label className="flex items-center text-sm font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enhanceDots}
-                  onChange={e => setEnhanceDots(e.target.checked)}
-                  className="mr-2"
+              <div>
+                <label className="text-sm font-medium">Datum Frame</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={datumFrameInput}
+                  onChange={e => setDatumFrameInput(e.target.value)}
+                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
                 />
-                Enhance Dots (for low contrast images)
-              </label>
+                <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
+              </div>
             </div>
           </div>
 
@@ -528,7 +533,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               numImages={parseInt(numImages) || 10}
               calibrationType="stereo_dotboard"
               calibrationParams={{
-                enhance_dots: enhanceDots,
                 // NOTE: pattern_cols/rows removed - auto-detected
               }}
               stereoParams={{ cam1, cam2 }}

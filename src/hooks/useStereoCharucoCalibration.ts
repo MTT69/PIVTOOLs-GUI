@@ -156,6 +156,8 @@ export function useStereoCharucoCalibration(
   const [arucoDict, setArucoDict] = useState('DICT_4X4_1000');
   const [minCorners, setMinCorners] = useState(6);
   const [dt, setDt] = useState(1.0);
+  const [datumCamera, setDatumCamera] = useState(1); // Which camera defines coordinate system origin
+  const [datumFrame, setDatumFrame] = useState(1); // Which calibration image defines world origin
 
   // Validation state
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
@@ -215,6 +217,10 @@ export function useStereoCharucoCalibration(
           if (charuco.aruco_dict) setArucoDict(charuco.aruco_dict);
           if (charuco.min_corners) setMinCorners(charuco.min_corners);
           if (charuco.dt) setDt(charuco.dt);
+          // Load stereo-specific params from stereo_charuco section
+          const stereo_charuco = cfgData.calibration?.stereo_charuco || {};
+          if (stereo_charuco.datum_camera) setDatumCamera(stereo_charuco.datum_camera);
+          if (stereo_charuco.datum_frame) setDatumFrame(stereo_charuco.datum_frame);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -260,6 +266,10 @@ export function useStereoCharucoCalibration(
                 min_corners: minCorners,
                 dt: dt,
               },
+              stereo_charuco: {
+                datum_camera: datumCamera,
+                datum_frame: datumFrame,
+              },
             },
           }),
         });
@@ -267,7 +277,7 @@ export function useStereoCharucoCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, datumCamera, datumFrame]);
 
   // Auto-save when params change
   useEffect(() => {
@@ -574,6 +584,10 @@ export function useStereoCharucoCalibration(
     setMinCorners,
     dt,
     setDt,
+    datumCamera,
+    setDatumCamera,
+    datumFrame,
+    setDatumFrame,
 
     // Validation
     validation,
