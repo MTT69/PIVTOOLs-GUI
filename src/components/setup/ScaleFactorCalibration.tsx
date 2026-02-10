@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Eye, EyeOff } from "lucide-react";
+import { Loader2, Eye, EyeOff, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useScaleFactorCalibration } from "@/hooks/useScaleFactorCalibration";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -230,40 +230,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   return (
     <Card>
-      {/* Add progress display if job is running */}
-      {scaleFactorJobId && scaleFactorJobDetails && (
-        <div className="mb-4 p-4 border rounded bg-blue-50">
-          <div className="flex items-center gap-2 text-sm mb-2">
-            <strong>Scale Factor Calibration Progress:</strong>
-            <span className="font-medium">{scaleFactorJobStatus}</span>
-          </div>
-          {(scaleFactorJobStatus === 'running' || scaleFactorJobStatus === 'starting') && (
-            <div className="flex items-center gap-2 text-green-600 text-sm">
-              <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
-              Processing files...
-            </div>
-          )}
-          <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-            <div className={`h-2 bg-green-600`} style={{ width: `${scaleFactorJobDetails.progress || 0}%` }}></div>
-          </div>
-          <div className="text-xs text-muted-foreground mt-1">
-            Progress: {scaleFactorJobDetails.progress || 0}%
-            {scaleFactorJobDetails.processed_files !== undefined && scaleFactorJobDetails.total_files !== undefined &&
-              ` (Files: ${scaleFactorJobDetails.processed_files}/${scaleFactorJobDetails.total_files})`}
-          </div>
-          {scaleFactorJobStatus === 'completed' && (
-            <div className="mt-2 text-xs text-green-600">
-              Scale factor calibration completed! Processed {scaleFactorJobDetails.processed_files} files.
-            </div>
-          )}
-          {scaleFactorJobStatus === 'failed' && scaleFactorJobDetails.error && (
-            <div className="mt-2 text-xs text-red-600">
-              Error: {scaleFactorJobDetails.error}
-            </div>
-          )}
-        </div>
-      )}
-
       <CardHeader>
         <CardTitle>Scale Factor Calibration</CardTitle>
       </CardHeader>
@@ -555,6 +521,42 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             {isActive ? "Active" : "Set as Active Method"}
           </Button>
         </div>
+
+        {/* Vector Calibration Progress */}
+        {scaleFactorJobId && scaleFactorJobDetails && (scaleFactorJobStatus === 'running' || scaleFactorJobStatus === 'starting') && (
+          <div className="mt-4 p-3 border rounded bg-green-50">
+            <div className="flex items-center gap-2 text-sm mb-2">
+              <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+              <strong>Vector Calibration:</strong>
+              <span className="capitalize">{scaleFactorJobStatus}</span>
+            </div>
+            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+              <div className="h-2 bg-green-600 transition-all" style={{ width: `${scaleFactorJobDetails.progress || 0}%` }}></div>
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Progress: {scaleFactorJobDetails.progress || 0}%
+              {scaleFactorJobDetails.processed_files !== undefined && scaleFactorJobDetails.total_files !== undefined &&
+                ` (Files: ${scaleFactorJobDetails.processed_files}/${scaleFactorJobDetails.total_files})`}
+            </div>
+          </div>
+        )}
+
+        {/* Vector Calibration Completed */}
+        {scaleFactorJobId && scaleFactorJobStatus === 'completed' && (
+          <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+            <CheckCircle2 className="h-4 w-4 inline mr-2" />
+            Vector calibration completed!
+          </div>
+        )}
+
+        {/* Vector Calibration Failed */}
+        {scaleFactorJobId && scaleFactorJobStatus === 'failed' && scaleFactorJobDetails?.error && (
+          <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+            <AlertTriangle className="h-4 w-4 inline mr-2" />
+            Vector calibration error: {scaleFactorJobDetails.error}
+          </div>
+        )}
+
         <div className="text-xs text-gray-500 mt-2">
           This method calibrates all vectors using scale factor conversion: pixels / px_per_mm / dt.<br />
           Automatically places bottom-left corner at origin (0,0).<br />

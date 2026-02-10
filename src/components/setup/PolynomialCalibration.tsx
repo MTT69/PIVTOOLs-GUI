@@ -497,35 +497,6 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
         <CardTitle>Polynomial Calibration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Progress Display */}
-        {jobId && jobDetails && (
-            <div className="mb-4 p-4 border rounded bg-blue-50">
-            <div className="flex items-center gap-2 text-sm mb-2">
-                <strong>Calibration Progress:</strong>
-                <span className="font-medium">{jobStatus}</span>
-            </div>
-            {(jobStatus === 'running' || jobStatus === 'starting') && (
-                <div className="flex items-center gap-2 text-green-600 text-sm">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
-                Processing files...
-                </div>
-            )}
-            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-                <div className={`h-2 bg-green-600`} style={{ width: `${jobDetails.progress || 0}%` }}></div>
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-                Progress: {jobDetails.progress || 0}%
-                {jobDetails.processed_frames !== undefined && jobDetails.total_frames !== undefined &&
-                ` (Frames: ${jobDetails.processed_frames}/${jobDetails.total_frames})`}
-            </div>
-            {jobStatus === 'completed' && (
-                <div className="mt-2 text-xs text-green-600">
-                Calibration completed! Processed {jobDetails.successful_frames || jobDetails.processed_frames} files.
-                </div>
-            )}
-            </div>
-        )}
-
         <div className="space-y-2">
           <Label>Source Path</Label>
           <Select
@@ -813,6 +784,41 @@ export const PolynomialCalibration: React.FC<PolynomialCalibrationProps> = ({
             )}
           </Button>
         </div>
+
+        {/* Vector Calibration Progress */}
+        {jobId && jobDetails && (jobStatus === 'running' || jobStatus === 'starting') && (
+          <div className="mt-4 p-3 border rounded bg-green-50">
+            <div className="flex items-center gap-2 text-sm mb-2">
+              <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+              <strong>Vector Calibration:</strong>
+              <span className="capitalize">{jobStatus}</span>
+            </div>
+            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+              <div className="h-2 bg-green-600 transition-all" style={{ width: `${jobDetails.progress || 0}%` }}></div>
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              Progress: {jobDetails.progress || 0}%
+              {jobDetails.processed_frames !== undefined && jobDetails.total_frames !== undefined &&
+                ` (Frames: ${jobDetails.processed_frames}/${jobDetails.total_frames})`}
+            </div>
+          </div>
+        )}
+
+        {/* Vector Calibration Completed */}
+        {jobId && jobStatus === 'completed' && (
+          <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+            <CheckCircle2 className="h-4 w-4 inline mr-2" />
+            Vector calibration completed!
+          </div>
+        )}
+
+        {/* Vector Calibration Failed */}
+        {jobId && jobStatus === 'failed' && jobDetails?.error && (
+          <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+            <AlertTriangle className="h-4 w-4 inline mr-2" />
+            Vector calibration error: {jobDetails.error}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
