@@ -39,6 +39,8 @@ interface ZoomableCanvasProps {
   onImageClick?: (imageX: number, imageY: number) => void;
   clickMode?: boolean;
   markerPoints?: MarkerPoint[];
+  // Measurement line overlay
+  measureLine?: { p1: { x: number; y: number }; p2?: { x: number; y: number } } | null;
 }
 
 export default function ZoomableCanvas({
@@ -46,12 +48,14 @@ export default function ZoomableCanvas({
   useGrid, gridSize = 16, gridThickness = 1,
   zoomLevel, panX, panY, onZoomChange,
   overlayPoints, overlayColor = '#ff0000', overlayRadius = 8,
-  onImageClick, clickMode = false, markerPoints
+  onImageClick, clickMode = false, markerPoints,
+  measureLine
 }: ZoomableCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const markerCanvasRef = useRef<HTMLCanvasElement>(null);
+  const measureCanvasRef = useRef<HTMLCanvasElement>(null);
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
   const cmap = useMemo(() => buildColormap(colormap), [colormap]);
 
@@ -252,6 +256,84 @@ export default function ZoomableCanvas({
     }
   }, [markerPoints, raw, imgEl]);
 
+  // Draw measurement line overlay
+  useEffect(() => {
+    const canvas = measureCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = raw?.width || imgEl?.naturalWidth || 0;
+    const h = raw?.height || imgEl?.naturalHeight || 0;
+    if (w === 0 || h === 0) return;
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!measureLine?.p1) return;
+
+    const baseDim = Math.min(w, h);
+    const r = Math.max(4, Math.min(12, Math.round(baseDim * 0.004)));
+    const lw = Math.max(1.5, Math.min(4, Math.round(baseDim * 0.002)));
+
+    // Draw P1
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#00ffff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.arc(measureLine.p1.x, measureLine.p1.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    if (!measureLine.p2) return;
+
+    // Draw dashed line
+    ctx.setLineDash([lw * 4, lw * 2]);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(measureLine.p1.x, measureLine.p1.y);
+    ctx.lineTo(measureLine.p2.x, measureLine.p2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Draw P2
+    ctx.fillStyle = '#00ffff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.arc(measureLine.p2.x, measureLine.p2.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Length label at midpoint
+    const midX = (measureLine.p1.x + measureLine.p2.x) / 2;
+    const midY = (measureLine.p1.y + measureLine.p2.y) / 2;
+    const dx = measureLine.p2.x - measureLine.p1.x;
+    const dy = measureLine.p2.y - measureLine.p1.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const text = `${len.toFixed(1)} px`;
+
+    const fontSize = Math.max(12, Math.round(baseDim * 0.012));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+
+    const metrics = ctx.measureText(text);
+    const pad = fontSize * 0.3;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillRect(
+      midX - metrics.width / 2 - pad,
+      midY - fontSize - pad * 1.5,
+      metrics.width + pad * 2,
+      fontSize + pad * 2
+    );
+
+    ctx.fillStyle = '#00ffff';
+    ctx.fillText(text, midX, midY);
+  }, [measureLine, raw, imgEl]);
+
   const fitToView = () => {
     const wrapper = wrapperRef.current;
     const imgW = raw?.width || imgEl?.naturalWidth;
@@ -400,6 +482,15 @@ export default function ZoomableCanvas({
               {/* Marker points (labeled circles for point selection) */}
               <canvas
                 ref={markerCanvasRef}
+                className="absolute top-0 left-0 pointer-events-none"
+                style={{
+                  width: raw?.width || imgEl?.naturalWidth || 0,
+                  height: raw?.height || imgEl?.naturalHeight || 0,
+                }}
+              />
+              {/* Measurement line overlay */}
+              <canvas
+                ref={measureCanvasRef}
                 className="absolute top-0 left-0 pointer-events-none"
                 style={{
                   width: raw?.width || imgEl?.naturalWidth || 0,

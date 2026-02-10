@@ -92,6 +92,11 @@ export default function CalibrationImageViewer({
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const playIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Measurement tool state
+  const [measureMode, setMeasureMode] = useState(false);
+  const [measureP1, setMeasureP1] = useState<{ x: number; y: number } | null>(null);
+  const [measureP2, setMeasureP2] = useState<{ x: number; y: number } | null>(null);
+
 
   // Hook for image loading
   const {
@@ -186,12 +191,39 @@ export default function CalibrationImageViewer({
     }
   }, [externalFrame]);
 
-  // Handle image click for point selection
+  // Handle image click for point selection or measurement
   const handleImageClick = (imageX: number, imageY: number) => {
-    if (pointSelectMode && onPointSelect) {
+    if (measureMode) {
+      if (!measureP1 || measureP2) {
+        // Start new measurement
+        setMeasureP1({ x: imageX, y: imageY });
+        setMeasureP2(null);
+      } else {
+        // Complete measurement
+        setMeasureP2({ x: imageX, y: imageY });
+      }
+    } else if (pointSelectMode && onPointSelect) {
       onPointSelect(imageX, imageY, externalCamera ?? camera, index);
     }
   };
+
+  // Clear measurement when mode is toggled off
+  useEffect(() => {
+    if (!measureMode) {
+      setMeasureP1(null);
+      setMeasureP2(null);
+    }
+  }, [measureMode]);
+
+  // Computed measurement result
+  const measureResult = measureP1 && measureP2 ? {
+    dx: measureP2.x - measureP1.x,
+    dy: measureP2.y - measureP1.y,
+    length: Math.sqrt((measureP2.x - measureP1.x) ** 2 + (measureP2.y - measureP1.y) ** 2),
+  } : null;
+
+  // Measure line prop for ZoomableCanvas
+  const measureLine = measureP1 ? { p1: measureP1, p2: measureP2 ?? undefined } : null;
 
   // Compute overlay points from saved detections for current frame
   const savedOverlayPoints = useMemo(() => {
@@ -426,9 +458,10 @@ export default function CalibrationImageViewer({
             panY={panY}
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
-            clickMode={pointSelectMode}
+            clickMode={pointSelectMode || measureMode}
             onImageClick={handleImageClick}
             markerPoints={selectedMarkers}
+            measureLine={measureLine}
           />
           {loading && !playing && (
             <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center rounded-lg">
@@ -504,6 +537,39 @@ export default function CalibrationImageViewer({
                 PNG
               </Button>
             </div>
+          </div>
+
+          {/* Measure Tool */}
+          <div className="border-l h-6 mx-2" />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={measureMode ? "default" : "outline"}
+              onClick={() => setMeasureMode(!measureMode)}
+              className="h-7 px-2"
+            >
+              Measure
+            </Button>
+            {measureMode && measureResult && (
+              <>
+                <span className="text-xs font-mono whitespace-nowrap">
+                  dx:{measureResult.dx.toFixed(1)} dy:{measureResult.dy.toFixed(1)} L:{measureResult.length.toFixed(1)}px
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setMeasureP1(null); setMeasureP2(null); }}
+                  className="h-6 px-1 text-xs"
+                >
+                  Clear
+                </Button>
+              </>
+            )}
+            {measureMode && !measureResult && (
+              <span className="text-xs text-muted-foreground">
+                {measureP1 ? 'Click second point' : 'Click first point'}
+              </span>
+            )}
           </div>
 
           {/* Extra controls (e.g. global coordinate inline controls) */}
