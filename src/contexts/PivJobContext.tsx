@@ -2,7 +2,8 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
 
-const POLL_INTERVAL_MS = 500;
+const POLL_INTERVAL_MS = 1000;
+const IMAGE_INTERVAL_MS = 3000;
 const STALE_JOB_HOURS = 24;
 
 // Storage keys for localStorage persistence
@@ -82,9 +83,10 @@ export function usePivJobContext() {
 interface PivJobProviderProps {
   children: ReactNode;
   config?: any;
+  activeTab?: string;
 }
 
-export function PivJobProvider({ children, config }: PivJobProviderProps) {
+export function PivJobProvider({ children, config, activeTab }: PivJobProviderProps) {
   // Job state for both modes
   const [instantaneousJob, setInstantaneousJob] = useState<PivJobState>(defaultJobState);
   const [ensembleJob, setEnsembleJob] = useState<PivJobState>(defaultJobState);
@@ -98,19 +100,37 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
   const ensembleSettingsRef = useRef(ensembleSettings);
   const instantaneousLastImageUpdateRef = useRef<number>(0);
   const ensembleLastImageUpdateRef = useRef<number>(0);
-  const instantaneousNextFrameIndexRef = useRef<number>(0);
-  const ensembleNextFrameIndexRef = useRef<number>(0);
   const instantaneousAvailableFramesRef = useRef<number[]>([]);
   const ensembleAvailableFramesRef = useRef<number[]>([]);
+  const activeTabRef = useRef(activeTab);
+
+  // Track previous settings to detect changes and trigger immediate re-render
+  const instantaneousPrevSettingsRef = useRef<string>('');
+  const ensemblePrevSettingsRef = useRef<string>('');
 
   // Keep refs updated
   useEffect(() => {
     instantaneousSettingsRef.current = instantaneousSettings;
+    // Detect settings change → reset throttle timer for immediate image update
+    const key = `${instantaneousSettings.varType}|${instantaneousSettings.cmap}|${instantaneousSettings.lowerLimit}|${instantaneousSettings.upperLimit}`;
+    if (instantaneousPrevSettingsRef.current && instantaneousPrevSettingsRef.current !== key) {
+      instantaneousLastImageUpdateRef.current = 0;
+    }
+    instantaneousPrevSettingsRef.current = key;
   }, [instantaneousSettings]);
 
   useEffect(() => {
     ensembleSettingsRef.current = ensembleSettings;
+    const key = `${ensembleSettings.varType}|${ensembleSettings.cmap}|${ensembleSettings.lowerLimit}|${ensembleSettings.upperLimit}`;
+    if (ensemblePrevSettingsRef.current && ensemblePrevSettingsRef.current !== key) {
+      ensembleLastImageUpdateRef.current = 0;
+    }
+    ensemblePrevSettingsRef.current = key;
   }, [ensembleSettings]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
   // Initialize active paths from config
   useEffect(() => {
@@ -175,6 +195,8 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
     const pollStatus = async () => {
       const settings = instantaneousSettingsRef.current;
       const jobId = instantaneousJob.jobId;
+      const currentTab = activeTabRef.current;
+      const isOnPivTab = currentTab === 'instantaneous' || currentTab === 'ensemble';
 
       try {
         const params = new URLSearchParams({
@@ -185,6 +207,7 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
         if (settings.cmap !== 'default') params.set('cmap', settings.cmap);
         if (jobId) params.set('job_id', jobId);
 
+        // Always poll lightweight status endpoints; skip image fetch when off-tab
         const [statusRes, logsRes, jobStatusRes] = await Promise.all([
           fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
           jobId ? fetch(`/backend/piv_logs?job_id=${jobId}`) : Promise.resolve(null),
@@ -219,37 +242,29 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
           newLogs = logsData.logs || '';
         }
 
-        // Update status image if needed - only fetch every 2 seconds to avoid hammering backend
+        // Update status image — only when on PIV tab and interval elapsed
         let newStatusImage: StatusImage | null = null; // null means "keep existing"
         const now = Date.now();
         const timeSinceLastUpdate = now - instantaneousLastImageUpdateRef.current;
 
-        if (settings.showStatusImage && availableFrames.length > 0) {
-          if (instantaneousLastImageUpdateRef.current === 0 || timeSinceLastUpdate >= 2000) {
-            let frameToShow: number;
-            if (instantaneousLastImageUpdateRef.current === 0) {
-              frameToShow = availableFrames[0];
-              instantaneousNextFrameIndexRef.current = 0;
-            } else {
-              const nextIdx = (instantaneousNextFrameIndexRef.current + 1) % availableFrames.length;
-              frameToShow = availableFrames[nextIdx];
-              instantaneousNextFrameIndexRef.current = nextIdx;
-            }
+        if (isOnPivTab && settings.showStatusImage && availableFrames.length > 0) {
+          if (instantaneousLastImageUpdateRef.current === 0 || timeSinceLastUpdate >= IMAGE_INTERVAL_MS) {
+            // Pick a random frame from the available set
+            const randomIdx = Math.floor(Math.random() * availableFrames.length);
+            const frameToShow = availableFrames[randomIdx];
 
-            if (availableFrames.includes(frameToShow)) {
-              const imageParams = new URLSearchParams(params);
-              imageParams.set('index', String(frameToShow));
-              const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
+            const imageParams = new URLSearchParams(params);
+            imageParams.set('index', String(frameToShow));
+            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
 
-              if (imageRes.ok) {
-                const data = await imageRes.json();
-                if (data.image) {
-                  newStatusImage = { src: data.image, error: null };
-                  instantaneousLastImageUpdateRef.current = now;
-                }
-              } else if (imageRes.status !== 404) {
-                newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
+            if (imageRes.ok) {
+              const data = await imageRes.json();
+              if (data.image) {
+                newStatusImage = { src: data.image, error: null };
+                instantaneousLastImageUpdateRef.current = now;
               }
+            } else if (imageRes.status !== 404) {
+              newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
             }
           }
         }
@@ -291,6 +306,8 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
     const pollStatus = async () => {
       const settings = ensembleSettingsRef.current;
       const jobId = ensembleJob.jobId;
+      const currentTab = activeTabRef.current;
+      const isOnPivTab = currentTab === 'instantaneous' || currentTab === 'ensemble';
 
       try {
         const params = new URLSearchParams({
@@ -335,37 +352,29 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
           newLogs = logsData.logs || '';
         }
 
-        // Update status image if needed - only fetch every 2 seconds to avoid hammering backend
+        // Update status image — only when on PIV tab and interval elapsed
         let newStatusImage: StatusImage | null = null; // null means "keep existing"
         const now = Date.now();
         const timeSinceLastUpdate = now - ensembleLastImageUpdateRef.current;
 
-        if (settings.showStatusImage && availableFrames.length > 0) {
-          if (ensembleLastImageUpdateRef.current === 0 || timeSinceLastUpdate >= 2000) {
-            let frameToShow: number;
-            if (ensembleLastImageUpdateRef.current === 0) {
-              frameToShow = availableFrames[0];
-              ensembleNextFrameIndexRef.current = 0;
-            } else {
-              const nextIdx = (ensembleNextFrameIndexRef.current + 1) % availableFrames.length;
-              frameToShow = availableFrames[nextIdx];
-              ensembleNextFrameIndexRef.current = nextIdx;
-            }
+        if (isOnPivTab && settings.showStatusImage && availableFrames.length > 0) {
+          if (ensembleLastImageUpdateRef.current === 0 || timeSinceLastUpdate >= IMAGE_INTERVAL_MS) {
+            // Pick a random frame from the available set
+            const randomIdx = Math.floor(Math.random() * availableFrames.length);
+            const frameToShow = availableFrames[randomIdx];
 
-            if (availableFrames.includes(frameToShow)) {
-              const imageParams = new URLSearchParams(params);
-              imageParams.set('index', String(frameToShow));
-              const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
+            const imageParams = new URLSearchParams(params);
+            imageParams.set('index', String(frameToShow));
+            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
 
-              if (imageRes.ok) {
-                const data = await imageRes.json();
-                if (data.image) {
-                  newStatusImage = { src: data.image, error: null };
-                  ensembleLastImageUpdateRef.current = now;
-                }
-              } else if (imageRes.status !== 404) {
-                newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
+            if (imageRes.ok) {
+              const data = await imageRes.json();
+              if (data.image) {
+                newStatusImage = { src: data.image, error: null };
+                ensembleLastImageUpdateRef.current = now;
               }
+            } else if (imageRes.status !== 404) {
+              newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
             }
           }
         }
@@ -404,7 +413,6 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
     const setJob = mode === 'instantaneous' ? setInstantaneousJob : setEnsembleJob;
     const storageKey = mode === 'instantaneous' ? STORAGE_KEY_INSTANTANEOUS : STORAGE_KEY_ENSEMBLE;
     const lastImageUpdateRef = mode === 'instantaneous' ? instantaneousLastImageUpdateRef : ensembleLastImageUpdateRef;
-    const nextFrameIndexRef = mode === 'instantaneous' ? instantaneousNextFrameIndexRef : ensembleNextFrameIndexRef;
     const availableFramesRef = mode === 'instantaneous' ? instantaneousAvailableFramesRef : ensembleAvailableFramesRef;
 
     setJob(prev => ({
@@ -417,7 +425,6 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
 
     // Reset refs
     lastImageUpdateRef.current = 0;
-    nextFrameIndexRef.current = 0;
     availableFramesRef.current = [];
 
     try {
@@ -505,12 +512,10 @@ export function PivJobProvider({ children, config }: PivJobProviderProps) {
   const resetJob = useCallback((mode: 'instantaneous' | 'ensemble') => {
     const setJob = mode === 'instantaneous' ? setInstantaneousJob : setEnsembleJob;
     const lastImageUpdateRef = mode === 'instantaneous' ? instantaneousLastImageUpdateRef : ensembleLastImageUpdateRef;
-    const nextFrameIndexRef = mode === 'instantaneous' ? instantaneousNextFrameIndexRef : ensembleNextFrameIndexRef;
     const availableFramesRef = mode === 'instantaneous' ? instantaneousAvailableFramesRef : ensembleAvailableFramesRef;
 
     // Reset refs
     lastImageUpdateRef.current = 0;
-    nextFrameIndexRef.current = 0;
     availableFramesRef.current = [];
 
     // Reset job state to default (but keep jobId null since we're just clearing the display)
