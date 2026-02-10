@@ -162,7 +162,7 @@ const VARIABLE_UNITS: Record<string, string> = {
 };
 
 // Inline Vector Merging Hook
-const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any) => {
+const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: string) => {
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
   const [merging, setMerging] = useState(false);
   const [mergingJobId, setMergingJobId] = useState<string | null>(null);
@@ -176,13 +176,19 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
   const configTypeName = mergingConfig.type_name || "instantaneous";
   const configEndpoint = mergingConfig.endpoint || "";
 
-  // Initialize selected cameras: prefer config, then first 2 camera options
+  // Derive effective type_name from dataSource (avoids async config race)
+  const effectiveTypeName = useMemo(() => {
+    if (dataSource?.includes('ensemble')) return 'ensemble';
+    return configTypeName;
+  }, [dataSource, configTypeName]);
+
+  // Initialize selected cameras: prefer config, then all camera options
   useEffect(() => {
     if (selectedCameras.length === 0) {
       if (configCameras.length >= 2) {
         setSelectedCameras(configCameras);
       } else if (cameraOptions.length >= 2) {
-        setSelectedCameras([cameraOptions[0], cameraOptions[1]]);
+        setSelectedCameras([...cameraOptions]);
       }
     }
   }, [cameraOptions, configCameras, selectedCameras.length]);
@@ -216,7 +222,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
       const body: any = {
         base_path_idx: basePathIdx,
         cameras: selectedCameras,
-        type_name: configTypeName,
+        type_name: effectiveTypeName,
         endpoint: configEndpoint,
         image_count: maxFrameCount,
       };
@@ -253,7 +259,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
       setJobDetails({ error: error.message });
       setMerging(false);
     }
-  }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount, configTypeName, configEndpoint]);
+  }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount, effectiveTypeName, configEndpoint]);
 
   // Poll for job status
   useEffect(() => {
@@ -546,12 +552,42 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     basePathIdx,
     cameraOptions,
     maxFrameCount,
-    config
+    config,
+    dataSource
   );
 
   // Derived values from merging job details
   const mergingProgress = mergingDetails?.progress || 0;
   const mergingError = mergingDetails?.error || null;
+
+  // Auto-switch to merged data source on merge completion
+  const [pendingMergeSwitch, setPendingMergeSwitch] = useState<DataSourceType | null>(null);
+  const hasRefreshedAfterMergeCompletion = useRef(false);
+
+  // When merge completes, refresh availability and prepare to switch
+  useEffect(() => {
+    if (mergingStatus === "completed" && !hasRefreshedAfterMergeCompletion.current) {
+      hasRefreshedAfterMergeCompletion.current = true;
+      const target: DataSourceType = dataSource.includes('ensemble')
+        ? 'merged_ensemble' : 'merged_instantaneous';
+      setPendingMergeSwitch(target);
+      fetchAvailableDataSources(true);
+    }
+    if (mergingStatus !== "completed") {
+      hasRefreshedAfterMergeCompletion.current = false;
+    }
+  }, [mergingStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switch once availability has been refreshed
+  useEffect(() => {
+    if (pendingMergeSwitch && !availabilityLoading) {
+      const available = availableDataSources[pendingMergeSwitch as keyof typeof availableDataSources];
+      if (available?.exists) {
+        setDataSource(pendingMergeSwitch);
+      }
+      setPendingMergeSwitch(null);
+    }
+  }, [pendingMergeSwitch, availabilityLoading, availableDataSources, setDataSource]);
 
   // Stop playing on error
   useEffect(() => {
@@ -664,8 +700,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </Select>
             </div>
 
-            {/* Camera Selection - Hide when merged, show "Stereo" only when viewing stereo data */}
-            {!isMerged && (
+            {/* Camera Selection - Hide when merged or single camera, show "Stereo" only when viewing stereo data */}
+            {!isMerged && cameraOptions.length > 1 && (
               <div className="flex items-center gap-2">
                 <label className="text-sm font-medium min-w-[100px]">
                   {isStereoData ? "Source:" : "Camera:"}
@@ -1128,6 +1164,42 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   </div>
                 )}
               </div>
+
+              {/* Camera skipper - shown when multiple cameras, not merged, not stereo */}
+              {!isMerged && !isStereoData && cameraOptions.length > 1 && (
+                <div className="flex items-center justify-center gap-2 p-2 bg-gray-50 border rounded-lg">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-8 p-0"
+                    disabled={cameraOptions.indexOf(camera) <= 0}
+                    onClick={() => {
+                      const idx = cameraOptions.indexOf(camera);
+                      if (idx > 0) setCamera(cameraOptions[idx - 1]);
+                    }}
+                  >
+                    &lsaquo;
+                  </Button>
+                  <span className="text-sm font-medium min-w-[80px] text-center">
+                    Camera {camera}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-8 p-0"
+                    disabled={cameraOptions.indexOf(camera) >= cameraOptions.length - 1}
+                    onClick={() => {
+                      const idx = cameraOptions.indexOf(camera);
+                      if (idx < cameraOptions.length - 1) setCamera(cameraOptions[idx + 1]);
+                    }}
+                  >
+                    &rsaquo;
+                  </Button>
+                  <span className="text-xs text-gray-500">
+                    {cameraOptions.indexOf(camera) + 1} / {cameraOptions.length}
+                  </span>
+                </div>
+              )}
 
               {/* Frame controls - Hidden for ensemble, statistics, and mean variables */}
               {maxFrameCount > 0 && hasFrameNavigation && (
@@ -1774,55 +1846,88 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Merging Panel - Only for calibrated instantaneous with multiple cameras, not stereo */}
+            {/* Merging Panel - For calibrated data with multiple cameras, not stereo */}
             {showMerging && canMerge && cameraOptions.length > 1 && !isMeanVar && !isStereo && (
               <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg space-y-3">
                 <h3 className="text-lg font-semibold text-green-900">Merge Vectors</h3>
                 <p className="text-xs text-green-800">
-                  Merge vector fields from multiple cameras into a single combined field.
+                  Merge <strong>{isEnsemble ? 'ensemble' : 'instantaneous'}</strong> vector fields from adjacent cameras into a single combined field.
                 </p>
 
                 {!mergingJobId && (
                   <div className="space-y-3">
                     <div>
-                      <label className="text-xs font-medium text-gray-700 mb-1.5 block">Select Cameras to Merge:</label>
-                      <div className="flex flex-wrap gap-2">
-                        {cameraOptions.map((cam: number) => (
-                          <label key={cam} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-gray-300 rounded-md hover:bg-gray-50 cursor-pointer transition-colors text-sm">
-                            <input
-                              type="checkbox"
-                              checked={selectedMergeCameras.includes(cam)}
-                              onChange={e => {
-                                if (e.target.checked) {
-                                  updateMergeCameras([...selectedMergeCameras, cam]);
-                                } else {
-                                  updateMergeCameras(selectedMergeCameras.filter(c => c !== cam));
-                                }
-                              }}
-                              className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                            />
-                            <span className="text-xs font-medium">Cam {cam}</span>
-                          </label>
-                        ))}
+                      <label className="text-xs font-medium text-gray-700 mb-1.5 block">Camera Range to Merge:</label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-600">From</span>
+                        <Select
+                          value={String(selectedMergeCameras.length > 0 ? selectedMergeCameras[0] : cameraOptions[0])}
+                          onValueChange={v => {
+                            const from = Number(v);
+                            const currentTo = selectedMergeCameras.length > 0 ? selectedMergeCameras[selectedMergeCameras.length - 1] : from;
+                            const to = Math.max(from, currentTo);
+                            // Build continuous range
+                            const range = cameraOptions.filter((c: number) => c >= from && c <= to);
+                            updateMergeCameras(range.length >= 2 ? range : [from]);
+                          }}
+                        >
+                          <SelectTrigger className="w-28">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {cameraOptions.map((cam: number) => (
+                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-xs text-gray-600">to</span>
+                        <Select
+                          value={String(selectedMergeCameras.length > 0 ? selectedMergeCameras[selectedMergeCameras.length - 1] : cameraOptions[cameraOptions.length - 1])}
+                          onValueChange={v => {
+                            const to = Number(v);
+                            const currentFrom = selectedMergeCameras.length > 0 ? selectedMergeCameras[0] : cameraOptions[0];
+                            const from = Math.min(currentFrom, to);
+                            // Build continuous range
+                            const range = cameraOptions.filter((c: number) => c >= from && c <= to);
+                            updateMergeCameras(range.length >= 2 ? range : [to]);
+                          }}
+                        >
+                          <SelectTrigger className="w-28">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {cameraOptions.filter((cam: number) =>
+                              cam >= (selectedMergeCameras.length > 0 ? selectedMergeCameras[0] : cameraOptions[0])
+                            ).map((cam: number) => (
+                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-xs text-gray-500 ml-1">
+                          ({selectedMergeCameras.length} cameras)
+                        </span>
                       </div>
                     </div>
 
                     <div className="flex gap-2">
-                      <Button
-                        onClick={() => mergeVectors(index)}
-                        disabled={merging || selectedMergeCameras.length < 2}
-                        className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2"
-                        size="sm"
-                      >
-                        {merging ? "Merging..." : `Merge Frame ${index}`}
-                      </Button>
+                      {/* Single-frame merge: only for instantaneous (ensemble has just 1 file) */}
+                      {!isEnsemble && (
+                        <Button
+                          onClick={() => mergeVectors(index)}
+                          disabled={merging || selectedMergeCameras.length < 2}
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2"
+                          size="sm"
+                        >
+                          {merging ? "Merging..." : `Merge Frame ${index}`}
+                        </Button>
+                      )}
                       <Button
                         onClick={() => mergeVectors()}
                         disabled={merging || selectedMergeCameras.length < 2}
                         className="flex-1 bg-green-700 hover:bg-green-800 text-white text-xs py-2"
                         size="sm"
                       >
-                        {merging ? "Merging..." : `Merge All (${maxFrameCount})`}
+                        {merging ? "Merging..." : isEnsemble ? "Merge Ensemble" : `Merge All (${maxFrameCount})`}
                       </Button>
                     </div>
                   </div>
@@ -1858,7 +1963,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           <div>
                             <h5 className="text-xs font-semibold text-green-800">Merge Successful</h5>
                             <p className="text-xs text-green-700 mt-0.5">
-                              Vectors merged successfully. Select "Merged Cameras" data source to view results.
+                              Vectors merged successfully. Switching to merged view...
                             </p>
                           </div>
                         </div>

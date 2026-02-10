@@ -177,8 +177,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Feature availability based on data source
   const canTransform = useMemo(() => !isUncalibrated, [isUncalibrated]);
   const canEditCoordinates = useMemo(() => !isUncalibrated, [isUncalibrated]);
-  // Merging is NOT allowed for stereo (already 3D combined data)
-  const canMerge = useMemo(() => !isUncalibrated && !isEnsemble && !isStereoData && !isStereo, [isUncalibrated, isEnsemble, isStereoData, isStereo]);
+  // Merging is NOT allowed for stereo (already 3D combined data) or uncalibrated
+  const canMerge = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
   const canViewMerged = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
   // For unified dropdown: check if current variable is from mean_stats
   const isMeanVar = useMemo(() => type.startsWith('mean:'), [type]);
