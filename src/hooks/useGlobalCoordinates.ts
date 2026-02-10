@@ -42,7 +42,8 @@ function generatePairs(cameras: number[]): OverlapPair[] {
 export function useGlobalCoordinates(
   config: any,
   updateConfig: (path: string[], value: any) => void,
-  cameraOptions: number[]
+  cameraOptions: number[],
+  calibrationSources?: string[]
 ) {
   const [enabled, setEnabled] = useState(false);
   const [datumPixel, setDatumPixel] = useState<[number, number] | null>(null);
@@ -56,6 +57,55 @@ export function useGlobalCoordinates(
 
   // Debounce timer ref
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track calibration sources to clear stale feature data on source change.
+  // Pixel-dependent data (datum_pixel, overlap pairs, invert_ux) becomes invalid
+  // when the calibration images change.
+  const prevCalibSourcesRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!calibrationSources || calibrationSources.length === 0) return;
+
+    const currentKey = JSON.stringify(calibrationSources);
+
+    if (prevCalibSourcesRef.current === null) {
+      // First non-empty value after mount — just record, don't reset
+      prevCalibSourcesRef.current = currentKey;
+      return;
+    }
+
+    if (currentKey !== prevCalibSourcesRef.current) {
+      prevCalibSourcesRef.current = currentKey;
+
+      // Source changed — clear pixel-dependent feature data
+      setDatumPixel(null);
+      setOverlapPairs(generatePairs(cameraOptions));
+      setInvertUxState(false);
+      setInvertUxManual(false);
+
+      // Persist reset to backend (direct fetch to avoid saveToConfig dependency issues)
+      const gc = config?.calibration?.global_coordinates;
+      const resetPayload = {
+        enabled: gc?.enabled ?? false,
+        datum_camera: 1,
+        datum_pixel: null,
+        datum_physical: gc?.datum_physical ?? [0, 0],
+        datum_frame: gc?.datum_frame ?? 1,
+        invert_ux: false,
+        overlap_pairs: [],
+      };
+
+      fetch('/backend/update_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration: { global_coordinates: resetPayload }
+        })
+      }).catch(e => console.error('Failed to reset global coordinates:', e));
+
+      updateConfig(["calibration", "global_coordinates"], resetPayload);
+    }
+  }, [calibrationSources, cameraOptions, updateConfig]);
 
   // Load from config on mount — always generate pairs for adjacent cameras, merging saved values
   useEffect(() => {
@@ -97,7 +147,7 @@ export function useGlobalCoordinates(
 
     if (!gc) return;
     setEnabled(gc.enabled ?? false);
-    setDatumPixel(gc.datum_pixel ?? null);
+    setDatumPixel(gc.datum_pixel && gc.datum_pixel[0] != null && gc.datum_pixel[1] != null ? gc.datum_pixel : null);
     setDatumPhysicalX(String(gc.datum_physical?.[0] ?? 0));
     setDatumPhysicalY(String(gc.datum_physical?.[1] ?? 0));
     setDatumFrame(gc.datum_frame ?? 1);

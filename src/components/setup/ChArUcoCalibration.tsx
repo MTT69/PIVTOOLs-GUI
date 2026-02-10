@@ -91,17 +91,17 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     sourcePaths
   );
 
-  // Global coordinate system
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
-  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
-  const gcIsSelecting = gc.selectionMode !== "none";
-
   // Calibration image settings state (unified from calibration block)
   const [showImageViewer, setShowImageViewer] = useState(false);
   const [imageFormat, setImageFormat] = useState("calib%05d.tif");
   const [imageType, setImageType] = useState("standard");
   const [numImages, setNumImages] = useState<string>("10");
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
+
+  // Global coordinate system — pass calibrationSources so stale features reset on source change
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
+  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
+  const gcIsSelecting = gc.selectionMode !== "none";
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
@@ -792,7 +792,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
               <div className="font-mono text-xs bg-muted p-2 rounded">
                 {cameraModel.camera_matrix?.map((row: number[], i: number) => (
-                  <div key={i}>[{row.map(v => v.toFixed(2)).join(', ')}]</div>
+                  <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
                 ))}
               </div>
             </div>
@@ -824,7 +824,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <div>
               <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
               <div className="font-mono text-xs bg-muted p-2 rounded">
-                [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(6)).join(', ')}]
+                [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
               </div>
             </div>
 

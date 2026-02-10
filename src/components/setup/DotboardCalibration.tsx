@@ -105,8 +105,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     calibrateVectors,
   } = calibration;
 
-  // Global coordinate system
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
+  // Global coordinate system — pass calibrationSources so stale features reset on source change
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
 
@@ -706,7 +706,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
                 <div className="font-mono text-xs bg-muted p-2 rounded">
                   {cameraModel.camera_matrix?.map((row: number[], i: number) => (
-                    <div key={i}>[{row.map(v => v.toFixed(2)).join(', ')}]</div>
+                    <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
                   ))}
                 </div>
               </div>
@@ -738,7 +738,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <div>
                 <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
                 <div className="font-mono text-xs bg-muted p-2 rounded">
-                  [{cameraModel.dist_coeffs?.map((d: number) => d.toFixed(6)).join(', ')}]
+                  [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
                 </div>
               </div>
 

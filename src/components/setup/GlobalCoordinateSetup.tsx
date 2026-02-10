@@ -202,7 +202,7 @@ export function GCInlineControls({
                       : `Pick F${featureIdx}`}
                     <span className="text-[10px] opacity-60 ml-0.5">{'\u2194'}C{otherCamera}</span>
                   </Button>
-                  {featurePixel && (
+                  {featurePixel && featurePixel[0] != null && featurePixel[1] != null && (
                     <span className="text-xs text-blue-600 whitespace-nowrap">
                       C{currentCamera}F{featureIdx}({featurePixel[0].toFixed(0)},{featurePixel[1].toFixed(0)})
                     </span>

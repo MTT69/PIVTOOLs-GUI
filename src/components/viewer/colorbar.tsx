@@ -43,9 +43,9 @@ export default function Colorbar({ vmin, vmax, colormap, height = 240 }: Colorba
 
   return (
     <div className="flex flex-col items-center">
-      <span className="text-xs">{vmax.toFixed(0)}</span>
+      <span className="text-xs">{vmax?.toFixed(0) ?? ""}</span>
       <canvas ref={canvasRef} className="rounded border my-1" />
-      <span className="text-xs">{vmin.toFixed(0)}</span>
+      <span className="text-xs">{vmin?.toFixed(0) ?? ""}</span>
     </div>
   );
 }

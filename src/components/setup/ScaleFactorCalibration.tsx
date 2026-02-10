@@ -61,11 +61,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     imageCount
   );
 
-  // Global coordinate system
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions);
-  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
-  const gcIsSelecting = gc.selectionMode !== "none";
-
   // Camera selector for viewer
   const [camera, setCamera] = useState(cameraOptions[0] || 1);
 
@@ -74,6 +69,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   // Calibration image config (shared across all calibration methods)
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
+
+  // Global coordinate system — pass calibrationSources so stale features reset on source change
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
+  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
+  const gcIsSelecting = gc.selectionMode !== "none";
   const [imageFormat, setImageFormat] = useState('calib%05d.tif');
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState<string>("10");

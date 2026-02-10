@@ -655,7 +655,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Stereo calibration completed successfully!
                 {jobStatus.stereo_rms_error && (
-                  <span className="ml-2">RMS: {jobStatus.stereo_rms_error.toFixed(4)} px</span>
+                  <span className="ml-2">RMS: {jobStatus.stereo_rms_error?.toFixed(4)} px</span>
                 )}
               </div>
             )}
@@ -787,14 +787,14 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   <h5 className="text-xs font-medium mb-1 text-muted-foreground">Rotation Matrix (R)</h5>
                   <div className="font-mono text-xs bg-muted p-2 rounded">
                     {stereoModel.rotation_matrix?.map((row: number[], i: number) => (
-                      <div key={i}>[{row.map(v => v.toFixed(6)).join(', ')}]</div>
+                      <div key={i}>[{row.map(v => v?.toFixed(6) ?? 'null').join(', ')}]</div>
                     ))}
                   </div>
                 </div>
                 <div>
                   <h5 className="text-xs font-medium mb-1 text-muted-foreground">Translation Vector (T)</h5>
                   <div className="font-mono text-xs bg-muted p-2 rounded">
-                    [{stereoModel.translation_vector?.map((v: number) => v.toFixed(4)).join(', ')}]
+                    [{stereoModel.translation_vector?.map((v: number) => v?.toFixed(4) ?? 'null').join(', ')}]
                   </div>
                 </div>
               </div>

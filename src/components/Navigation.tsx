@@ -39,7 +39,7 @@ export default function Navigation() {
               Settings
             </a>
             <a 
-              href="https://github.com/MTT69/PIVTOOLS" 
+              href="https://github.com/MTT69/python-PIVTOOLs" 
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-600 hover:text-soton-blue px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2"
@@ -47,10 +47,11 @@ export default function Navigation() {
               <Github size={18} />
               GitHub
             </a>
-            <a 
-              href="#" 
+            <a
+              href="https://www.piv.tools/"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-gray-600 hover:text-soton-blue px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2"
-              onClick={() => {}}
             >
               <HelpCircle size={18} />
               Documentation
@@ -79,7 +80,7 @@ export default function Navigation() {
                 Settings
               </a>
               <a
-                href="https://github.com/MTT69/PIVTOOLS"
+                href="https://github.com/MTT69/python-PIVTOOLs"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-gray-600 hover:text-soton-blue block px-3 py-2 rounded-md text-base font-medium flex items-center gap-2"
@@ -89,7 +90,9 @@ export default function Navigation() {
                 GitHub
               </a>
               <a
-                href="#"
+                href="https://www.piv.tools/"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="text-gray-600 hover:text-soton-blue block px-3 py-2 rounded-md text-base font-medium flex items-center gap-2"
                 onClick={() => setIsOpen(false)}
               >
