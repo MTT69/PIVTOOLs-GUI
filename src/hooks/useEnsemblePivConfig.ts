@@ -18,6 +18,7 @@ export interface EnsemblePivConfig {
   store_planes?: boolean;
   save_diagnostics?: boolean;
   resume_from_pass?: number;
+  correlation_normalization?: 'none' | 'per_frame';
 }
 
 // --- Helper Function ---
@@ -76,6 +77,8 @@ export function useEnsemblePivConfig(
   const [storePlanes, setStorePlanes] = useState<boolean>(config.store_planes ?? false);
   const [saveDiagnostics, setSaveDiagnostics] = useState<boolean>(config.save_diagnostics ?? false);
   const [resumeFromPass, setResumeFromPass] = useState<number | string>(config.resume_from_pass ?? 0);
+  const [correlationNormalization, setCorrelationNormalization] =
+    useState<'none' | 'per_frame'>(config.correlation_normalization ?? 'none');
 
   // --- Refs for Debouncing and Feedback Loop Prevention ---
   const saveTimerRef = useRef<number | null>(null);
@@ -86,12 +89,14 @@ export function useEnsemblePivConfig(
     storePlanes: boolean;
     saveDiagnostics: boolean;
     resumeFromPass: number | string;
+    correlationNormalization: 'none' | 'per_frame';
   }>({
     passes: initialPasses,
     sumWindow: [config.sum_window?.[0] ?? 16, config.sum_window?.[1] ?? 16],
     storePlanes: config.store_planes ?? false,
     saveDiagnostics: config.save_diagnostics ?? false,
-    resumeFromPass: config.resume_from_pass ?? 0
+    resumeFromPass: config.resume_from_pass ?? 0,
+    correlationNormalization: config.correlation_normalization ?? 'none',
   });
 
   // --- Backend Synchronization ---
@@ -100,7 +105,8 @@ export function useEnsemblePivConfig(
     sumWindowToSave: [number | string, number | string],
     storePlanesToSave: boolean,
     saveDiagnosticsToSave: boolean,
-    resumeFromPassToSave: number | string
+    resumeFromPassToSave: number | string,
+    correlationNormalizationToSave: 'none' | 'per_frame'
   ) => {
     if (Date.now() < suppressUntilRef.current) return;
 
@@ -112,8 +118,9 @@ export function useEnsemblePivConfig(
     const storePlanesChanged = storePlanesToSave !== lastSavedRef.current.storePlanes;
     const saveDiagnosticsChanged = saveDiagnosticsToSave !== lastSavedRef.current.saveDiagnostics;
     const resumeFromPassChanged = resumeFromPassToSave !== lastSavedRef.current.resumeFromPass;
+    const correlationNormalizationChanged = correlationNormalizationToSave !== lastSavedRef.current.correlationNormalization;
 
-    if (!passesChanged && !sumWindowChanged && !storePlanesChanged && !saveDiagnosticsChanged && !resumeFromPassChanged) {
+    if (!passesChanged && !sumWindowChanged && !storePlanesChanged && !saveDiagnosticsChanged && !resumeFromPassChanged && !correlationNormalizationChanged) {
       return;
     }
 
@@ -122,7 +129,8 @@ export function useEnsemblePivConfig(
       sumWindow: [sumWindowToSave[0], sumWindowToSave[1]],
       storePlanes: storePlanesToSave,
       saveDiagnostics: saveDiagnosticsToSave,
-      resumeFromPass: resumeFromPassToSave
+      resumeFromPass: resumeFromPassToSave,
+      correlationNormalization: correlationNormalizationToSave,
     };
 
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -148,6 +156,7 @@ export function useEnsemblePivConfig(
         store_planes: storePlanesToSave,
         save_diagnostics: saveDiagnosticsToSave,
         resume_from_pass: typeof resumeFromPassToSave === 'number' ? resumeFromPassToSave : parseInt(resumeFromPassToSave as string) || 0,
+        correlation_normalization: correlationNormalizationToSave,
       };
 
       try {
@@ -171,8 +180,8 @@ export function useEnsemblePivConfig(
   // --- Effects ---
   // Auto-save when local state changes
   useEffect(() => {
-    autoSave(passes, sumWindow, storePlanes, saveDiagnostics, resumeFromPass);
-  }, [passes, sumWindow, storePlanes, saveDiagnostics, resumeFromPass, autoSave]);
+    autoSave(passes, sumWindow, storePlanes, saveDiagnostics, resumeFromPass, correlationNormalization);
+  }, [passes, sumWindow, storePlanes, saveDiagnostics, resumeFromPass, correlationNormalization, autoSave]);
 
   // Sync with incoming config changes, avoiding feedback loops
   useEffect(() => {
@@ -218,7 +227,10 @@ export function useEnsemblePivConfig(
     if (config.resume_from_pass !== undefined && config.resume_from_pass !== resumeFromPass) {
       setResumeFromPass(config.resume_from_pass);
     }
-  }, [config.window_size, config.overlap, config.runs, config.type, config.sum_window, config.store_planes, config.save_diagnostics, config.resume_from_pass]);
+    if (config.correlation_normalization !== undefined && config.correlation_normalization !== correlationNormalization) {
+      setCorrelationNormalization(config.correlation_normalization);
+    }
+  }, [config.window_size, config.overlap, config.runs, config.type, config.sum_window, config.store_planes, config.save_diagnostics, config.resume_from_pass, config.correlation_normalization]);
 
   // --- State Mutators ---
   const addPass = () => setPasses(p => {
@@ -311,6 +323,8 @@ export function useEnsemblePivConfig(
     toggleSaveDiagnostics,
     resumeFromPass,
     updateResumeFromPass,
-    hasSinglePass
+    hasSinglePass,
+    correlationNormalization,
+    setCorrelationNormalization
   };
 }

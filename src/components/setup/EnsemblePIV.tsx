@@ -37,7 +37,9 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
     toggleSaveDiagnostics,
     resumeFromPass,
     updateResumeFromPass,
-    hasSinglePass
+    hasSinglePass,
+    correlationNormalization,
+    setCorrelationNormalization
   } = useEnsemblePivConfig(config.ensemble_piv, updateConfig);
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
@@ -316,6 +318,26 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     />
                     <p className="text-xs text-muted-foreground">0 = fresh start, N = resume from pass N</p>
                   </div>
+                </div>
+
+                <div className="space-y-1 max-w-xs">
+                  <Label className="text-sm">Correlation Normalization</Label>
+                  <Select
+                    value={correlationNormalization}
+                    onValueChange={(v: 'none' | 'per_frame') => setCorrelationNormalization(v)}
+                  >
+                    <SelectTrigger className="h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="per_frame">Per-Frame</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Per-frame normalizes each frame&apos;s correlation by sqrt(var_A &times; var_B),
+                    equalizing contributions regardless of image intensity.
+                  </p>
                 </div>
               </div>
             )}
