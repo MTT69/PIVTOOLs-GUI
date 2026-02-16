@@ -549,6 +549,35 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           </div>
         )}
 
+        {/* Global Alignment Result */}
+        {scaleFactorJobId && scaleFactorJobStatus === 'completed' && scaleFactorJobDetails?.camera_progress?.global_alignment && (
+          <>
+            {scaleFactorJobDetails.camera_progress.global_alignment.status === 'completed' && (
+              <div className="mt-2 p-3 border rounded bg-blue-50 text-blue-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Global coordinate alignment applied
+                {scaleFactorJobDetails.camera_progress.global_alignment.cameras && (
+                  <span> ({Object.keys(scaleFactorJobDetails.camera_progress.global_alignment.cameras).length} cameras)</span>
+                )}
+                {scaleFactorJobDetails.camera_progress.global_alignment.invert_ux && (
+                  <span> + invert_ux</span>
+                )}
+              </div>
+            )}
+            {scaleFactorJobDetails.camera_progress.global_alignment.status === 'failed' && (
+              <div className="mt-2 p-3 border rounded bg-yellow-50 text-yellow-700 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Global alignment warning: {scaleFactorJobDetails.camera_progress.global_alignment.error}
+              </div>
+            )}
+            {scaleFactorJobDetails.camera_progress.global_alignment.status === 'skipped' && (
+              <div className="mt-2 p-2 text-xs text-muted-foreground">
+                Global coordinate alignment skipped (disabled in config)
+              </div>
+            )}
+          </>
+        )}
+
         {/* Vector Calibration Failed */}
         {scaleFactorJobId && scaleFactorJobStatus === 'failed' && scaleFactorJobDetails?.error && (
           <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">

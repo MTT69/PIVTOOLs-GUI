@@ -54,12 +54,22 @@ export interface JobStatus {
 /**
  * Multi-camera job status
  */
+export interface GlobalAlignmentResult {
+  status: 'completed' | 'failed' | 'skipped';
+  error?: string;
+  cameras?: Record<number, { shift_x: number; shift_y: number; source: string }>;
+  invert_ux?: boolean;
+  reason?: string;
+}
+
 export interface MultiCameraJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   processed_cameras: number;
   total_cameras: number;
   current_camera?: number;
-  camera_results?: Record<number, { status: string; error?: string }>;
+  camera_results?: Record<string, { status: string; error?: string }> & {
+    global_alignment?: GlobalAlignmentResult;
+  };
   camera_progress?: Record<number, { current: number; total: number; message?: string }>;
   elapsed_time?: number;
   error?: string;

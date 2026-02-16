@@ -45,55 +45,48 @@ export default function Home() {
     setMounted(true);
   }, []);
 
-  // Load YAML config from backend once on mount
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch('/backend/config');
-        if (!res.ok) {
-          if (!cancelled) {
-            setConfigError('Cannot connect to backend server. Please ensure the server is running.');
-          }
-          return;
-        }
-        const json = await res.json();
-        if (!cancelled) {
-          // Map YAML structure to frontend structure, preserving all fields
-          const mapped = {
-            ...json,
-            paths: {
-              base_paths: json.paths?.base_paths || [],
-              source_paths: json.paths?.source_paths || [],
-              camera_numbers: json.paths?.camera_numbers || [],
-              camera_count: json.paths?.camera_count,
-              camera_subfolders: json.paths?.camera_subfolders || [],
-            },
-            images: json.images || {},
-            batches: json.batches || {},
-            processing: json.processing || {},
-            post_processing: json.post_processing || [],
-            plots: json.plots || {},
-            videos: json.videos || [],
-            statistics_extraction: json.statistics_extraction ?? null,
-            instantaneous_piv: json.instantaneous_piv || {},
-            ensemble_piv: json.ensemble_piv || {},
-            calibration_format: json.calibration_format || {},
-            calibration: json.calibration || {},
-            filters: json.filters || [],
-          };
-          setConfig(mapped);
-          setConfigError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setConfigError('Cannot connect to backend server. Please ensure the server is running.');
-        }
+  // Fetch config from backend and update state
+  const fetchConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/backend/config');
+      if (!res.ok) {
+        setConfigError('Cannot connect to backend server. Please ensure the server is running.');
+        return;
       }
+      const json = await res.json();
+      const mapped = {
+        ...json,
+        paths: {
+          base_paths: json.paths?.base_paths || [],
+          source_paths: json.paths?.source_paths || [],
+          camera_numbers: json.paths?.camera_numbers || [],
+          camera_count: json.paths?.camera_count,
+          camera_subfolders: json.paths?.camera_subfolders || [],
+        },
+        images: json.images || {},
+        batches: json.batches || {},
+        processing: json.processing || {},
+        post_processing: json.post_processing || [],
+        plots: json.plots || {},
+        videos: json.videos || [],
+        statistics_extraction: json.statistics_extraction ?? null,
+        instantaneous_piv: json.instantaneous_piv || {},
+        ensemble_piv: json.ensemble_piv || {},
+        calibration_format: json.calibration_format || {},
+        calibration: json.calibration || {},
+        filters: json.filters || [],
+      };
+      setConfig(mapped);
+      setConfigError(null);
+    } catch (e) {
+      setConfigError('Cannot connect to backend server. Please ensure the server is running.');
     }
-    load();
-    return () => { cancelled = true; };
   }, []);
+
+  // Load config on mount
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
   const [activeTab, setActiveTab] = useState("setup");
 
   // Hook for updating backend config
@@ -263,7 +256,7 @@ export default function Home() {
                 </TabsContent>
                 
                 <TabsContent value="calibration">
-                  <Calibration config={config} updateConfig={updateConfig} />
+                  <Calibration config={config} updateConfig={updateConfig} refetchConfig={fetchConfig} />
                 </TabsContent>
 
                 <TabsContent value="ensemble">

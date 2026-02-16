@@ -1,10 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Loader2, History, CheckCircle2 } from 'lucide-react';
 import { useCalibration } from '@/hooks/useCalibration';
+import { useCalibrationSnapshot } from '@/hooks/useCalibrationSnapshot';
 import { ScaleFactorCalibration } from './ScaleFactorCalibration';
 import { DotboardCalibration } from './DotboardCalibration';
 import { StereoCalibration } from './StereoCalibration';
@@ -15,11 +18,13 @@ import { ChArUcoCalibration } from './ChArUcoCalibration';
 interface CalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
+  refetchConfig?: () => Promise<void>;
 }
 
 export const Calibration: React.FC<CalibrationProps> = ({
   config,
   updateConfig,
+  refetchConfig,
 }) => {
   const {
     activeMethod,
@@ -30,6 +35,16 @@ export const Calibration: React.FC<CalibrationProps> = ({
 
   const cameraOptions = getCameraOptions();
   const imageCount = config?.images?.num_images || 1000;
+
+  const { snapshotInfo, loading, loadError, loadSuccess, loadSnapshot: loadSnapshotFn } = useCalibrationSnapshot(0, refetchConfig);
+
+  // Counter to force child remount after snapshot restore
+  const [configVersion, setConfigVersion] = useState(0);
+
+  const handleLoadSnapshot = useCallback(async () => {
+    await loadSnapshotFn();
+    setConfigVersion(v => v + 1);
+  }, [loadSnapshotFn]);
 
   // Local state for which tab is currently visible (not the active method)
   const [currentTab, setCurrentTab] = useState<string>(activeMethod);
@@ -67,7 +82,42 @@ export const Calibration: React.FC<CalibrationProps> = ({
             <li><strong>Stereo ChArUco:</strong> Calibrate camera pairs for 3D reconstruction using ChArUco board</li>
           </ul>
 
-          <Tabs value={currentTab} onValueChange={setCurrentTab}>
+          {snapshotInfo.exists && (
+            <Alert variant="info" className="mb-6">
+              <History className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>
+                  Saved calibration found ({snapshotInfo.calibration_method}
+                  {snapshotInfo.date && `, ${new Date(snapshotInfo.date).toLocaleDateString()}`})
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLoadSnapshot}
+                  disabled={loading}
+                  className="ml-4"
+                >
+                  {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Restore Calibration
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {loadError && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertDescription>{loadError}</AlertDescription>
+            </Alert>
+          )}
+
+          {loadSuccess && (
+            <Alert className="mb-6 border-green-200 text-green-800">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <AlertDescription>Calibration restored successfully</AlertDescription>
+            </Alert>
+          )}
+
+          <Tabs key={configVersion} value={currentTab} onValueChange={setCurrentTab}>
             <TabsList className="grid w-full grid-cols-6">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>
