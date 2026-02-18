@@ -487,6 +487,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               selectedMarkers={getGlobalCoordMarkers(gc, gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera, 1)}
               externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
               externalFrame={gcIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+              detectionLoading={modelLoading}
               settingsBarExtras={
                 <GCInlineControls
                   gc={gc}

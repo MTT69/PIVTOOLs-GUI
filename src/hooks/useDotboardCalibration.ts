@@ -336,7 +336,7 @@ export function useDotboardCalibration(
     };
   }, [jobId]);
 
-  // Load saved model
+  // Load saved model (wrapped in useCallback before the auto-reload effect)
   const loadModel = useCallback(async () => {
     setModelLoading(true);
     setModelLoadError(null);
@@ -364,6 +364,18 @@ export function useDotboardCalibration(
       setModelLoading(false);
     }
   }, [sourcePathIdx, camera]);
+
+  // Auto-reload detections when camera or sourcePathIdx changes
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    // Immediately clear stale data so old dots disappear
+    setCameraModel(null);
+    setDetections({});
+    setModelLoadError(null);
+    // Auto-load model for the new camera
+    loadModel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadModel changes with camera/sourcePathIdx already
+  }, [camera, sourcePathIdx]);
 
   // Generate camera model for all cameras
   const generateCameraModelAll = useCallback(async () => {

@@ -37,8 +37,8 @@ export function useInstantaneousPivConfig(
   // --- State Initialization ---
   const runsArray = config.runs || [6];
   const initialPasses = (config.window_size || []).map((w, i) => ({
-    windowX: w[0] ?? 128,
-    windowY: w[1] ?? 128,
+    windowX: w[1] ?? 128,  // w[1] is width (X) in backend (height, width) convention
+    windowY: w[0] ?? 128,  // w[0] is height (Y) in backend (height, width) convention
     overlap: config.overlap?.[i] ?? 50,
     store: runsArray.includes(i + 1), // Convert runs array to store flags
   }));
@@ -76,7 +76,7 @@ export function useInstantaneousPivConfig(
         .filter((n): n is number => n !== null);
 
       const payloadData: InstantaneousPivConfig = {
-        window_size: passesToSave.map(p => [typeof p.windowX === 'number' ? p.windowX : parseInt(p.windowX as string) || 128, typeof p.windowY === 'number' ? p.windowY : parseInt(p.windowY as string) || 128]),
+        window_size: passesToSave.map(p => [typeof p.windowY === 'number' ? p.windowY : parseInt(p.windowY as string) || 128, typeof p.windowX === 'number' ? p.windowX : parseInt(p.windowX as string) || 128]),  // Backend convention: (height/Y, width/X)
         overlap: passesToSave.map(p => typeof p.overlap === 'number' ? p.overlap : parseInt(p.overlap as string) || 50),
         runs: runsArray,
       };
@@ -111,8 +111,8 @@ export function useInstantaneousPivConfig(
     
     const runsArray = config.runs || [];
     const newPasses = (config.window_size || []).map((w, i) => ({
-        windowX: w[0] ?? 128,
-        windowY: w[1] ?? 128,
+        windowX: w[1] ?? 128,  // w[1] is width (X) in backend (height, width) convention
+        windowY: w[0] ?? 128,  // w[0] is height (Y) in backend (height, width) convention
         overlap: config.overlap?.[i] ?? 50,
         store: runsArray.includes(i + 1),
     }));

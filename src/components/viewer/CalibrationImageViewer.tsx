@@ -50,6 +50,8 @@ export interface CalibrationImageViewerProps {
   externalFrame?: number;
   // Extra controls rendered in the settings bar
   settingsBarExtras?: React.ReactNode;
+  // Loading state for detection data (model loading)
+  detectionLoading?: boolean;
 }
 
 export default function CalibrationImageViewer({
@@ -71,6 +73,7 @@ export default function CalibrationImageViewer({
   externalCamera,
   externalFrame,
   settingsBarExtras,
+  detectionLoading = false,
 }: CalibrationImageViewerProps) {
   // Frame navigation state
   const [index, setIndex] = useState(1);
@@ -483,11 +486,28 @@ export default function CalibrationImageViewer({
                 />
                 <Label htmlFor="show-overlay" className="text-sm">Show Overlay</Label>
               </div>
-              {showSavedOverlay && (
+              {showSavedOverlay && !detectionLoading && (
                 <span className="text-xs text-green-600">
                   {savedPointCount > 0 ? `${savedPointCount} pts` : 'No detection'} | {framesWithDetections} frames
                 </span>
               )}
+              {detectionLoading && (
+                <span className="text-xs text-blue-600 flex items-center gap-1">
+                  <div className="w-3 h-3 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+                  Loading detections...
+                </span>
+              )}
+              <div className="border-l h-6 mx-2" />
+            </>
+          )}
+
+          {/* Detection loading indicator when no detections exist yet */}
+          {detectionLoading && (!savedDetections || Object.keys(savedDetections).length === 0) && (
+            <>
+              <span className="text-xs text-blue-600 flex items-center gap-1">
+                <div className="w-3 h-3 border-2 border-blue-200 border-t-blue-500 rounded-full animate-spin" />
+                Loading detections...
+              </span>
               <div className="border-l h-6 mx-2" />
             </>
           )}

@@ -130,41 +130,51 @@ export default function ZoomableCanvas({
     } else if (imgEl) {
       canvas.width = imgEl.naturalWidth;
       canvas.height = imgEl.naturalHeight;
-      // Draw image, then remap pixels according to vmin/vmax/colormap
-      // Image is 8-bit (0-255) from backend, convert percentage to pixel values
-      ctx.drawImage(imgEl, 0, 0);
-      try {
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imgData.data;
-        const out = new Uint8ClampedArray(data.length);
-        const range = Math.max(1e-9, pixelVmax - pixelVmin);
-        if (cmapLUT) {
-          const out32 = new Uint32Array(out.buffer);
-          const pixelCount = canvas.width * canvas.height;
-          for (let i = 0; i < pixelCount; i++) {
-            const I = data[i * 4]; // Use red channel as intensity
-            const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
-            out32[i] = cmapLUT[Math.floor(t * 255)];
+
+      // Fast path: when colormap is "gray" and contrast is at defaults (0-100),
+      // the decoded image pixels map 1:1, so skip the expensive getImageData/putImageData
+      // colormap loop entirely — just drawImage directly.
+      const isGray = colormap === "gray";
+      const isDefaultContrast = vmin <= 0.01 && vmax >= 99.99;
+      if (isGray && isDefaultContrast) {
+        ctx.drawImage(imgEl, 0, 0);
+      } else {
+        // Draw image, then remap pixels according to vmin/vmax/colormap
+        // Image is 8-bit (0-255) from backend, convert percentage to pixel values
+        ctx.drawImage(imgEl, 0, 0);
+        try {
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imgData.data;
+          const out = new Uint8ClampedArray(data.length);
+          const range = Math.max(1e-9, pixelVmax - pixelVmin);
+          if (cmapLUT) {
+            const out32 = new Uint32Array(out.buffer);
+            const pixelCount = canvas.width * canvas.height;
+            for (let i = 0; i < pixelCount; i++) {
+              const I = data[i * 4]; // Use red channel as intensity
+              const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
+              out32[i] = cmapLUT[Math.floor(t * 255)];
+            }
+          } else {
+            for (let i = 0; i < data.length; i += 4) {
+              const I = data[i]; // Use red channel as intensity
+              const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
+              const idx = Math.floor(t * 255);
+              out[i] = cmap[idx * 3];
+              out[i + 1] = cmap[idx * 3 + 1];
+              out[i + 2] = cmap[idx * 3 + 2];
+              out[i + 3] = 255;
+            }
           }
-        } else {
-          for (let i = 0; i < data.length; i += 4) {
-            const I = data[i]; // Use red channel as intensity
-            const t = Math.max(0, Math.min(1, (I - pixelVmin) / range));
-            const idx = Math.floor(t * 255);
-            out[i] = cmap[idx * 3];
-            out[i + 1] = cmap[idx * 3 + 1];
-            out[i + 2] = cmap[idx * 3 + 2];
-            out[i + 3] = 255;
-          }
+          ctx.putImageData(new ImageData(out, canvas.width, canvas.height), 0, 0);
+        } catch (e) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
-        ctx.putImageData(new ImageData(out, canvas.width, canvas.height), 0, 0);
-      } catch (e) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
     } else {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
-  }, [raw, imgEl, vmin, vmax, cmap, cmapLUT]);
+  }, [raw, imgEl, vmin, vmax, colormap, cmap, cmapLUT]);
 
   // Draw overlay dots on a dedicated canvas (much faster than SVG <circle> elements)
   useEffect(() => {

@@ -110,7 +110,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
 
     setIsCheckingOutput(true);
     try {
-      const url = `/backend/check_output_exists?active_paths=${activePaths.join(',')}`;
+      const url = `/backend/check_output_exists?active_paths=${activePaths.join(',')}&mode=${mode}`;
       console.log('[RunPIV] Checking for existing output:', url);
       const checkRes = await fetch(url);
       console.log('[RunPIV] Check response status:', checkRes.status);
@@ -157,7 +157,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           active_paths: activePaths,
-          camera_numbers: config?.paths?.camera_numbers || []
+          camera_numbers: config?.paths?.camera_numbers || [],
+          mode: mode
         })
       });
 
@@ -437,8 +438,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
             <AlertDialogHeader>
               <AlertDialogTitle>Output Data Already Exists</AlertDialogTitle>
               <AlertDialogDescription>
-                Output data already exists for the selected paths. Would you like to clear the existing data and recompute?
-                This will delete all existing PIV results for the selected cameras and cannot be undone.
+                Existing {mode} data was found for the selected paths. Would you like to clear it and recompute?
+                This will delete all existing {mode} PIV results for the selected cameras and cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

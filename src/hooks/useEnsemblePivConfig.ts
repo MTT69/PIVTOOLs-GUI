@@ -50,8 +50,8 @@ export function useEnsemblePivConfig(
   const runsArray = config.runs || [6];
   const typeArray = config.type || [];
   const initialPasses = (config.window_size || []).map((w, i) => ({
-    windowX: w[0] ?? 128,
-    windowY: w[1] ?? 128,
+    windowX: w[1] ?? 128,  // w[1] is width (X) in backend (height, width) convention
+    windowY: w[0] ?? 128,  // w[0] is height (Y) in backend (height, width) convention
     overlap: config.overlap?.[i] ?? 50,
     type: (typeArray[i] || 'std') as 'std' | 'single',
     store: runsArray.includes(i + 1),
@@ -66,10 +66,10 @@ export function useEnsemblePivConfig(
 
   const [passes, setPasses] = useState<EnsemblePass[]>(initialPasses);
 
-  // Sum window state
+  // Sum window state - sumWindow[0] is X (width), sumWindow[1] is Y (height)
   const [sumWindow, setSumWindow] = useState<[number | string, number | string]>([
-    config.sum_window?.[0] ?? 16,
-    config.sum_window?.[1] ?? 16
+    config.sum_window?.[1] ?? 16,  // sum_window[1] is width (X) in backend (height, width) convention
+    config.sum_window?.[0] ?? 16   // sum_window[0] is height (Y) in backend (height, width) convention
   ]);
 
   // Additional ensemble options
@@ -88,7 +88,7 @@ export function useEnsemblePivConfig(
     resumeFromPass: number | string;
   }>({
     passes: initialPasses,
-    sumWindow: [config.sum_window?.[0] ?? 16, config.sum_window?.[1] ?? 16],
+    sumWindow: [config.sum_window?.[1] ?? 16, config.sum_window?.[0] ?? 16],  // Frontend: (X, Y)
     storePlanes: config.store_planes ?? false,
     saveDiagnostics: config.save_diagnostics ?? false,
     resumeFromPass: config.resume_from_pass ?? 0
@@ -135,15 +135,15 @@ export function useEnsemblePivConfig(
 
       const payloadData: EnsemblePivConfig = {
         window_size: passesToSave.map(p => [
-          typeof p.windowX === 'number' ? p.windowX : parseInt(p.windowX as string) || 128,
-          typeof p.windowY === 'number' ? p.windowY : parseInt(p.windowY as string) || 128
+          typeof p.windowY === 'number' ? p.windowY : parseInt(p.windowY as string) || 128,  // Backend convention: height (Y) first
+          typeof p.windowX === 'number' ? p.windowX : parseInt(p.windowX as string) || 128   // width (X) second
         ]),
         overlap: passesToSave.map(p => typeof p.overlap === 'number' ? p.overlap : parseInt(p.overlap as string) || 50),
         type: passesToSave.map(p => p.type),
         runs: runsArray,
         sum_window: [
-          typeof sumWindowToSave[0] === 'number' ? sumWindowToSave[0] : parseInt(sumWindowToSave[0] as string) || 16,
-          typeof sumWindowToSave[1] === 'number' ? sumWindowToSave[1] : parseInt(sumWindowToSave[1] as string) || 16
+          typeof sumWindowToSave[1] === 'number' ? sumWindowToSave[1] : parseInt(sumWindowToSave[1] as string) || 16,  // Backend convention: height (Y) first
+          typeof sumWindowToSave[0] === 'number' ? sumWindowToSave[0] : parseInt(sumWindowToSave[0] as string) || 16   // width (X) second
         ],
         store_planes: storePlanesToSave,
         save_diagnostics: saveDiagnosticsToSave,
@@ -181,8 +181,8 @@ export function useEnsemblePivConfig(
     const runsArray = config.runs || [];
     const typeArray = config.type || [];
     const newPasses = (config.window_size || []).map((w, i) => ({
-      windowX: w[0] ?? 128,
-      windowY: w[1] ?? 128,
+      windowX: w[1] ?? 128,  // w[1] is width (X) in backend (height, width) convention
+      windowY: w[0] ?? 128,  // w[0] is height (Y) in backend (height, width) convention
       overlap: config.overlap?.[i] ?? 50,
       type: (typeArray[i] || 'std') as 'std' | 'single',
       store: runsArray.includes(i + 1),
@@ -197,11 +197,11 @@ export function useEnsemblePivConfig(
       setPasses(newPasses);
     }
 
-    // Sync sum_window
+    // Sync sum_window - swap from backend (height, width) to frontend (X, Y) convention
     if (config.sum_window) {
       const newSumWindow: [number | string, number | string] = [
-        config.sum_window[0] ?? 16,
-        config.sum_window[1] ?? 16
+        config.sum_window[1] ?? 16,  // width (X) from backend index 1
+        config.sum_window[0] ?? 16   // height (Y) from backend index 0
       ];
       if (newSumWindow[0] !== sumWindow[0] || newSumWindow[1] !== sumWindow[1]) {
         setSumWindow(newSumWindow);
