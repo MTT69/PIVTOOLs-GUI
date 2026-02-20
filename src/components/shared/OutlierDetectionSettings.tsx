@@ -14,15 +14,17 @@ interface OutlierDetectionSettingsProps {
 }
 
 interface OutlierMethod {
-  type: 'peak_mag' | 'median_2d';
+  type: 'peak_mag' | 'median_2d' | 'sigma';
   threshold?: number;
   epsilon?: number;
+  sigma_threshold?: number;
 }
 
 interface LocalOutlierMethod {
-  type: 'peak_mag' | 'median_2d';
+  type: 'peak_mag' | 'median_2d' | 'sigma';
   threshold: string;
   epsilon: string;
+  sigma_threshold: string;
 }
 
 const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
@@ -43,7 +45,8 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
     const locals: LocalOutlierMethod[] = methods.map((m: OutlierMethod) => ({
       ...m,
       threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '2.0' : '0.4'),
-      epsilon: m.epsilon?.toString() ?? '0.2'
+      epsilon: m.epsilon?.toString() ?? '0.2',
+      sigma_threshold: m.sigma_threshold?.toString() ?? '3.0'
     }));
     setLocalMethods(locals);
   }, [methods]);
@@ -117,6 +120,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                       <SelectContent>
                         <SelectItem value="peak_mag">Peak Magnitude</SelectItem>
                         <SelectItem value="median_2d">Median 2D</SelectItem>
+                        <SelectItem value="sigma">Sigma (Local Std Dev)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -214,6 +218,38 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                         />
                       </div>
                     </>
+                  )}
+
+                  {method.type === 'sigma' && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Sigma Threshold</Label>
+                      <Input
+                        className="h-8 text-sm"
+                        type="text"
+                        value={localMethods[i]?.sigma_threshold ?? '3.0'}
+                        onFocus={() => { isUserEditingRef.current = true; }}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const newLocal = [...localMethods];
+                          newLocal[i] = { ...newLocal[i], sigma_threshold: val };
+                          setLocalMethods(newLocal);
+                        }}
+                        onBlur={() => {
+                          isUserEditingRef.current = false;
+                          const val = localMethods[i]?.sigma_threshold;
+                          const num = parseFloat(val);
+                          if (!isNaN(num) && val !== '' && val !== undefined) {
+                            updateOutlierMethod(i, 'sigma_threshold', num);
+                          } else {
+                            const defaultVal = 3.0;
+                            const newLocal = [...localMethods];
+                            newLocal[i] = { ...newLocal[i], sigma_threshold: defaultVal.toString() };
+                            setLocalMethods(newLocal);
+                            updateOutlierMethod(i, 'sigma_threshold', defaultVal);
+                          }
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               </div>

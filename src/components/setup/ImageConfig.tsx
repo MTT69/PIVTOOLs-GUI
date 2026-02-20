@@ -108,6 +108,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [imageType, setImageType] = useState<string>("standard");
   const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
   const [framePairPreview, setFramePairPreview] = useState<any>(null);
+  const [numLoops, setNumLoops] = useState<string>("1");
   // String editing states for number inputs (lets user clear and retype)
   const [frameStrideStr, setFrameStrideStr] = useState<string>("0");
   const [pairStrideStr, setPairStrideStr] = useState<string>("1");
@@ -168,6 +169,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
     setCameraSubfolders(paths.camera_subfolders || []);
     setUseCameraSubfoldersIM7(!!images.use_camera_subfolders);
+    setNumLoops(String(images.num_loops ?? 1));
     setVectorPattern(images.vector_format?.[0] || "%05d.mat");
 
     const detectedType = images.image_type || detectImageType(
@@ -201,7 +203,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     }, 300);
     return () => clearTimeout(timer);
   }, [config.images?.num_images, config.images?.start_index, config.images?.frame_stride,
-      config.images?.pair_stride, config.images?.pairing_preset, config.images?.image_format]);
+      config.images?.pair_stride, config.images?.pairing_preset, config.images?.image_format,
+      config.images?.num_loops]);
 
   const saveConfig = async (overrides: SaveOverrides = {}) => {
     setSavingMeta("Saving...");
@@ -231,6 +234,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         vector_format: [vp],
         image_type: it,
         use_camera_subfolders: ucsfIM7,
+        num_loops: Number(numLoops) || 1,
       },
       paths: {
         camera_count: camCount,
@@ -345,11 +349,16 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   };
 
   // Pairs description for helper text
+  const loops = Number(numLoops) || 1;
+  const totalPairs = numPairs * (imageType === "lavision_set" ? loops : 1);
   const getPairsDescription = (): string => {
     const fileWord = imageType === "cine" ? "frames" : imageType.startsWith("lavision") ? "entries" : "files";
-    if (pairingPreset === "ab_format") return `${numImages} ${fileWord} → ${numPairs} frame pairs (A+B sets)`;
-    if (pairingPreset === "pre_paired") return `${numImages} ${fileWord} → ${numPairs} frame pairs (internal A+B)`;
-    return `${numImages} ${fileWord} → ${numPairs} pairs`;
+    const loopSuffix = imageType === "lavision_set" && loops > 1
+      ? ` per loop (\u00d7${loops} loops = ${totalPairs} total)`
+      : "";
+    if (pairingPreset === "ab_format") return `${numImages} ${fileWord} → ${numPairs} frame pairs (A+B sets)${loopSuffix}`;
+    if (pairingPreset === "pre_paired") return `${numImages} ${fileWord} → ${numPairs} frame pairs (internal A+B)${loopSuffix}`;
+    return `${numImages} ${fileWord} → ${numPairs} pairs${loopSuffix}`;
   };
 
   return (
@@ -471,6 +480,27 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   </p>
                 </div>
               </div>
+
+              {imageType === "lavision_set" && (
+                <div className="grid md:grid-cols-2 gap-4 mt-4">
+                  <div>
+                    <Label htmlFor="num_loops">Number of Loops</Label>
+                    <Input
+                      id="num_loops"
+                      type="number"
+                      min="1"
+                      value={numLoops}
+                      onChange={e => setNumLoops(e.target.value)}
+                      onBlur={() => saveConfig()}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {Number(numLoops) > 1
+                        ? `${numPairs} pairs/loop \u00d7 ${numLoops} loops = ${numPairs * Number(numLoops)} total frame pairs`
+                        : "Single acquisition (no loops)"}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="grid md:grid-cols-2 gap-4 mt-4">
                 <div>
@@ -727,7 +757,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       ))}
                     </div>
                     <p className="text-xs text-muted-foreground mt-2 font-medium">
-                      Total: {framePairPreview.total_pairs} pairs from {framePairPreview.num_images} images
+                      Total: {framePairPreview.total_pairs} pairs
+                      {framePairPreview.num_loops > 1
+                        ? ` from ${framePairPreview.num_loops} loops (\u00d7${framePairPreview.per_loop_pairs} per loop)`
+                        : ` from ${framePairPreview.num_images} images`}
                     </p>
                   </div>
                 )}
