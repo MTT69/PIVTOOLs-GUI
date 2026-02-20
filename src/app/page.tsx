@@ -93,6 +93,9 @@ export default function Home() {
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
   // Function to update config state (memoized to avoid infinite effect loops in children)
+  // When setting a plain object on a path where a plain object already exists,
+  // performs a shallow merge (matching backend's recursive_update behavior).
+  // This prevents hooks that manage a subset of keys from wiping unmanaged keys.
   const updateConfig = useCallback((path: string[], value: any) => {
     if (!Array.isArray(path) || path.length === 0) return;
     setConfig((prevConfig: any) => {
@@ -105,7 +108,17 @@ export default function Home() {
         }
         current = current[key];
       }
-      current[path[path.length - 1]] = value;
+      const lastKey = path[path.length - 1];
+      const existing = current[lastKey];
+      // Shallow merge when both old and new values are plain objects (not arrays)
+      if (
+        value && typeof value === 'object' && !Array.isArray(value) &&
+        existing && typeof existing === 'object' && !Array.isArray(existing)
+      ) {
+        current[lastKey] = { ...existing, ...value };
+      } else {
+        current[lastKey] = value;
+      }
       return newConfig;
     });
   }, []);

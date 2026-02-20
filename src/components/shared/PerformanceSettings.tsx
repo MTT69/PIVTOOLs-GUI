@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, memo } from "react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,18 +16,18 @@ const PerformanceSettings = memo(function PerformanceSettings({
   updateConfigValue,
 }: PerformanceSettingsProps) {
   // Memory per worker state
-  const [memoryNumber, setMemoryNumber] = useState<string>('6');
+  const [memoryNumber, setMemoryNumber] = useState<string>('8');
   const [memoryUnit, setMemoryUnit] = useState<string>('GB');
 
   // Memory per worker initialization
   useEffect(() => {
-    const mem = config?.processing?.dask_memory_limit || '6GB';
+    const mem = config?.processing?.dask_memory_limit || '8GB';
     const match = mem.match(/^(\d+)(MB|GB)?$/);
     if (match) {
       setMemoryNumber(match[1]);
       setMemoryUnit(match[2] || 'GB');
     } else {
-      setMemoryNumber('6');
+      setMemoryNumber('8');
       setMemoryUnit('GB');
     }
   }, [config?.processing?.dask_memory_limit]);
@@ -53,7 +54,7 @@ const PerformanceSettings = memo(function PerformanceSettings({
         <Input
           id="dask-workers"
           type="text"
-          value={config?.processing?.dask_workers_per_node === '' ? '' : (config?.processing?.dask_workers_per_node ?? 10)}
+          value={config?.processing?.dask_workers_per_node === '' ? '' : (config?.processing?.dask_workers_per_node ?? 2)}
           onChange={(e) => {
             const val = e.target.value;
             const num = parseInt(val, 10);
@@ -79,8 +80,8 @@ const PerformanceSettings = memo(function PerformanceSettings({
             }}
             onBlur={() => {
               if (memoryNumber === '') {
-                setMemoryNumber('6');
-                updateConfigValue(['processing', 'dask_memory_limit'], `6${memoryUnit}`);
+                setMemoryNumber('8');
+                updateConfigValue(['processing', 'dask_memory_limit'], `8${memoryUnit}`);
               }
             }}
             className="flex-1"
@@ -105,6 +106,35 @@ const PerformanceSettings = memo(function PerformanceSettings({
           </Select>
         </div>
         <p className="text-xs text-muted-foreground">Memory limit per worker</p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="dask-max-in-flight">Max Tasks per Worker</Label>
+        <Input
+          id="dask-max-in-flight"
+          type="text"
+          value={config?.processing?.dask_max_in_flight_per_worker === '' ? '' : (config?.processing?.dask_max_in_flight_per_worker ?? 3)}
+          onChange={(e) => {
+            const val = e.target.value;
+            const num = parseInt(val, 10);
+            updateConfigValue(['processing', 'dask_max_in_flight_per_worker'], isNaN(num) ? '' : num);
+          }}
+        />
+        <p className="text-xs text-muted-foreground">Max concurrent tasks queued per Dask worker. Higher values improve I/O pipelining on HPC with fast storage (try 4-6).</p>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label>Open Dask Dashboard</Label>
+          <Button
+            variant={(config?.processing?.open_dashboard) ? "default" : "outline"}
+            size="sm"
+            onClick={() => updateConfigValue(['processing', 'open_dashboard'], !config?.processing?.open_dashboard)}
+          >
+            {config?.processing?.open_dashboard ? "Enabled" : "Disabled"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">Auto-open the Dask performance dashboard in your browser when processing starts.</p>
       </div>
     </div>
   );

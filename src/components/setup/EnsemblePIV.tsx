@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter } from "lucide-react";
+import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, Sliders, Crosshair } from "lucide-react";
 import { useEnsemblePivConfig } from "@/hooks/useEnsemblePivConfig";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
@@ -15,6 +15,7 @@ import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettin
 import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import CameraSelector from "@/components/shared/CameraSelector";
+import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
 
 interface EnsemblePIVProps {
   config: any;
@@ -51,6 +52,8 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
   const [outlierOpen, setOutlierOpen] = useState(false);
   const [infillingOpen, setInfillingOpen] = useState(false);
   const [ensembleOptionsOpen, setEnsembleOptionsOpen] = useState(false);
+  const [predictorBoundaryOpen, setPredictorBoundaryOpen] = useState(false);
+  const [correlationFittingOpen, setCorrelationFittingOpen] = useState(false);
 
   // Helper function to save camera selection to backend
   const saveCameraSelection = useCallback(async (cameras: number[]) => {
@@ -218,30 +221,78 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
 
           {/* Sum Window - shown when any pass has type 'single' */}
           {hasSinglePass && (
-            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <Label className="text-sm font-semibold text-blue-800">Sum Window (for single-type passes)</Label>
-              <p className="text-xs text-blue-600 mb-2">
-                Defines the interrogation window used for summing correlation planes in single-type passes.
-              </p>
-              <div className="grid grid-cols-2 gap-4 mt-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">Width (X)</Label>
-                  <Input
-                    type="text"
-                    value={sumWindow[0]}
-                    onChange={e => updateSumWindow(0, e.target.value)}
-                    className="h-8"
-                  />
+            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+              <div>
+                <Label className="text-sm font-semibold text-blue-800">Sum Window (for single-type passes)</Label>
+                <p className="text-xs text-blue-600 mb-2">
+                  Defines the interrogation window used for summing correlation planes in single-type passes.
+                </p>
+                <div className="grid grid-cols-2 gap-4 mt-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Width (X)</Label>
+                    <Input
+                      type="text"
+                      value={sumWindow[0]}
+                      onChange={e => updateSumWindow(0, e.target.value)}
+                      className="h-8"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Height (Y)</Label>
+                    <Input
+                      type="text"
+                      value={sumWindow[1]}
+                      onChange={e => updateSumWindow(1, e.target.value)}
+                      className="h-8"
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Height (Y)</Label>
-                  <Input
-                    type="text"
-                    value={sumWindow[1]}
-                    onChange={e => updateSumWindow(1, e.target.value)}
-                    className="h-8"
-                  />
+              </div>
+
+              <div className="border-t border-blue-200 pt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <Label className="text-sm font-semibold text-blue-800">Sum Fitting Window</Label>
+                  <Button
+                    variant={(config?.ensemble_piv?.sum_fitting_window_enabled) ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => updateConfigValue(['ensemble_piv', 'sum_fitting_window_enabled'], !config?.ensemble_piv?.sum_fitting_window_enabled)}
+                  >
+                    {config?.ensemble_piv?.sum_fitting_window_enabled ? "Enabled" : "Disabled"}
+                  </Button>
                 </div>
+                <p className="text-xs text-blue-600 mb-2">
+                  Extract a central sub-region from the summed correlation plane before peak fitting. Reduces memory and speeds up fitting.
+                </p>
+                {config?.ensemble_piv?.sum_fitting_window_enabled && (
+                  <div className="grid grid-cols-2 gap-4 mt-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Height</Label>
+                      <Input
+                        type="text"
+                        value={config?.ensemble_piv?.sum_fitting_window?.[0] ?? 16}
+                        onChange={(e) => {
+                          const num = parseInt(e.target.value, 10);
+                          const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+                          updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [isNaN(num) ? current[0] : num, current[1]]);
+                        }}
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Width</Label>
+                      <Input
+                        type="text"
+                        value={config?.ensemble_piv?.sum_fitting_window?.[1] ?? 16}
+                        onChange={(e) => {
+                          const num = parseInt(e.target.value, 10);
+                          const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+                          updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [current[0], isNaN(num) ? current[1] : num]);
+                        }}
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -317,6 +368,222 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     <p className="text-xs text-muted-foreground">0 = fresh start, N = resume from pass N</p>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Fit Method</Label>
+                    <Select
+                      value={config?.ensemble_piv?.fit_method || 'gaussian'}
+                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'fit_method'], value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gaussian">Gaussian</SelectItem>
+                        <SelectItem value="kspace">K-space</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Gaussian: fits a Gaussian function to the correlation peak (robust, recommended). K-space: fits in frequency domain (better Reynolds stresses at very small windows).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-sm">Background Subtraction</Label>
+                    <Select
+                      value={config?.ensemble_piv?.background_subtraction_method || 'correlation'}
+                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'background_subtraction_method'], value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="correlation">Correlation</SelectItem>
+                        <SelectItem value="image">Image</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {"Correlation: R = <A*B> - <A>*<B> (single-pass, memory efficient). Image: R = <(A-mean(A))*(B-mean(B))> (two-pass, more numerically stable for k-space fitting)."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">Gradient Correction</Label>
+                      <Button
+                        variant={config?.ensemble_piv?.gradient_correction ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => updateConfigValue(['ensemble_piv', 'gradient_correction'], !(config?.ensemble_piv?.gradient_correction ?? false))}
+                      >
+                        {config?.ensemble_piv?.gradient_correction ? "Enabled" : "Disabled"}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Apply velocity gradient correction to Reynolds stress estimates. Important near walls in boundary layer flows where gradients are strong.
+                    </p>
+                  </div>
+
+                  {config?.ensemble_piv?.fit_method === 'kspace' && (
+                    <div className="space-y-2">
+                      <Label className="text-sm">K-space SNR Threshold</Label>
+                      <Input
+                        type="text"
+                        value={config?.ensemble_piv?.kspace_snr_threshold === '' ? '' : (config?.ensemble_piv?.kspace_snr_threshold ?? 3.0)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const num = parseFloat(val);
+                          updateConfigValue(['ensemble_piv', 'kspace_snr_threshold'], isNaN(num) ? '' : num);
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Signal-to-noise ratio threshold for k-space fitting. Only active when fit_method is &apos;kspace&apos;.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Predictor & Boundary Settings */}
+          <div>
+            <Button variant="outline" className="w-full justify-between" onClick={() => setPredictorBoundaryOpen(!predictorBoundaryOpen)}>
+              <span className="flex items-center gap-2">
+                <Sliders className="h-4 w-4" />
+                Predictor & Boundary Settings
+              </span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${predictorBoundaryOpen ? 'rotate-90' : ''}`} />
+            </Button>
+            {predictorBoundaryOpen && (
+              <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Predictor Smoothing</Label>
+                    <Button
+                      variant={config?.ensemble_piv?.predictor_smoothing ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'predictor_smoothing'], !(config?.ensemble_piv?.predictor_smoothing ?? false))}
+                    >
+                      {(config?.ensemble_piv?.predictor_smoothing ?? false) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Gaussian-smooth the predictor field between passes. For ensemble PIV where the predictor converges over many pairs, smoothing destroys real gradients — leave disabled unless data is very noisy.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Predictor Interpolation</Label>
+                    <Select
+                      value={config?.ensemble_piv?.predictor_interpolation || 'cubic'}
+                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'predictor_interpolation'], value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nearest">Nearest</SelectItem>
+                        <SelectItem value="linear">Linear</SelectItem>
+                        <SelectItem value="cubic">Cubic</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Interpolation for upscaling the predictor field between passes. Cubic recommended.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-sm">Image Warp Interpolation</Label>
+                    <Select
+                      value={config?.ensemble_piv?.image_warp_interpolation || 'cubic'}
+                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'image_warp_interpolation'], value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nearest">Nearest</SelectItem>
+                        <SelectItem value="linear">Linear</SelectItem>
+                        <SelectItem value="cubic">Cubic</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Interpolation for image dewarping based on the predictor field. Cubic recommended.
+                    </p>
+                  </div>
+                </div>
+
+                <BoundaryConditionEditor
+                  conditions={config?.ensemble_piv?.predictor_boundary_conditions || []}
+                  updateConfigValue={updateConfigValue}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Correlation & Fitting */}
+          <div>
+            <Button variant="outline" className="w-full justify-between" onClick={() => setCorrelationFittingOpen(!correlationFittingOpen)}>
+              <span className="flex items-center gap-2">
+                <Crosshair className="h-4 w-4" />
+                Correlation & Fitting
+              </span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${correlationFittingOpen ? 'rotate-90' : ''}`} />
+            </Button>
+            {correlationFittingOpen && (
+              <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Fit Offset</Label>
+                    <Button
+                      variant={(config?.ensemble_piv?.fit_offset ?? true) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'fit_offset'], !(config?.ensemble_piv?.fit_offset ?? true))}
+                    >
+                      {(config?.ensemble_piv?.fit_offset ?? true) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Include a constant offset in the Gaussian sub-pixel fit. Accounts for correlation plane background level.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Mask Center Pixel</Label>
+                    <Button
+                      variant={(config?.ensemble_piv?.mask_center_pixel ?? true) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'mask_center_pixel'], !(config?.ensemble_piv?.mask_center_pixel ?? true))}
+                    >
+                      {(config?.ensemble_piv?.mask_center_pixel ?? true) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Mask the autocorrelation center pixel before peak fitting. Prevents the zero-lag spike from biasing displacement estimates.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Persist Images in RAM</Label>
+                    <Button
+                      variant={config?.ensemble_piv?.persist_images ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'persist_images'], !config?.ensemble_piv?.persist_images)}
+                    >
+                      {config?.ensemble_piv?.persist_images ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Keep all filtered images in worker RAM across passes. Faster on HPC with lots of memory, but uses significantly more RAM.
+                  </p>
+                </div>
+
               </div>
             )}
           </div>

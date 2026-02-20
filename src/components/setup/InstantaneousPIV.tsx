@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, CheckCircle } from "lucide-react";
+import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, CheckCircle, Sliders } from "lucide-react";
 import { useInstantaneousPivConfig } from "@/hooks/useInstantaneousPivConfig";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
@@ -36,6 +36,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
   const [outlierOpen, setOutlierOpen] = useState(false);
   const [infillingOpen, setInfillingOpen] = useState(false);
   const [peakFinderOpen, setPeakFinderOpen] = useState(false);
+  const [predictorOpen, setPredictorOpen] = useState(false);
 
   // Helper function to save camera selection to backend
   const saveCameraSelection = useCallback(async (cameras: number[]) => {
@@ -230,6 +231,69 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     Subpixel peak detection method. Higher parameter counts provide better accuracy but slower processing.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Predictor & Peak Settings */}
+          <div>
+            <Button variant="outline" className="w-full justify-between" onClick={() => setPredictorOpen(!predictorOpen)}>
+              <span className="flex items-center gap-2">
+                <Sliders className="h-4 w-4" />
+                Predictor & Peak Settings
+              </span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${predictorOpen ? 'rotate-90' : ''}`} />
+            </Button>
+            {predictorOpen && (
+              <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Predictor Smoothing</Label>
+                    <Button
+                      variant={(config?.instantaneous_piv?.predictor_smoothing ?? true) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['instantaneous_piv', 'predictor_smoothing'], !(config?.instantaneous_piv?.predictor_smoothing ?? true))}
+                    >
+                      {(config?.instantaneous_piv?.predictor_smoothing ?? true) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Gaussian-smooth the predictor field between multi-pass iterations. Reduces noise but blurs velocity gradients near walls. Recommended for instantaneous PIV where single-pair noise is significant.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Secondary Peak Detection</Label>
+                    <Button
+                      variant={config?.instantaneous_piv?.secondary_peak ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['instantaneous_piv', 'secondary_peak'], !config?.instantaneous_piv?.secondary_peak)}
+                    >
+                      {config?.instantaneous_piv?.secondary_peak ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Extract the second-highest correlation peak per window. Useful for detecting reverse flow or regions with multiple particle populations.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="num-peaks">Number of Peaks</Label>
+                  <Input
+                    id="num-peaks"
+                    type="text"
+                    value={config?.instantaneous_piv?.num_peaks === '' ? '' : (config?.instantaneous_piv?.num_peaks ?? 1)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const num = parseInt(val, 10);
+                      updateConfigValue(['instantaneous_piv', 'num_peaks'], isNaN(num) ? '' : num);
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Number of correlation peaks to detect per interrogation window. Usually 1; increase for multi-peak analysis.
                   </p>
                 </div>
               </div>
