@@ -60,6 +60,8 @@ export default function POD({ config, updateConfig }: PODProps) {
   const [progress, setProgress] = useState<number>(0);
   const [processing, setProcessing] = useState<boolean>(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartTimeRef = useRef<number>(0);
+  const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 
   // Visualization-specific state (shown after progress reaches 100)
   const [modeIndex, setModeIndex] = useState<number>(1); // mode number / "frame" for plot endpoints
@@ -165,6 +167,12 @@ export default function POD({ config, updateConfig }: PODProps) {
 
   const pollOnce = async () => {
     try {
+      // Safety timeout: stop polling if exceeded max duration
+      if (Date.now() - pollStartTimeRef.current > MAX_POLL_DURATION_MS) {
+        stopPolling();
+        setProcessing(false);
+        return;
+      }
       const res = await fetch("/backend/pod_status", { method: "GET", cache: "no-store" });
       if (!res.ok) return;
       const json = await res.json();
@@ -172,7 +180,7 @@ export default function POD({ config, updateConfig }: PODProps) {
       const newProgress = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 100) : 0;
       setProgress((prev) => (newProgress > prev ? newProgress : prev));
       setProcessing(Boolean(json.processing));
-      if (!json.processing || newProgress >= 100) stopPolling();
+      if (!json.processing) stopPolling();
     } catch (e) {
       // silent
     }
@@ -180,6 +188,7 @@ export default function POD({ config, updateConfig }: PODProps) {
 
   const startPolling = () => {
     stopPolling({ resetProgress: false });
+    pollStartTimeRef.current = Date.now();
     pollOnce();
     pollingRef.current = setInterval(pollOnce, POLL_INTERVAL_MS);
   };

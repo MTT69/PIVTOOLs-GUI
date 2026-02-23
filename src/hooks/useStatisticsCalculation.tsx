@@ -120,6 +120,8 @@ export function useStatisticsCalculation(
     const [status, setStatus] = useState<string>("not_started");
     const [details, setDetails] = useState<StatisticsJobDetails | null>(null);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    const pollStartTimeRef = useRef<number>(0);
+    const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 
     useEffect(() => {
       if (!jobId) {
@@ -133,6 +135,7 @@ export function useStatisticsCalculation(
       }
 
       let active = true;
+      pollStartTimeRef.current = Date.now();
 
       const fetchStatus = async () => {
         try {
@@ -141,10 +144,21 @@ export function useStatisticsCalculation(
             throw new Error("Failed to fetch status");
           }
           const data = await res.json();
-          
+
           if (active) {
             setStatus(data.status || "not_started");
             setDetails(data);
+
+            // Safety timeout: stop polling if exceeded max duration
+            if (Date.now() - pollStartTimeRef.current > MAX_POLL_DURATION_MS) {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+              setStatus("error");
+              setCalculating(false);
+              return;
+            }
 
             // Stop polling if completed or failed
             if (data.status === "completed" || data.status === "failed") {

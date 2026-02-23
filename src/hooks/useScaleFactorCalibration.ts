@@ -109,6 +109,8 @@ export function useScaleFactorCalibration(
     const [status, setStatus] = useState<string>("not_started");
     const [details, setDetails] = useState<any>(null);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    const pollStartTimeRef = useRef<number>(0);
+    const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
 
     useEffect(() => {
       if (!jobId) {
@@ -121,6 +123,7 @@ export function useScaleFactorCalibration(
         return;
       }
       let active = true;
+      pollStartTimeRef.current = Date.now();
       const fetchStatus = async () => {
         try {
           const res = await fetch(`/backend/calibration/scale_factor/status/${jobId}`);
@@ -128,8 +131,17 @@ export function useScaleFactorCalibration(
           if (active) {
             setStatus(data.status || "not_started");
             setDetails(data);
-            // Stop polling if completed, failed, or progress is 100%
-            if (data.status === "completed" || data.status === "failed" || data.progress >= 100) {
+            // Safety timeout: stop polling if exceeded max duration
+            if (Date.now() - pollStartTimeRef.current > MAX_POLL_DURATION_MS) {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+              setStatus("error");
+              return;
+            }
+            // Stop polling only on terminal status (not progress >= 100)
+            if (data.status === "completed" || data.status === "failed") {
               if (intervalRef.current) {
                 clearInterval(intervalRef.current);
                 intervalRef.current = null;
