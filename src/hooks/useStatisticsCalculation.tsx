@@ -40,9 +40,11 @@ export type StatsWorkflow = 'per_camera' | 'after_merge' | 'both' | 'stereo';
  * Hook for managing statistics calculation state and operations.
  * Syncs checkbox states and gamma_radius with config.yaml.
  *
- * Simplified: Uses base_path_idx + process_merged (boolean) pattern.
- * - process_merged=false: Processes all cameras from config.camera_numbers
- * - process_merged=true: Processes merged data only
+ * Uses base_path_idx + workflow (string) pattern.
+ * - workflow='per_camera':  Processes all cameras from config.camera_numbers
+ * - workflow='after_merge': Processes merged data only
+ * - workflow='both':        Processes all cameras then merged data
+ * - workflow='stereo':      Processes stereo combined result
  *
  * @param backendUrl The backend URL prefix
  * @param basePathIdx Current base path index
@@ -59,9 +61,6 @@ export function useStatisticsCalculation(
   dataSource?: DataSourceType
 ) {
   // --- State Initialization ---
-
-  // Data source: false = all cameras, true = merged only (legacy)
-  const [processMerged, setProcessMerged] = useState<boolean>(false);
 
   // Workflow mode: per_camera, after_merge, both, or stereo
   const [workflow, setWorkflow] = useState<StatsWorkflow>(() => {
@@ -242,7 +241,6 @@ export function useStatisticsCalculation(
   }, [requestedStatistics, gammaRadius, updateConfigStatistics]);
 
   // --- Calculate statistics function ---
-  // Uses simplified API: base_path_idx + process_merged (boolean)
   const calculateStatistics = async () => {
     setCalculating(true);
 
@@ -252,7 +250,6 @@ export function useStatisticsCalculation(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_path_idx: basePathIdx,
-          process_merged: processMerged,
           workflow: workflow,
           type_name: dataSource?.includes('ensemble') ? 'ensemble' : (config?.statistics?.type_name || 'instantaneous'),
           source_endpoint: dataSource ? (dataSource.includes('stereo') ? 'stereo' : (dataSource.includes('merged') ? 'merged' : 'regular')) : sourceEndpoint,
@@ -286,12 +283,10 @@ export function useStatisticsCalculation(
   const cameraCount = cameraOptions.length;
 
   return {
-    // Data source toggle (simplified - legacy)
-    processMerged,
-    setProcessMerged,
+    // Camera count for DataSourceToggle
     cameraCount,
 
-    // Workflow options (new)
+    // Workflow options
     workflow,
     setWorkflow,
     sourceEndpoint,

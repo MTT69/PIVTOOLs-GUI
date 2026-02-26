@@ -480,8 +480,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
 
   // Use statistics calculation hook (with config for checkbox/gamma sync)
   const {
-    processMerged,
-    setProcessMerged,
+    workflow: statsWorkflow,
+    setWorkflow: setStatsWorkflow,
     cameraCount: statsCameraCount,
     isStereoStats,
     requestedStatistics,
@@ -1526,8 +1526,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <DataSourceToggle
                       cameraCount={statsCameraCount}
                       hasMergedData={availableDataSources.merged_instantaneous?.exists ?? false}
-                      value={processMerged ? "merged" : "all_cameras"}
-                      onChange={(val) => setProcessMerged(val === "merged")}
+                      value={statsWorkflow === 'after_merge' ? 'merged' : statsWorkflow === 'both' ? 'both' : 'all_cameras'}
+                      onChange={(val) => setStatsWorkflow(val === 'merged' ? 'after_merge' : val === 'both' ? 'both' : 'per_camera')}
                       disabled={calculating}
                       isStereo={isStereoStats}
                     />

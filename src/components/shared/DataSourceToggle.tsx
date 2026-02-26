@@ -2,7 +2,7 @@
 
 import { memo } from "react";
 import { Label } from "@/components/ui/label";
-import { Camera, Merge } from "lucide-react";
+import { Camera, Merge, Layers } from "lucide-react";
 
 interface DataSourceToggleProps {
   /**
@@ -16,14 +16,14 @@ interface DataSourceToggleProps {
   hasMergedData: boolean;
 
   /**
-   * Current selection: 'all_cameras' or 'merged'
+   * Current selection: 'all_cameras', 'merged', or 'both'
    */
-  value: "all_cameras" | "merged";
+  value: "all_cameras" | "merged" | "both";
 
   /**
    * Callback when selection changes.
    */
-  onChange: (value: "all_cameras" | "merged") => void;
+  onChange: (value: "all_cameras" | "merged" | "both") => void;
 
   /**
    * Whether the control is disabled.
@@ -122,6 +122,25 @@ const DataSourceToggle = memo(function DataSourceToggle({
             )}
           </span>
         </label>
+
+        {/* All Cameras + Merged Option */}
+        {hasMergedData && (
+          <label className="flex items-center space-x-3 cursor-pointer">
+            <input
+              type="radio"
+              name="data-source"
+              value="both"
+              checked={value === "both"}
+              onChange={() => onChange("both")}
+              disabled={disabled}
+              className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+            />
+            <span className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-blue-600" />
+              <span>All Cameras + Merged</span>
+            </span>
+          </label>
+        )}
       </div>
     </div>
   );
