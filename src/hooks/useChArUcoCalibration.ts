@@ -11,6 +11,7 @@ export interface ChArUcoConfig {
   aruco_dict?: string;
   min_corners?: number;
   dt?: number;
+  model_type?: string;
 }
 
 /**
@@ -116,6 +117,7 @@ export function useChArUcoCalibration(
   const [arucoDict, setArucoDict] = useState<string>(config.aruco_dict ?? "DICT_4X4_1000");
   const [minCorners, setMinCorners] = useState<string>(config.min_corners !== undefined ? String(config.min_corners) : "6");
   const [dt, setDt] = useState<string>(config.dt !== undefined ? String(config.dt) : "1.0");
+  const [modelType, setModelType] = useState<string>("pinhole"); // "pinhole" or "polynomial"
   const [calibrating, setCalibrating] = useState<boolean>(false);
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -154,6 +156,7 @@ export function useChArUcoCalibration(
     setArucoDict(config.aruco_dict ?? "DICT_4X4_1000");
     setMinCorners(config.min_corners !== undefined ? String(config.min_corners) : "6");
     setDt(config.dt !== undefined ? String(config.dt) : "1.0");
+    if (config.model_type) setModelType(config.model_type);
   }, [config]);
 
   // --- Debounced auto-save ---
@@ -190,6 +193,7 @@ export function useChArUcoCalibration(
               aruco_dict: arucoDict,
               min_corners: minCornersNum,
               dt: dtNum,
+              model_type: modelType,
             },
           },
         };
@@ -212,7 +216,7 @@ export function useChArUcoCalibration(
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [sourcePathIdx, camera, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, updateConfig]);
+  }, [sourcePathIdx, camera, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, modelType, updateConfig]);
 
   // --- Job status hook ---
   const useJobStatus = (jobId: string | null) => {
@@ -299,6 +303,7 @@ export function useChArUcoCalibration(
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           camera: camera,
+          model_type: modelType,
           // Board parameters read from config by backend (saved via auto-save above)
         })
       });
@@ -325,6 +330,7 @@ export function useChArUcoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
+          model_type: modelType,
           // Board parameters read from config by backend (saved via auto-save above)
         })
       });
@@ -537,6 +543,8 @@ export function useChArUcoCalibration(
     setArucoDict,
     setMinCorners,
     setDt,
+    modelType,
+    setModelType,
 
     // Computed
     jobStatus,

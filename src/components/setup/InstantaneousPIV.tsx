@@ -265,6 +265,25 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 </div>
 
                 <div className="space-y-2">
+                  <Label className="text-sm">Image Warp Interpolation</Label>
+                  <Select
+                    value={config?.instantaneous_piv?.image_warp_interpolation || 'cubic'}
+                    onValueChange={(value) => updateConfigValue(['instantaneous_piv', 'image_warp_interpolation'], value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
+                      <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Interpolation kernel for image warping during predictor-corrector passes. Cubic is faster; Lanczos-3 preserves sharper particle images.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm">Secondary Peak Detection</Label>
                     <Button

@@ -70,6 +70,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     setDt,
     datumFrame,
     setDatumFrame,
+    modelType,
+    setModelType,
 
     // Validation
     validation,
@@ -437,6 +439,17 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Model Type</label>
+                <Select value={modelType} onValueChange={setModelType}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
+                    <SelectItem value="polynomial">Polynomial (DaVis-compatible)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Pinhole for 3D setups, polynomial for 2D planar PIV</p>
               </div>
             </div>
           </div>

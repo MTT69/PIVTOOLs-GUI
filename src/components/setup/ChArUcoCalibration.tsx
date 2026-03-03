@@ -78,6 +78,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setArucoDict,
     setMinCorners,
     setDt,
+    modelType,
+    setModelType,
     jobStatus,
     jobDetails,
     startCalibration,
@@ -501,6 +503,16 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               min="0"
               placeholder="1.0"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-medium">Model Type</label>
+            <Select value={modelType} onValueChange={setModelType}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
+                <SelectItem value="polynomial">Polynomial (DaVis-compatible)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 

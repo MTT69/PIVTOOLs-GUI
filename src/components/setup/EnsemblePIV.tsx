@@ -506,13 +506,12 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="nearest">Nearest</SelectItem>
-                        <SelectItem value="linear">Linear</SelectItem>
-                        <SelectItem value="cubic">Cubic</SelectItem>
+                        <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
+                        <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      Interpolation for image dewarping based on the predictor field. Cubic recommended.
+                      Interpolation for image dewarping. Cubic is fastest. Lanczos-3 preserves particle sharpness better (~1.5× slower).
                     </p>
                   </div>
                 </div>

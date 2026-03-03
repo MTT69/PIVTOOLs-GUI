@@ -105,6 +105,7 @@ export function useDotboardCalibration(
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1); // Which frame defines world origin
+  const [modelType, setModelType] = useState<string>("pinhole"); // "pinhole" or "polynomial"
 
   // Validation state
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -166,6 +167,7 @@ export function useDotboardCalibration(
           if (dotboard.dot_spacing_mm) setDotSpacingMm(dotboard.dot_spacing_mm);
           if (dotboard.dt) setDt(dotboard.dt);
           if (dotboard.datum_frame) setDatumFrame(dotboard.datum_frame);
+          if (dotboard.model_type) setModelType(dotboard.model_type);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -208,6 +210,7 @@ export function useDotboardCalibration(
                 dot_spacing_mm: dotSpacingMm,
                 dt: dt,
                 datum_frame: datumFrame,
+                model_type: modelType,
               },
             },
           }),
@@ -216,7 +219,7 @@ export function useDotboardCalibration(
         console.error('Failed to save config:', e);
       }
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame, modelType]);
 
   // Auto-save when params change (skip until initial config load completes)
   useEffect(() => {
@@ -271,6 +274,7 @@ export function useDotboardCalibration(
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           camera: camera,
+          model_type: modelType,
         }),
       });
 
@@ -284,7 +288,7 @@ export function useDotboardCalibration(
     } catch (e) {
       console.error('Failed to start calibration:', e);
     }
-  }, [sourcePathIdx, camera]);
+  }, [sourcePathIdx, camera, modelType]);
 
   // Poll job status
   useEffect(() => {
@@ -385,6 +389,7 @@ export function useDotboardCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
+          model_type: modelType,
         }),
       });
 
@@ -402,7 +407,7 @@ export function useDotboardCalibration(
     } catch (e) {
       console.error('Failed to start multi-camera calibration:', e);
     }
-  }, [sourcePathIdx]);
+  }, [sourcePathIdx, modelType]);
 
   // Vector calibration for single or all cameras
   const calibrateVectors = useCallback(async (
@@ -602,6 +607,10 @@ export function useDotboardCalibration(
     modelLoading,
     modelLoadError,
     hasModel: cameraModel !== null,
+
+    // Model type
+    modelType,
+    setModelType,
 
     // Overlay toggle
     showOverlay,
