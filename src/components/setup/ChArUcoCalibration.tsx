@@ -345,7 +345,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Number of Images</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               min={1}
               value={numImages}
               onChange={e => setNumImages(e.target.value)}
@@ -424,7 +424,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Squares (Horizontal)</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={squaresH}
               onChange={e => setSquaresH(e.target.value)}
               min="3"
@@ -434,7 +434,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Squares (Vertical)</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={squaresV}
               onChange={e => setSquaresV(e.target.value)}
               min="3"
@@ -447,7 +447,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Square Size (meters)</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={squareSize}
               onChange={e => setSquareSize(e.target.value)}
               step="0.001"
@@ -458,7 +458,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Marker Ratio</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={markerRatio}
               onChange={e => setMarkerRatio(e.target.value)}
               step="0.1"
@@ -486,7 +486,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Min Corners per Image</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={minCorners}
               onChange={e => setMinCorners(e.target.value)}
               min="4"
@@ -496,7 +496,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div>
             <label className="block text-xs font-medium">Δt (seconds)</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={dt}
               onChange={e => setDt(e.target.value)}
               step="any"

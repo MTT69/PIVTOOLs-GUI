@@ -283,7 +283,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             <div>
               <label className="text-sm font-medium">Number of Images</label>
               <Input
-                type="number"
+                type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
                 onChange={e => setNumImages(e.target.value)}
@@ -408,7 +408,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <div>
                 <label className="text-sm font-medium">Dot Spacing (mm)</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   step="any"
                   min={0}
                   value={dotSpacingMmInput}
@@ -420,7 +420,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <div>
                 <label className="text-sm font-medium">Δt (seconds)</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   step="any"
                   min={0.001}
                   value={dtInput}
@@ -432,7 +432,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <div>
                 <label className="text-sm font-medium">Datum Frame</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}

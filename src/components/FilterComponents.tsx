@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ImageFilter } from '@/hooks/useImageFilters';
 import { FILTER_DEFINITIONS, getFilterDefinition } from '@/hooks/filterDefinitions';
 import { Button } from '@/components/ui/button';
@@ -19,90 +19,159 @@ interface FilterEditorProps {
   isLast: boolean;
 }
 
-export function FilterEditor({ 
-  filter, 
-  index, 
-  onUpdate, 
-  onRemove, 
-  onMoveUp, 
+/** Local-buffered number input for filter parameters. Allows clearing + retyping. */
+function FilterNumberInput({ param, value, index, onUpdate }: {
+  param: any;
+  value: number | undefined;
+  index: number;
+  onUpdate: (index: number, updates: Partial<ImageFilter>) => void;
+}) {
+  const [localVal, setLocalVal] = useState(String(value ?? param.default ?? ''));
+  const isEditingRef = useRef(false);
+
+  useEffect(() => {
+    if (isEditingRef.current) return;
+    setLocalVal(String(value ?? param.default ?? ''));
+  }, [value, param.default]);
+
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs">{param.name}</Label>
+      <Input
+        type="text"
+        inputMode="numeric"
+        value={localVal}
+        onChange={(e) => setLocalVal(e.target.value)}
+        onFocus={() => { isEditingRef.current = true; }}
+        onBlur={() => {
+          isEditingRef.current = false;
+          const parsed = parseFloat(localVal);
+          if (!isNaN(parsed)) {
+            setLocalVal(String(parsed));
+            onUpdate(index, { [param.key]: parsed });
+          } else {
+            const fallback = param.default ?? 0;
+            setLocalVal(String(fallback));
+            onUpdate(index, { [param.key]: fallback });
+          }
+        }}
+        className="h-8 text-xs"
+      />
+      <p className="text-xs text-muted-foreground">{param.description}</p>
+    </div>
+  );
+}
+
+/** Local-buffered tuple input for filter parameters. */
+function FilterTupleInput({ param, value, index, onUpdate }: {
+  param: any;
+  value: [number, number] | undefined;
+  index: number;
+  onUpdate: (index: number, updates: Partial<ImageFilter>) => void;
+}) {
+  const defaults = (param.default as [number, number]) ?? [0, 0];
+  const [localA, setLocalA] = useState(String(value?.[0] ?? defaults[0]));
+  const [localB, setLocalB] = useState(String(value?.[1] ?? defaults[1]));
+  const isEditingARef = useRef(false);
+  const isEditingBRef = useRef(false);
+
+  useEffect(() => {
+    if (!isEditingARef.current) setLocalA(String(value?.[0] ?? defaults[0]));
+    if (!isEditingBRef.current) setLocalB(String(value?.[1] ?? defaults[1]));
+  }, [value?.[0], value?.[1], defaults[0], defaults[1]]);
+
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs">{param.name}</Label>
+      <div className="flex gap-2">
+        <Input
+          type="text"
+          inputMode="numeric"
+          value={localA}
+          onChange={(e) => setLocalA(e.target.value)}
+          onFocus={() => { isEditingARef.current = true; }}
+          onBlur={() => {
+            isEditingARef.current = false;
+            const parsed = parseInt(localA);
+            const currentB = value?.[1] ?? defaults[1];
+            if (!isNaN(parsed)) {
+              setLocalA(String(parsed));
+              onUpdate(index, { [param.key]: [parsed, currentB] });
+            } else {
+              setLocalA(String(defaults[0]));
+              onUpdate(index, { [param.key]: [defaults[0], currentB] });
+            }
+          }}
+          className="h-8 text-xs"
+          placeholder="H"
+        />
+        <Input
+          type="text"
+          inputMode="numeric"
+          value={localB}
+          onChange={(e) => setLocalB(e.target.value)}
+          onFocus={() => { isEditingBRef.current = true; }}
+          onBlur={() => {
+            isEditingBRef.current = false;
+            const parsed = parseInt(localB);
+            const currentA = value?.[0] ?? defaults[0];
+            if (!isNaN(parsed)) {
+              setLocalB(String(parsed));
+              onUpdate(index, { [param.key]: [currentA, parsed] });
+            } else {
+              setLocalB(String(defaults[1]));
+              onUpdate(index, { [param.key]: [currentA, defaults[1]] });
+            }
+          }}
+          className="h-8 text-xs"
+          placeholder="W"
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">{param.description}</p>
+    </div>
+  );
+}
+
+export function FilterEditor({
+  filter,
+  index,
+  onUpdate,
+  onRemove,
+  onMoveUp,
   onMoveDown,
   isFirst,
-  isLast 
+  isLast
 }: FilterEditorProps) {
   const definition = getFilterDefinition(filter.type);
-  
+
   if (!definition) return null;
 
   const renderParameter = (param: typeof definition.parameters[0]) => {
     const value = filter[param.key];
-    
+
     switch (param.type) {
       case 'number':
         return (
-          <div key={param.key as string} className="space-y-1">
-            <Label className="text-xs">{param.name}</Label>
-            <Input
-              type="number"
-              value={value ?? param.default}
-              onChange={(e) => {
-                const parsed = parseFloat(e.target.value);
-                // Only update if we have a valid number (ignore empty/invalid input)
-                if (!isNaN(parsed)) {
-                  onUpdate(index, { [param.key]: parsed });
-                }
-              }}
-              min={param.min}
-              max={param.max}
-              step={param.step}
-              className="h-8 text-xs"
-            />
-            <p className="text-xs text-muted-foreground">{param.description}</p>
-          </div>
+          <FilterNumberInput
+            key={param.key as string}
+            param={param}
+            value={value as number | undefined}
+            index={index}
+            onUpdate={onUpdate}
+          />
         );
-      
+
       case 'tuple':
-        const tupleValue = (value as [number, number]) ?? param.default;
         return (
-          <div key={param.key as string} className="space-y-1">
-            <Label className="text-xs">{param.name}</Label>
-            <div className="flex gap-2">
-              <Input
-                type="number"
-                value={tupleValue[0]}
-                onChange={(e) => {
-                  const newVal = parseInt(e.target.value);
-                  // Only update if we have a valid number (ignore empty/invalid input)
-                  if (!isNaN(newVal)) {
-                    onUpdate(index, { [param.key]: [newVal, tupleValue[1]] });
-                  }
-                }}
-                min={param.min}
-                max={param.max}
-                step={param.step}
-                className="h-8 text-xs"
-                placeholder="H"
-              />
-              <Input
-                type="number"
-                value={tupleValue[1]}
-                onChange={(e) => {
-                  const newVal = parseInt(e.target.value);
-                  // Only update if we have a valid number (ignore empty/invalid input)
-                  if (!isNaN(newVal)) {
-                    onUpdate(index, { [param.key]: [tupleValue[0], newVal] });
-                  }
-                }}
-                min={param.min}
-                max={param.max}
-                step={param.step}
-                className="h-8 text-xs"
-                placeholder="W"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">{param.description}</p>
-          </div>
+          <FilterTupleInput
+            key={param.key as string}
+            param={param}
+            value={value as [number, number] | undefined}
+            index={index}
+            onUpdate={onUpdate}
+          />
         );
-      
+
       case 'text':
         return (
           <div key={param.key as string} className="space-y-1">
@@ -117,7 +186,7 @@ export function FilterEditor({
             <p className="text-xs text-muted-foreground">{param.description}</p>
           </div>
         );
-      
+
       default:
         return null;
     }

@@ -318,11 +318,11 @@ const RunPIV: React.FC<RunPIVProps> = ({
             </div>
             <div>
               <label className="text-sm font-medium">Lower Limit</label>
-              <Input type="number" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" />
+              <Input type="text" inputMode="numeric" value={lowerLimit} onChange={e => setLowerLimit(e.target.value)} placeholder="auto" />
             </div>
             <div>
               <label className="text-sm font-medium">Upper Limit</label>
-              <Input type="number" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" />
+              <Input type="text" inputMode="numeric" value={upperLimit} onChange={e => setUpperLimit(e.target.value)} placeholder="auto" />
             </div>
           </div>
         )}

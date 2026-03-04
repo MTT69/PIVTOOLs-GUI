@@ -720,7 +720,7 @@ export default function POD({ config, updateConfig }: PODProps) {
                 </div>
                 <div className="w-1/3 text-right">
                   <Input
-                    type="number"
+                    type="text" inputMode="numeric"
                     min={1}
                     max={99999}
                     // visually limit to ~5 digits
@@ -894,11 +894,11 @@ export default function POD({ config, updateConfig }: PODProps) {
                   />
 
                   <label className="text-sm font-medium">Run:</label>
-                  <Input type="number" min={1} value={runVis} onChange={e => setRunVis(Math.max(1, Number(e.target.value)))} className="w-24" />
+                  <Input type="text" inputMode="numeric" min={1} value={runVis} onChange={e => setRunVis(Math.max(1, Number(e.target.value)))} className="w-24" />
                   <label className="text-sm font-medium">Lower:</label>
-                  <Input type="number" value={lower} onChange={e => setLower(e.target.value)} placeholder="auto" className="w-28" />
+                  <Input type="text" inputMode="numeric" value={lower} onChange={e => setLower(e.target.value)} placeholder="auto" className="w-28" />
                   <label className="text-sm font-medium">Upper:</label>
-                  <Input type="number" value={upper} onChange={e => setUpper(e.target.value)} placeholder="auto" className="w-28" />
+                  <Input type="text" inputMode="numeric" value={upper} onChange={e => setUpper(e.target.value)} placeholder="auto" className="w-28" />
 
                   <Button
                     className="bg-soton-blue"

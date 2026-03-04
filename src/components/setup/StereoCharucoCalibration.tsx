@@ -321,7 +321,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             <div>
               <label className="text-sm font-medium">Number of Images</label>
               <Input
-                type="number"
+                type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
                 onChange={e => setNumImages(e.target.value)}
@@ -464,7 +464,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Squares Horizontal</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   min={3}
                   value={squaresHInput}
                   onChange={e => setSquaresHInput(e.target.value)}
@@ -474,7 +474,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Squares Vertical</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   min={3}
                   value={squaresVInput}
                   onChange={e => setSquaresVInput(e.target.value)}
@@ -484,7 +484,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Square Size (m)</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   step="any"
                   min={0.001}
                   value={squareSizeInput}
@@ -495,7 +495,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Marker Ratio</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   step="0.1"
                   min={0.1}
                   max={1.0}
@@ -525,7 +525,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Min Corners</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   min={4}
                   value={minCornersInput}
                   onChange={e => setMinCornersInput(e.target.value)}
@@ -535,7 +535,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">&Delta;t (seconds)</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   step="any"
                   min={0.001}
                   value={dtInput}
@@ -557,7 +557,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <div>
                 <label className="text-sm font-medium">Datum Frame</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}

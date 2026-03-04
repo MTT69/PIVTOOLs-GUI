@@ -15,7 +15,10 @@ type RawImage = {
 function PolygonMaskEditor({
 	raw, src, vmin, vmax, title,
 	meta,
-	arrayPostUrl
+	arrayPostUrl,
+	cameraOptions,
+	camera,
+	onCameraChange,
 }: {
 	raw?: RawImage | null;
 	src?: string | null;
@@ -23,6 +26,9 @@ function PolygonMaskEditor({
 	title: string;
 	meta: { basePathIdx: number; camera: string; index: number; frame: "A"|"B" };
 	arrayPostUrl: string;
+	cameraOptions?: number[];
+	camera?: number;
+	onCameraChange?: (cam: number) => void;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const viewRef = useRef<HTMLCanvasElement | null>(null);
@@ -485,26 +491,6 @@ function PolygonMaskEditor({
 		const { w, h } = nativeSize;
 		if (!w || !h) return;
 
-		// Build mask canvas from closed polygons
-		const mc = document.createElement("canvas");
-		mc.width = w; mc.height = h;
-		const mctx = mc.getContext("2d")!;
-		mctx.clearRect(0, 0, w, h);
-		mctx.fillStyle = "#ffffff";
-		for (const poly of polygonList) {
-			if (poly.points.length < 3 || !poly.closed) continue;
-			mctx.beginPath();
-			mctx.moveTo(poly.points[0].x, poly.points[0].y);
-			for (let i = 1; i < poly.points.length; i++) mctx.lineTo(poly.points[i].x, poly.points[i].y);
-			mctx.closePath();
-			mctx.fill();
-		}
-
-		const id = mctx.getImageData(0, 0, w, h);
-		const N = w * h;
-		const out = new Uint8Array(N);
-		for (let i = 0; i < N; i++) out[i] = id.data[i * 4] > 0 ? 1 : 0;
-
 		// Serialize polygon corner data (native coordinates)
 		const polygons = polygonList
 			.filter(p => p.points.length >= 3 && p.closed)
@@ -518,7 +504,6 @@ function PolygonMaskEditor({
 			meta,
 			width: w,
 			height: h,
-			data: Array.from(out),
 			polygons
 		};
 
@@ -761,13 +746,44 @@ function PolygonMaskEditor({
 			</div>
 
 			{/* Controls placed just below the mask path input (outside gray area) */}
-			<div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-				<div className="flex items-center gap-2 justify-start">
+			<div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+				<div className="flex items-center gap-2">
 					<Button size="sm" variant="outline" onClick={startNewPolygon}>New polygon</Button>
 					<Button size="sm" variant="outline" onClick={undoPoint} disabled={active < 0}>Undo point</Button>
 					<Button size="sm" variant="outline" onClick={deletePolygon} disabled={active < 0}>Delete</Button>
 				</div>
-				<div className="flex items-center gap-2 justify-center">
+				{cameraOptions && cameraOptions.length > 1 && camera !== undefined && onCameraChange && (
+					<div className="flex items-center gap-1">
+						<Button
+							size="sm"
+							variant="outline"
+							className="px-2"
+							onClick={() => {
+								const idx = cameraOptions.indexOf(camera);
+								const prev = (idx - 1 + cameraOptions.length) % cameraOptions.length;
+								onCameraChange(cameraOptions[prev]);
+							}}
+						>
+							◀
+						</Button>
+						<span className="text-xs font-medium px-2 py-1 bg-gray-100 rounded min-w-[4rem] text-center">
+							Cam {camera}
+						</span>
+						<Button
+							size="sm"
+							variant="outline"
+							className="px-2"
+							onClick={() => {
+								const idx = cameraOptions.indexOf(camera);
+								const next = (idx + 1) % cameraOptions.length;
+								onCameraChange(cameraOptions[next]);
+							}}
+						>
+							▶
+						</Button>
+					</div>
+				)}
+				<div className="flex items-center gap-2">
 					<Button size="sm" onClick={selectPrev} disabled={polys.length === 0}>Prev</Button>
 					<select
 						className="border rounded px-2 py-1 text-sm"
@@ -781,7 +797,7 @@ function PolygonMaskEditor({
 					</select>
 					<Button size="sm" onClick={selectNext} disabled={polys.length === 0}>Next</Button>
 				</div>
-				<div className="flex items-center gap-2 justify-end">
+				<div className="flex items-center gap-2">
 					<Button size="sm" variant={magnifierEnabled ? "default" : "outline"} onClick={() => setMagnifierEnabled(v => !v)}>
 						{magnifierEnabled ? "🔎 On" : "🔍"}
 					</Button>

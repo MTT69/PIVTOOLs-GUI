@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettin
 import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import CameraSelector from "@/components/shared/CameraSelector";
+import { useNumericInput } from "@/hooks/useNumericInput";
 
 interface InstantaneousPIVProps {
   config: any;
@@ -100,6 +101,14 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
       console.error('Failed to update config:', result.error);
     }
   }, [updateConfigBackend, updateConfig]);
+
+  // Local-buffered numeric input for num_peaks
+  const numPeaks = useNumericInput({
+    configValue: config?.instantaneous_piv?.num_peaks,
+    defaultValue: 1,
+    onCommit: (val) => updateConfigValue(['instantaneous_piv', 'num_peaks'], val),
+    min: 1,
+  });
 
   return (
     <div className="space-y-6">
@@ -304,12 +313,11 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                   <Input
                     id="num-peaks"
                     type="text"
-                    value={config?.instantaneous_piv?.num_peaks === '' ? '' : (config?.instantaneous_piv?.num_peaks ?? 1)}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      const num = parseInt(val, 10);
-                      updateConfigValue(['instantaneous_piv', 'num_peaks'], isNaN(num) ? '' : num);
-                    }}
+                    inputMode="numeric"
+                    value={numPeaks.value}
+                    onChange={numPeaks.onChange}
+                    onFocus={numPeaks.onFocus}
+                    onBlur={numPeaks.onBlur}
                   />
                   <p className="text-xs text-muted-foreground">
                     Number of correlation peaks to detect per interrogation window. Usually 1; increase for multi-peak analysis.

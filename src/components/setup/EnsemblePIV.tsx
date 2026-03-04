@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import CameraSelector from "@/components/shared/CameraSelector";
 import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
+import { useNumericInput } from "@/hooks/useNumericInput";
 
 interface EnsemblePIVProps {
   config: any;
@@ -117,6 +118,35 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
       console.error('Failed to update config:', result.error);
     }
   }, [updateConfigBackend, updateConfig]);
+
+  // Local-buffered numeric inputs for sum_fitting_window and kspace_snr_threshold
+  const sumFitHeight = useNumericInput({
+    configValue: config?.ensemble_piv?.sum_fitting_window?.[0],
+    defaultValue: 16,
+    onCommit: (val) => {
+      const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+      updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [val, current[1]]);
+    },
+    min: 1,
+  });
+
+  const sumFitWidth = useNumericInput({
+    configValue: config?.ensemble_piv?.sum_fitting_window?.[1],
+    defaultValue: 16,
+    onCommit: (val) => {
+      const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+      updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [current[0], val]);
+    },
+    min: 1,
+  });
+
+  const kspaceSnr = useNumericInput({
+    configValue: config?.ensemble_piv?.kspace_snr_threshold,
+    defaultValue: 3.0,
+    onCommit: (val) => updateConfigValue(['ensemble_piv', 'kspace_snr_threshold'], val),
+    mode: 'float',
+    min: 0,
+  });
 
   return (
     <div className="space-y-6">
@@ -269,12 +299,11 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       <Label className="text-xs">Height</Label>
                       <Input
                         type="text"
-                        value={config?.ensemble_piv?.sum_fitting_window?.[0] ?? 16}
-                        onChange={(e) => {
-                          const num = parseInt(e.target.value, 10);
-                          const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
-                          updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [isNaN(num) ? current[0] : num, current[1]]);
-                        }}
+                        inputMode="numeric"
+                        value={sumFitHeight.value}
+                        onChange={sumFitHeight.onChange}
+                        onFocus={sumFitHeight.onFocus}
+                        onBlur={sumFitHeight.onBlur}
                         className="h-8"
                       />
                     </div>
@@ -282,12 +311,11 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       <Label className="text-xs">Width</Label>
                       <Input
                         type="text"
-                        value={config?.ensemble_piv?.sum_fitting_window?.[1] ?? 16}
-                        onChange={(e) => {
-                          const num = parseInt(e.target.value, 10);
-                          const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
-                          updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [current[0], isNaN(num) ? current[1] : num]);
-                        }}
+                        inputMode="numeric"
+                        value={sumFitWidth.value}
+                        onChange={sumFitWidth.onChange}
+                        onFocus={sumFitWidth.onFocus}
+                        onBlur={sumFitWidth.onBlur}
                         className="h-8"
                       />
                     </div>
@@ -373,19 +401,19 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                   <div className="space-y-2">
                     <Label className="text-sm">Fit Method</Label>
                     <Select
-                      value={config?.ensemble_piv?.fit_method || 'gaussian'}
+                      value={config?.ensemble_piv?.fit_method || 'kspace'}
                       onValueChange={(value) => updateConfigValue(['ensemble_piv', 'fit_method'], value)}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="gaussian">Gaussian</SelectItem>
-                        <SelectItem value="kspace">K-space</SelectItem>
+                        <SelectItem value="gaussian">Gaussian (In Development)</SelectItem>
+                        <SelectItem value="kspace">K-space (Default)</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      Gaussian: fits a Gaussian function to the correlation peak (robust, recommended). K-space: fits in frequency domain (better Reynolds stresses at very small windows).
+                      K-space (recommended): fits in frequency domain with predictor-aware noise modelling (40-90% improved Reynolds stress accuracy). Gaussian (in development): fits a Gaussian function to the correlation peak.
                     </p>
                   </div>
 
@@ -431,12 +459,11 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       <Label className="text-sm">K-space SNR Threshold</Label>
                       <Input
                         type="text"
-                        value={config?.ensemble_piv?.kspace_snr_threshold === '' ? '' : (config?.ensemble_piv?.kspace_snr_threshold ?? 3.0)}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const num = parseFloat(val);
-                          updateConfigValue(['ensemble_piv', 'kspace_snr_threshold'], isNaN(num) ? '' : num);
-                        }}
+                        inputMode="numeric"
+                        value={kspaceSnr.value}
+                        onChange={kspaceSnr.onChange}
+                        onFocus={kspaceSnr.onFocus}
+                        onBlur={kspaceSnr.onBlur}
                       />
                       <p className="text-xs text-muted-foreground">
                         Signal-to-noise ratio threshold for k-space fitting. Only active when fit_method is &apos;kspace&apos;.

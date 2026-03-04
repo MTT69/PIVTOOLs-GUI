@@ -275,7 +275,7 @@ export default function CalibrationImageConfig({
             <Label htmlFor="calib-num-images">Number of Images</Label>
             <Input
               id="calib-num-images"
-              type="number"
+              type="text" inputMode="numeric"
               min={1}
               value={numImages}
               onChange={e => setNumImages(e.target.value)}

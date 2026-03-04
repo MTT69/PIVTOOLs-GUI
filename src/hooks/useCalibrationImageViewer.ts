@@ -254,11 +254,23 @@ export function useCalibrationImageViewer(
     };
   }, [idx, getCacheKey, buildFrameUrl, autoLimits, prefetchSurrounding, cancelPrefetches]);
 
+  // Track previous camera to detect camera switches
+  const prevCameraRef = useRef(camera);
+
   // Clear cache when parameters change
+  // Also clear backend calibration cache on camera switch
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, cancelPrefetches]);
+
+    // Clear backend calibration image cache on camera switch (non-blocking)
+    if (prevCameraRef.current !== camera) {
+      fetch(`${backendUrl}/calibration/clear_image_cache`, {
+        method: 'POST',
+      }).catch(() => {}); // Silent fail — cache clear is best-effort
+      prevCameraRef.current = camera;
+    }
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, cancelPrefetches, backendUrl]);
 
   return {
     // Image state

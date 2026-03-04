@@ -1,21 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
 
-export type FilterType = 
+export type FilterType =
   | "time" | "pod"  // Batch filters
-  | "clip" | "invert" | "levelize" | "lmax" | "maxnorm" 
-  | "median" | "norm" | "sbg" | "gaussian";  // Spatial filters
+  | "lmax" | "maxnorm" | "median" | "norm" | "gaussian";  // Spatial filters
 
 export interface ImageFilter {
   type: FilterType;
-  // Common parameters (filter-specific)
-  size?: [number, number];  // For spatial filters like median, gaussian, etc.
+  size?: [number, number];  // For spatial filters like median, lmax, maxnorm, norm
   sigma?: number;  // For gaussian
-  threshold?: [number, number] | null;  // For clip
-  n?: number;  // For clip auto-threshold
-  offset?: number;  // For invert
-  white?: string | null;  // For levelize
   max_gain?: number;  // For maxnorm, norm
-  bg?: string | null;  // For sbg
+  threshold?: number;  // For lmax
+  n?: number;  // For time (temporal) filter
+  offset?: number;  // For time (temporal) filter
+  white?: number;  // For norm
+  bg?: [number, number];  // For background subtraction
+  [key: string]: any;  // Allow dynamic filter parameter access
 }
 
 export function useImageFilters(backendUrl: string) {
@@ -241,14 +240,10 @@ export function useImageFilters(backendUrl: string) {
     const defaultParams: Record<FilterType, Partial<ImageFilter>> = {
       time: {},
       pod: {},
-      clip: { n: 2.0 },
-      invert: { offset: 255 },
-      levelize: { white: null },
       lmax: { size: [7, 7] },
       maxnorm: { size: [7, 7], max_gain: 1.0 },
       median: { size: [5, 5] },
       norm: { size: [7, 7], max_gain: 1.0 },
-      sbg: { bg: null },
       gaussian: { sigma: 1.0 },
     };
 

@@ -25,9 +25,9 @@ function passesEqual(a: EnsemblePass[], b: EnsemblePass[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (
-      a[i].windowX !== b[i].windowX ||
-      a[i].windowY !== b[i].windowY ||
-      a[i].overlap !== b[i].overlap ||
+      Number(a[i].windowX) !== Number(b[i].windowX) ||
+      Number(a[i].windowY) !== Number(b[i].windowY) ||
+      Number(a[i].overlap) !== Number(b[i].overlap) ||
       a[i].type !== b[i].type ||
       a[i].store !== b[i].store
     ) {
@@ -80,6 +80,7 @@ export function useEnsemblePivConfig(
   // --- Refs for Debouncing and Feedback Loop Prevention ---
   const saveTimerRef = useRef<number | null>(null);
   const suppressUntilRef = useRef<number>(0);
+  const hasPendingEditRef = useRef(false);
   const lastSavedRef = useRef<{
     passes: EnsemblePass[];
     sumWindow: [number | string, number | string];
@@ -117,6 +118,7 @@ export function useEnsemblePivConfig(
       return;
     }
 
+    hasPendingEditRef.current = true;
     lastSavedRef.current = {
       passes: JSON.parse(JSON.stringify(passesToSave)),
       sumWindow: [sumWindowToSave[0], sumWindowToSave[1]],
@@ -162,8 +164,10 @@ export function useEnsemblePivConfig(
         } else {
           console.error('Failed to update config:', await res.json());
         }
+        hasPendingEditRef.current = false;
       } catch (e) {
         console.error('Auto-save failed:', e);
+        hasPendingEditRef.current = false;
       }
     }, 400);
   }, [updateConfig]);
@@ -177,6 +181,7 @@ export function useEnsemblePivConfig(
   // Sync with incoming config changes, avoiding feedback loops
   useEffect(() => {
     if (Date.now() < suppressUntilRef.current) return;
+    if (hasPendingEditRef.current) return;
 
     const runsArray = config.runs || [];
     const typeArray = config.type || [];
@@ -194,6 +199,10 @@ export function useEnsemblePivConfig(
     }
 
     if (newPasses.length > 0 && !passesEqual(newPasses, passes)) {
+      lastSavedRef.current = {
+        ...lastSavedRef.current,
+        passes: JSON.parse(JSON.stringify(newPasses)),
+      };
       setPasses(newPasses);
     }
 
@@ -205,18 +214,22 @@ export function useEnsemblePivConfig(
       ];
       if (newSumWindow[0] !== sumWindow[0] || newSumWindow[1] !== sumWindow[1]) {
         setSumWindow(newSumWindow);
+        lastSavedRef.current = { ...lastSavedRef.current, sumWindow: newSumWindow };
       }
     }
 
     // Sync other options
     if (config.store_planes !== undefined && config.store_planes !== storePlanes) {
       setStorePlanes(config.store_planes);
+      lastSavedRef.current = { ...lastSavedRef.current, storePlanes: config.store_planes };
     }
     if (config.save_diagnostics !== undefined && config.save_diagnostics !== saveDiagnostics) {
       setSaveDiagnostics(config.save_diagnostics);
+      lastSavedRef.current = { ...lastSavedRef.current, saveDiagnostics: config.save_diagnostics };
     }
     if (config.resume_from_pass !== undefined && config.resume_from_pass !== resumeFromPass) {
       setResumeFromPass(config.resume_from_pass);
+      lastSavedRef.current = { ...lastSavedRef.current, resumeFromPass: config.resume_from_pass };
     }
   }, [config.window_size, config.overlap, config.runs, config.type, config.sum_window, config.store_planes, config.save_diagnostics, config.resume_from_pass]);
 

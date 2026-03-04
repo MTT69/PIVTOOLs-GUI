@@ -469,7 +469,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <Label htmlFor="num_images">Number of {imageType === "cine" ? "Frames" : "Image Files"}</Label>
                   <Input
                     id="num_images"
-                    type="number"
+                    type="text" inputMode="numeric"
                     min="0"
                     value={numImages}
                     onChange={e => setNumImages(e.target.value)}
@@ -487,7 +487,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     <Label htmlFor="num_loops">Number of Loops</Label>
                     <Input
                       id="num_loops"
-                      type="number"
+                      type="text" inputMode="numeric"
                       min="1"
                       value={numLoops}
                       onChange={e => setNumLoops(e.target.value)}
@@ -507,7 +507,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <Label htmlFor="num_cameras">Camera Count</Label>
                   <Input
                     id="num_cameras"
-                    type="number"
+                    type="text" inputMode="numeric"
                     min="1"
                     value={numCameras}
                     onChange={e => setNumCameras(e.target.value.replace(/[^0-9]/g, ''))}

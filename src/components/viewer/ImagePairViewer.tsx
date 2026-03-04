@@ -102,7 +102,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     playingRef.current = playing;
   }, [playing]);
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
-  const [batchSize, setBatchSize] = useState<string>('30');
 
   // --- Hooks for Logic ---
   // Disable raw fetching during processed playback to avoid bandwidth competition
@@ -200,13 +199,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     setFrameInputValue(String(index));
   }, [index]);
 
-  // Initialize batch size from config
-  useEffect(() => {
-    if (config?.batches?.size !== undefined) {
-      setBatchSize(String(config.batches.size));
-    }
-  }, [config?.batches?.size]);
-
   // Check if any temporal filters are present
   const hasTemporalFilters = useMemo(() => {
     return filters.some(f => f.type === 'time' || f.type === 'pod');
@@ -222,44 +214,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
       });
     }
   }, [lastError]);
-
-  // Save batch size to backend
-  const saveBatchSize = async (newBatchSize: string) => {
-    const num = parseInt(newBatchSize, 10);
-    if (isNaN(num) || num < 1) return;
-
-    // Validate that batch size doesn't exceed number of frame pairs
-    if (num > maxFrames) {
-      console.warn(`Batch size (${num}) exceeds number of frame pairs (${maxFrames}). Setting to ${maxFrames}.`);
-      const validSize = maxFrames;
-      setBatchSize(String(validSize));
-
-      try {
-        await fetch(`${backendUrl}/update_config`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            batches: { size: validSize }
-          }),
-        });
-      } catch (e) {
-        console.error('Failed to save batch size', e);
-      }
-      return;
-    }
-
-    try {
-      await fetch(`${backendUrl}/update_config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batches: { size: num }
-        }),
-      });
-    } catch (e) {
-      console.error('Failed to save batch size', e);
-    }
-  };
 
   // Update slider values when server-provided auto-contrast values change
   useEffect(() => {
@@ -432,25 +386,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               <div className="flex-1">
                 <FilterSelector onAddFilter={addFilter} />
               </div>
-              {hasTemporalFilters && (
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="batch-size" className="text-xs whitespace-nowrap">Batch Size:</Label>
-                    <Input
-                      id="batch-size"
-                      type="number"
-                      min="1"
-                      max={maxFrames}
-                      value={batchSize}
-                      onChange={(e) => setBatchSize(e.target.value)}
-                      onBlur={() => saveBatchSize(batchSize)}
-                      className="w-20 h-9"
-                      title={`Number of images per batch for temporal filters (max: ${maxFrames})`}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">Max: {maxFrames} frames</p>
-                </div>
-              )}
             </div>
             <div className="space-y-2 p-2 border rounded-md min-h-[100px] bg-muted/50">
               {filters.length === 0 && <p className="text-sm text-muted-foreground">No filters applied</p>}
@@ -558,7 +493,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             />
             <Input
               id="frame-input"
-              type="number"
+              type="text" inputMode="numeric"
               min={1}
               max={maxFrames}
               value={frameInputValue}
@@ -704,7 +639,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     </Select>
                     {gridSize === 0 && (
                       <Input
-                        type="number"
+                        type="text" inputMode="numeric"
                         min={1}
                         max={512}
                         value={customGridSize}
@@ -744,7 +679,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Input type="number" value={rawVmin} min={0} max={rawVmax} onChange={e => {
+                <Input type="text" inputMode="numeric" value={rawVmin} min={0} max={rawVmax} onChange={e => {
                   setRawManuallyAdjusted(true);
                   setRawAutoScale(false);
                   const val = Math.min(Number(e.target.value), rawVmax);
@@ -772,7 +707,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
                   </Slider.Root>
                 </div>
-                <Input type="number" value={rawVmax} min={rawVmin} max={maxVal} onChange={e => {
+                <Input type="text" inputMode="numeric" value={rawVmax} min={rawVmin} max={maxVal} onChange={e => {
                   setRawManuallyAdjusted(true);
                   setRawAutoScale(false);
                   const val = Math.max(Number(e.target.value), rawVmin);
@@ -843,7 +778,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   </div>
                 </div>
               <div className="flex items-center gap-2">
-                <Input type="number" value={procVmin} min={0} max={procVmax} onChange={e => {
+                <Input type="text" inputMode="numeric" value={procVmin} min={0} max={procVmax} onChange={e => {
                   setProcManuallyAdjusted(true);
                   setProcAutoScale(false);
                   const val = Math.min(Number(e.target.value), procVmax);
@@ -871,7 +806,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 focus:shadow-[0_0_0_5px] focus:shadow-blackA8 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
                   </Slider.Root>
                 </div>
-                <Input type="number" value={procVmax} min={procVmin} max={maxVal} onChange={e => {
+                <Input type="text" inputMode="numeric" value={procVmax} min={procVmin} max={maxVal} onChange={e => {
                   setProcManuallyAdjusted(true);
                   setProcAutoScale(false);
                   const val = Math.max(Number(e.target.value), procVmin);

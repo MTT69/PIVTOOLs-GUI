@@ -394,7 +394,7 @@ export default function CalibrationImageViewer({
               className="flex-1 max-w-[300px]"
             />
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               min={1}
               max={maxFrames}
               value={frameInputValue}
@@ -601,7 +601,7 @@ export default function CalibrationImageViewer({
           <Label className="text-sm font-medium">Contrast</Label>
           <div className="flex items-center gap-2">
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={Math.round(vmin)}
               min={0}
               max={vmax}
@@ -635,7 +635,7 @@ export default function CalibrationImageViewer({
               </Slider.Root>
             </div>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={Math.round(vmax)}
               min={vmin}
               max={100}

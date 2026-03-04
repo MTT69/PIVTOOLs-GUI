@@ -18,7 +18,7 @@ export interface InstantaneousPivConfig {
 function passesEqual(a: PivPass[], b: PivPass[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i].windowX !== b[i].windowX || a[i].windowY !== b[i].windowY || a[i].overlap !== b[i].overlap || a[i].store !== b[i].store) {
+    if (Number(a[i].windowX) !== Number(b[i].windowX) || Number(a[i].windowY) !== Number(b[i].windowY) || Number(a[i].overlap) !== Number(b[i].overlap) || a[i].store !== b[i].store) {
       return false;
     }
   }
@@ -55,6 +55,7 @@ export function useInstantaneousPivConfig(
   // --- Refs for Debouncing and Feedback Loop Prevention ---
   const saveTimerRef = useRef<number | null>(null);
   const suppressUntilRef = useRef<number>(0);
+  const hasPendingEditRef = useRef(false);
   const lastSavedRef = useRef({ passes: initialPasses });
 
   // --- Backend Synchronization ---
@@ -65,6 +66,7 @@ export function useInstantaneousPivConfig(
       return;
     }
     
+    hasPendingEditRef.current = true;
     lastSavedRef.current = { passes: JSON.parse(JSON.stringify(passesToSave)) };
 
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -93,8 +95,10 @@ export function useInstantaneousPivConfig(
         } else {
           console.error('Failed to update config:', await res.json());
         }
+        hasPendingEditRef.current = false;
       } catch (e) {
         console.error('Auto-save failed:', e);
+        hasPendingEditRef.current = false;
       }
     }, 400);
   }, [updateConfig]);
@@ -108,7 +112,8 @@ export function useInstantaneousPivConfig(
   // Sync with incoming config changes, avoiding feedback loops
   useEffect(() => {
     if (Date.now() < suppressUntilRef.current) return;
-    
+    if (hasPendingEditRef.current) return;
+
     const runsArray = config.runs || [];
     const newPasses = (config.window_size || []).map((w, i) => ({
         windowX: w[1] ?? 128,  // w[1] is width (X) in backend (height, width) convention
@@ -116,13 +121,14 @@ export function useInstantaneousPivConfig(
         overlap: config.overlap?.[i] ?? 50,
         store: runsArray.includes(i + 1),
     }));
-    
+
     // Ensure last pass is always set to store
     if (newPasses.length > 0) {
       newPasses[newPasses.length - 1].store = true;
     }
-    
+
     if (newPasses.length > 0 && !passesEqual(newPasses, passes)) {
+      lastSavedRef.current = { passes: JSON.parse(JSON.stringify(newPasses)) };
       setPasses(newPasses);
     }
   }, [config.window_size, config.overlap, config.runs]);

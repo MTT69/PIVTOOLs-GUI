@@ -891,7 +891,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[150px]">
                 <label className="text-sm font-medium block mb-2">Lower Limit:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={lower}
                   onChange={e => setLower(e.target.value)}
                   placeholder="auto"
@@ -901,7 +901,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[150px]">
                 <label className="text-sm font-medium block mb-2">Upper Limit:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={upper}
                   onChange={e => setUpper(e.target.value)}
                   placeholder="auto"
@@ -923,7 +923,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[100px]">
                 <label className="text-sm font-medium block mb-2">X Min:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={xlimMin}
                   onChange={e => setXlimMin(e.target.value)}
                   placeholder="auto"
@@ -933,7 +933,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[100px]">
                 <label className="text-sm font-medium block mb-2">X Max:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={xlimMax}
                   onChange={e => setXlimMax(e.target.value)}
                   placeholder="auto"
@@ -943,7 +943,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[100px]">
                 <label className="text-sm font-medium block mb-2">Y Min:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={ylimMin}
                   onChange={e => setYlimMin(e.target.value)}
                   placeholder="auto"
@@ -953,7 +953,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               <div className="flex-1 min-w-[100px]">
                 <label className="text-sm font-medium block mb-2">Y Max:</label>
                 <Input
-                  type="number"
+                  type="text" inputMode="numeric"
                   value={ylimMax}
                   onChange={e => setYlimMax(e.target.value)}
                   placeholder="auto"
@@ -1218,7 +1218,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     />
                     <Input
                       id="frame-input"
-                      type="number"
+                      type="text" inputMode="numeric"
                       min={1}
                       max={maxFrameCount}
                       value={frameInputValue}
@@ -1360,7 +1360,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   <div>
                     <label className="text-sm font-medium block mb-2">X Offset:</label>
                     <Input
-                      type="number"
+                      type="text" inputMode="numeric"
                       value={xOffset}
                       onChange={e => setXOffset(e.target.value)}
                       placeholder="0"
@@ -1370,7 +1370,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   <div>
                     <label className="text-sm font-medium block mb-2">Y Offset:</label>
                     <Input
-                      type="number"
+                      type="text" inputMode="numeric"
                       value={yOffset}
                       onChange={e => setYOffset(e.target.value)}
                       placeholder="0"
@@ -1512,7 +1512,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
                       <label className="text-xs font-medium text-gray-700">Gamma Radius:</label>
                       <Input
-                        type="number"
+                        type="text" inputMode="numeric"
                         min={1}
                         max={20}
                         value={gammaRadius}
@@ -1676,7 +1676,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <div className="flex items-center gap-1">
                       <Input
                         id="velocity-scale-custom"
-                        type="number"
+                        type="text" inputMode="numeric"
                         step="any"
                         placeholder="Custom factor"
                         className="w-32 h-8 text-sm"
@@ -1724,7 +1724,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <div className="flex items-center gap-1">
                       <Input
                         id="coords-scale-custom"
-                        type="number"
+                        type="text" inputMode="numeric"
                         step="any"
                         placeholder="Custom factor"
                         className="w-32 h-8 text-sm"

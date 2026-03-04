@@ -11,7 +11,7 @@ interface PrefetchedFrame {
 }
 
 // Constants for cache management
-const MAX_CACHE_SIZE = 20;
+const MAX_CACHE_SIZE = 30;
 const PREFETCH_WINDOW = 5; // Frames to prefetch ahead (reduced for lighter load)
 const PINNED_FRAME = 1; // Frame 1 should always stay in cache
 
@@ -132,22 +132,23 @@ export function useImagePair(
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [backendUrl, camera, sourcePathIdx, imageFormat, getCacheKey, cleanCache]);
+  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits, getCacheKey, cleanCache]);
 
   // Prefetch surrounding frames for smooth playback
+  // Does NOT cancel in-flight requests — lets existing fetches complete while adding new ones.
+  // This prevents the cancel→refetch→cancel loop that caused playback stalls after ~15 frames.
   const prefetchSurrounding = useCallback((currentIdx: number, count: number = PREFETCH_WINDOW) => {
-    // Cancel any previous prefetch operations
-    cancelPrefetches();
-
     // Update the target index
     currentTargetIndexRef.current = currentIdx;
 
-    // Create new AbortController for this batch of prefetches
-    const abortController = new AbortController();
-    prefetchAbortControllerRef.current = abortController;
-    const signal = abortController.signal;
+    // Reuse existing AbortController if one exists, otherwise create new
+    if (!prefetchAbortControllerRef.current) {
+      prefetchAbortControllerRef.current = new AbortController();
+    }
+    const signal = prefetchAbortControllerRef.current.signal;
 
     // Prefetch next N frames (prioritize forward direction)
+    // prefetchFrame already skips frames that are cached or in-flight
     for (let i = 1; i <= count; i++) {
       prefetchFrame(currentIdx + i, signal);
     }
@@ -158,7 +159,10 @@ export function useImagePair(
         prefetchFrame(currentIdx - i, signal);
       }
     }
-  }, [prefetchFrame, cancelPrefetches]);
+
+    // Clean cache around current position
+    cleanCache(currentIdx);
+  }, [prefetchFrame, cleanCache]);
 
   const fetchPair = useCallback(async () => {
     if (!camera) return;
@@ -277,8 +281,13 @@ export function useImagePair(
     const abortController = new AbortController();
     let cancelled = false;
 
-    // Cancel previous prefetches when frame changes
-    cancelPrefetches();
+    // Only cancel prefetches when the frame is NOT cached (manual navigation / cache miss).
+    // During playback, frames advance only when cached — cancelling would kill the
+    // prefetch pipeline that keeps the cache fed, causing stalls after ~15 frames.
+    const cacheKey = getCacheKey(index);
+    if (!prefetchBufferRef.current.has(cacheKey)) {
+      cancelPrefetches();
+    }
 
     // Update target index
     currentTargetIndexRef.current = index;
@@ -406,11 +415,26 @@ export function useImagePair(
     };
   }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches, enabled]);
 
+  // Track previous camera to detect camera switches
+  const prevCameraRef = useRef(camera);
+
   // Clear prefetch buffer and cancel prefetches when source/camera/format changes
+  // Also clear backend cache on camera switch for faster loading
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches]);
+
+    // Clear backend raw cache on camera switch (non-blocking fire-and-forget)
+    if (prevCameraRef.current !== camera) {
+      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
+      fetch(`${backendUrl}/clear_raw_cache`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exclude_camera: cameraNumber }),
+      }).catch(() => {}); // Silent fail — cache clear is best-effort
+      prevCameraRef.current = camera;
+    }
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches, backendUrl]);
 
   // Check if a frame is in the prefetch cache
   const isFrameCached = useCallback((idx: number): boolean => {

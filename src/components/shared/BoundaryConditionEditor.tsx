@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +17,43 @@ interface BoundaryCondition {
 interface BoundaryConditionEditorProps {
   conditions: BoundaryCondition[];
   updateConfigValue: (path: string[], value: any) => void;
+}
+
+/** Local-buffered numeric input for a single BC field. Commits on blur only. */
+function BCNumericInput({ value, onCommit, mode = 'int' }: {
+  value: number;
+  onCommit: (val: number) => void;
+  mode?: 'int' | 'float';
+}) {
+  const [localVal, setLocalVal] = useState(String(value));
+  const isEditingRef = useRef(false);
+
+  useEffect(() => {
+    if (isEditingRef.current) return;
+    setLocalVal(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      type="text"
+      inputMode="numeric"
+      value={localVal}
+      onChange={(e) => setLocalVal(e.target.value)}
+      onFocus={() => { isEditingRef.current = true; }}
+      onBlur={() => {
+        isEditingRef.current = false;
+        const parse = mode === 'float' ? parseFloat : parseInt;
+        const num = parse(localVal);
+        if (isNaN(num)) {
+          setLocalVal(String(value));
+        } else {
+          setLocalVal(String(num));
+          onCommit(num);
+        }
+      }}
+      className="h-8"
+    />
+  );
 }
 
 export default function BoundaryConditionEditor({
@@ -62,38 +100,25 @@ export default function BoundaryConditionEditor({
             <div key={i} className="grid grid-cols-12 gap-2 items-end bg-gray-50 p-3 rounded-md">
               <div className="col-span-3 space-y-1">
                 <Label className="text-xs">Y Position (px)</Label>
-                <Input
-                  type="text"
+                <BCNumericInput
                   value={bc.y_position}
-                  onChange={(e) => {
-                    const num = parseInt(e.target.value, 10);
-                    updateBC(i, 'y_position', isNaN(num) ? 0 : num);
-                  }}
-                  className="h-8"
+                  onCommit={(val) => updateBC(i, 'y_position', val)}
                 />
               </div>
               <div className="col-span-3 space-y-1">
                 <Label className="text-xs">ux (px/frame)</Label>
-                <Input
-                  type="text"
+                <BCNumericInput
                   value={bc.ux}
-                  onChange={(e) => {
-                    const num = parseFloat(e.target.value);
-                    updateBC(i, 'ux', isNaN(num) ? 0 : num);
-                  }}
-                  className="h-8"
+                  onCommit={(val) => updateBC(i, 'ux', val)}
+                  mode="float"
                 />
               </div>
               <div className="col-span-3 space-y-1">
                 <Label className="text-xs">uy (px/frame)</Label>
-                <Input
-                  type="text"
+                <BCNumericInput
                   value={bc.uy}
-                  onChange={(e) => {
-                    const num = parseFloat(e.target.value);
-                    updateBC(i, 'uy', isNaN(num) ? 0 : num);
-                  }}
-                  className="h-8"
+                  onCommit={(val) => updateBC(i, 'uy', val)}
+                  mode="float"
                 />
               </div>
               <div className="col-span-2 space-y-1">

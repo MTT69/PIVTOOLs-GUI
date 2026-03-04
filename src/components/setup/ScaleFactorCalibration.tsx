@@ -291,7 +291,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           <div>
             <label className="text-sm font-medium">Number of Images</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               min={1}
               value={numImages}
               onChange={e => setNumImages(e.target.value)}
@@ -376,7 +376,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           <div>
             <label className="text-sm font-medium">Δt (seconds)</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={dt}
               onChange={e => setDt(e.target.value)}
               step="any"
@@ -387,7 +387,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           <div>
             <label className="text-sm font-medium">Pixels per mm</label>
             <Input
-              type="number"
+              type="text" inputMode="numeric"
               value={pxPerMm}
               onChange={e => setPxPerMm(e.target.value)}
               step="any"

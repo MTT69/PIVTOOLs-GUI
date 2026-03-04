@@ -339,7 +339,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 						</div>
 						<div>
 							<Label htmlFor="index">Image Index</Label>
-							<Input id="index" type="number" value={index} min={1} onChange={e => setIndex(Math.max(1, Number(e.target.value)))} />
+							<Input id="index" type="text" inputMode="numeric" value={index} min={1} onChange={e => setIndex(Math.max(1, Number(e.target.value)))} />
 						</div>
 						<div>
 							<Label>Frame</Label>
@@ -396,7 +396,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 									<Label htmlFor="rect-top">Top (pixels)</Label>
 									<Input
 										id="rect-top"
-										type="number"
+										type="text" inputMode="numeric"
 										value={topInputValue}
 										min={0}
 										onChange={e => {
@@ -413,14 +413,14 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												updateRectangularTop(numVal);
 											}
 										}}
-										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+										className=""
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-bottom">Bottom (pixels)</Label>
 									<Input
 										id="rect-bottom"
-										type="number"
+										type="text" inputMode="numeric"
 										value={bottomInputValue}
 										min={0}
 										onChange={e => {
@@ -437,14 +437,14 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												updateRectangularBottom(numVal);
 											}
 										}}
-										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+										className=""
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-left">Left (pixels)</Label>
 									<Input
 										id="rect-left"
-										type="number"
+										type="text" inputMode="numeric"
 										value={leftInputValue}
 										min={0}
 										onChange={e => {
@@ -461,14 +461,14 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												updateRectangularLeft(numVal);
 											}
 										}}
-										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+										className=""
 									/>
 								</div>
 								<div>
 									<Label htmlFor="rect-right">Right (pixels)</Label>
 									<Input
 										id="rect-right"
-										type="number"
+										type="text" inputMode="numeric"
 										value={rightInputValue}
 										min={0}
 										onChange={e => {
@@ -485,7 +485,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												updateRectangularRight(numVal);
 											}
 										}}
-										className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+										className=""
 									/>
 								</div>
 							</div>
@@ -512,7 +512,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							</div>
 							<div className="flex items-center gap-2">
 								<Input 
-									type="number" 
+									type="text" inputMode="numeric" 
 									value={vmin} 
 									min={0} 
 									max={vmax} 
@@ -547,7 +547,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 									</Slider.Root>
 								</div>
 								<Input 
-									type="number" 
+									type="text" inputMode="numeric" 
 									value={vmax} 
 									min={vmin} 
 									max={maxVal} 
@@ -572,6 +572,9 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							title="Polygon Mask Editor"
 							meta={{ basePathIdx, camera: `Cam${camera}`, index, frame }}
 							arrayPostUrl="/backend/save_mask_array"
+							cameraOptions={cameraOptions}
+							camera={camera}
+							onCameraChange={setCamera}
 						/>
 					</div>
 				)}

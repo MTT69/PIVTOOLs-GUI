@@ -296,7 +296,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                       </Select>
                     ) : (
                       <Input
-                        type="number"
+                        type="text" inputMode="numeric"
                         min={1}
                         value={run}
                         onChange={(e) => setRun(Number(e.target.value || 1))}
@@ -344,7 +344,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                   <div className="space-y-2">
                     <label className="text-sm font-medium">FPS</label>
                     <Input
-                      type="number"
+                      type="text" inputMode="numeric"
                       min={1}
                       value={fps}
                       onChange={(e) => setFps(Number(e.target.value || 30))}
