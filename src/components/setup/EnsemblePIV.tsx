@@ -119,7 +119,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
     }
   }, [updateConfigBackend, updateConfig]);
 
-  // Local-buffered numeric inputs for sum_fitting_window and kspace_snr_threshold
+  // Local-buffered numeric inputs for sum_fitting_window
   const sumFitHeight = useNumericInput({
     configValue: config?.ensemble_piv?.sum_fitting_window?.[0],
     defaultValue: 16,
@@ -138,14 +138,6 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
       updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [current[0], val]);
     },
     min: 1,
-  });
-
-  const kspaceSnr = useNumericInput({
-    configValue: config?.ensemble_piv?.kspace_snr_threshold,
-    defaultValue: 3.0,
-    onCommit: (val) => updateConfigValue(['ensemble_piv', 'kspace_snr_threshold'], val),
-    mode: 'float',
-    min: 0,
   });
 
   return (
@@ -454,22 +446,6 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </p>
                   </div>
 
-                  {config?.ensemble_piv?.fit_method === 'kspace' && (
-                    <div className="space-y-2">
-                      <Label className="text-sm">K-space SNR Threshold</Label>
-                      <Input
-                        type="text"
-                        inputMode="numeric"
-                        value={kspaceSnr.value}
-                        onChange={kspaceSnr.onChange}
-                        onFocus={kspaceSnr.onFocus}
-                        onBlur={kspaceSnr.onBlur}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Signal-to-noise ratio threshold for k-space fitting. Only active when fit_method is &apos;kspace&apos;.
-                      </p>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
