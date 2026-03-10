@@ -40,9 +40,8 @@ export type StatsWorkflow = 'per_camera' | 'after_merge' | 'both' | 'stereo';
  * Hook for managing statistics calculation state and operations.
  * Syncs checkbox states and gamma_radius with config.yaml.
  *
- * Simplified: Uses base_path_idx + process_merged (boolean) pattern.
- * - process_merged=false: Processes all cameras from config.camera_numbers
- * - process_merged=true: Processes merged data only
+ * Simplified: Uses base_path_idx + workflow pattern.
+ * Workflow controls which targets are processed (per_camera, after_merge, both, stereo).
  *
  * @param backendUrl The backend URL prefix
  * @param basePathIdx Current base path index
@@ -266,9 +265,8 @@ export function useStatisticsCalculation(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_path_idx: basePathIdx,
-          process_merged: processMerged,
           workflow: workflow,
-          type_name: dataSource?.includes('ensemble') ? 'ensemble' : (config?.statistics?.type_name || 'instantaneous'),
+          type_name: dataSource?.includes('ensemble') ? 'ensemble' : 'instantaneous',
           source_endpoint: dataSource ? (dataSource.includes('stereo') ? 'stereo' : (dataSource.includes('merged') ? 'merged' : 'regular')) : sourceEndpoint,
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),
