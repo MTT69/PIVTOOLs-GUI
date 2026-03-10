@@ -20,6 +20,8 @@ export interface ValidationState {
   patternValidations?: PatternValidation[];
   /** Warning if A/B file counts differ significantly */
   abCountWarning?: string | null;
+  /** Suggested camera subfolder when the configured one doesn't exist */
+  suggested_subfolder?: string | null;
   // Legacy fields for backward compatibility
   suggested_pattern?: string | null;
   suggested_pattern_b?: string | null;  // For A/B pair detection
@@ -179,6 +181,7 @@ export function useAutoValidation(config: any) {
             let suggestedPattern: string | null = null;
             let suggestedPatternB: string | null = null;
             let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
+            let suggestedSubfolder: string | null = null;
 
             Object.entries(details).forEach(([key, value]: [string, any]) => {
               if (value.status === 'error') {
@@ -188,6 +191,10 @@ export function useAutoValidation(config: any) {
                     ? `Found ${value.actual_count}/${value.expected_count} files`
                     : 'Cannot read files');
                 errors.push(`${key}: ${errorDetail}`);
+                // Capture first suggested subfolder from any camera
+                if (value.suggested_subfolder && !suggestedSubfolder) {
+                  suggestedSubfolder = value.suggested_subfolder;
+                }
                 // Capture first suggested pattern from any camera (legacy)
                 if (value.suggested_pattern && !suggestedPattern) {
                   suggestedPattern = value.suggested_pattern;
@@ -217,6 +224,7 @@ export function useAutoValidation(config: any) {
               error: errorMsg,
               patternValidations,
               abCountWarning,
+              suggested_subfolder: suggestedSubfolder,
               // Legacy fields
               suggested_pattern: suggestedPattern,
               suggested_pattern_b: suggestedPatternB,

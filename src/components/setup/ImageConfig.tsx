@@ -894,6 +894,15 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       setRawPatterns(newPatterns);
                       saveConfig({ rawPatterns: newPatterns });
                     }}
+                    onApplySuggestedSubfolder={(subfolder) => {
+                      // Derive subfolders for all cameras by replacing the numeric portion
+                      const newSubfolders = Array.from(
+                        { length: Number(numCameras) },
+                        (_, i) => subfolder.replace(/\d+/, String(i + 1))
+                      );
+                      setCameraSubfolders(newSubfolders);
+                      saveConfig({ cameraSubfolders: newSubfolders });
+                    }}
                   />
                   {pairingPreset !== "ab_format" && (
                     <Button

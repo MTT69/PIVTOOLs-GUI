@@ -15,6 +15,7 @@ interface BaseValidationState {
   suggested_pattern?: string | null;
   suggested_pattern_b?: string | null;
   suggested_mode?: 'ab_format' | 'skip_frames' | null;
+  suggested_subfolder?: string | null;
   patternValidations?: PatternValidation[];
   abCountWarning?: string | null;
 }
@@ -29,9 +30,11 @@ interface ValidationAlertProps {
   currentMode?: 'ab_format' | 'skip_frames';
   /** Callback when user clicks to apply suggested pattern(s) */
   onApplySuggestedPattern?: (pattern: string, patternB?: string | null, mode?: string | null) => void;
+  /** Callback when user clicks to apply a suggested camera subfolder */
+  onApplySuggestedSubfolder?: (subfolder: string) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern, onApplySuggestedSubfolder }: ValidationAlertProps) {
   // Checking state
   if (!validation.checked && validation.error) {
     return (
@@ -125,6 +128,19 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
               >
                 {validation.suggested_pattern}
                 {validation.suggested_pattern_b && ` + ${validation.suggested_pattern_b}`}
+              </Button>
+            </div>
+          )}
+          {validation.suggested_subfolder && onApplySuggestedSubfolder && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-muted-foreground">Did you mean folder:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onApplySuggestedSubfolder(validation.suggested_subfolder!)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
+              >
+                {validation.suggested_subfolder}
               </Button>
             </div>
           )}
