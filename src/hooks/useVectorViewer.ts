@@ -483,14 +483,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         });
       }
 
-      // Only update run if it's actually different to avoid re-render loops
-      if (json.meta && json.meta.run != null) {
-        const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
-          setRun(parsed);
-        }
-      }
-      // Don't override type from meta when using prefixed types
+      // Run is managed by fetchAvailableRuns (auto-selects max) and validateAndSetRun (user input).
+      // Do NOT override run from meta.run here — it races with fetchAvailableRuns and resets to 1.
       return true;
     } catch (e: any) {
       setError(e.message || "Unknown error");
@@ -710,13 +704,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
-      // Only update run if it's actually different to avoid re-render loops
-      if (json.meta?.run != null) {
-        const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
-          setRun(parsed);
-        }
-      }
+      // Run is managed by fetchAvailableRuns (auto-selects max) and validateAndSetRun (user input).
+      // Do NOT override run from meta.run here — it races with fetchAvailableRuns and resets to 1.
       // Backend returns raw var name (e.g., "ux"), frontend uses prefixed (e.g., "ens:ux")
       // Compare raw names to avoid re-render loop
       // Strip any prefix from response var in case backend echoes it back
@@ -964,13 +953,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!res.ok) throw new Error(json.error || `Failed to fetch stats plot (${res.status})`);
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
-      // Only update run if it's actually different to avoid re-render loops
-      if (json.meta && json.meta.run != null) {
-        const parsed = Number(json.meta.run);
-        if (Number.isFinite(parsed) && parsed > 0 && parsed !== run) {
-          setRun(parsed);
-        }
-      }
+      // Run is managed by fetchAvailableRuns (auto-selects max) and validateAndSetRun (user input).
+      // Do NOT override run from meta.run here — it races with fetchAvailableRuns and resets to 1.
       // Compare raw var names to avoid re-render loop
       // Strip any prefix from response var in case backend echoes it back
       if (json.meta && json.meta.var != null && typeof json.meta.var === "string") {
@@ -1019,11 +1003,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   }, [effectiveDir, camera, merged, isUncalibrated, fetchAllVars]);
 
   // Auto-render when we have a valid configuration
+  // Only set hasRendered here for meanMode; non-mean modes wait for
+  // fetchAvailableRuns to resolve so the highest pass is selected first.
   useEffect(() => {
-    if (effectiveDir && !hasRendered) {
+    if (effectiveDir && !hasRendered && meanMode) {
       setHasRendered(true);
     }
-  }, [effectiveDir, hasRendered]);
+  }, [effectiveDir, hasRendered, meanMode]);
 
   const handleRender = useCallback(async () => {
     setHasRendered(true);
@@ -1442,9 +1428,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const maxRun = Math.max(...runs);
         setRun(maxRun);
         setRunInput(String(maxRun));
-        setHasRendered(true);
       }
-    }).catch(() => {});
+      setHasRendered(true);
+    }).catch(() => {
+      setHasRendered(true);
+    });
   }, [effectiveDir, meanMode, fetchAvailableRuns]);
 
   // Sync runInput when run changes from other sources (e.g., API response)

@@ -44,8 +44,8 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
 
     const locals: LocalOutlierMethod[] = methods.map((m: OutlierMethod) => ({
       ...m,
-      threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '2.0' : '0.4'),
-      epsilon: m.epsilon?.toString() ?? '0.2',
+      threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '3.0' : '0.4'),
+      epsilon: m.epsilon?.toString() ?? '0.1',
       sigma_threshold: m.sigma_threshold?.toString() ?? '3.0'
     }));
     setLocalMethods(locals);
@@ -63,7 +63,18 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
 
   const updateOutlierMethod = (index: number, field: string, value: any) => {
     const newMethods = [...methods];
-    newMethods[index] = { ...newMethods[index], [field]: value };
+    if (field === 'type') {
+      // Reset to sensible defaults when switching type
+      if (value === 'median_2d') {
+        newMethods[index] = { type: 'median_2d', epsilon: 0.1, threshold: 3.0 };
+      } else if (value === 'peak_mag') {
+        newMethods[index] = { type: 'peak_mag', threshold: 0.4 };
+      } else if (value === 'sigma') {
+        newMethods[index] = { type: 'sigma', sigma_threshold: 3.0 };
+      }
+    } else {
+      newMethods[index] = { ...newMethods[index], [field]: value };
+    }
     updateConfigValue([configPath, 'methods'], newMethods);
   };
 
@@ -164,7 +175,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                         <Input
                           className="h-8 text-sm"
                           type="text"
-                          value={localMethods[i]?.epsilon ?? '0.2'}
+                          value={localMethods[i]?.epsilon ?? '0.1'}
                           onFocus={() => { isUserEditingRef.current = true; }}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -179,7 +190,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                             if (!isNaN(num) && val !== '' && val !== undefined) {
                               updateOutlierMethod(i, 'epsilon', num);
                             } else {
-                              const defaultVal = 0.2;
+                              const defaultVal = 0.1;
                               const newLocal = [...localMethods];
                               newLocal[i] = { ...newLocal[i], epsilon: defaultVal.toString() };
                               setLocalMethods(newLocal);
@@ -193,7 +204,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                         <Input
                           className="h-8 text-sm"
                           type="text"
-                          value={localMethods[i]?.threshold ?? '2.0'}
+                          value={localMethods[i]?.threshold ?? '3.0'}
                           onFocus={() => { isUserEditingRef.current = true; }}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -208,7 +219,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                             if (!isNaN(num) && val !== '' && val !== undefined) {
                               updateOutlierMethod(i, 'threshold', num);
                             } else {
-                              const defaultVal = 2.0;
+                              const defaultVal = 3.0;
                               const newLocal = [...localMethods];
                               newLocal[i] = { ...newLocal[i], threshold: defaultVal.toString() };
                               setLocalMethods(newLocal);

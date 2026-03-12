@@ -1165,97 +1165,121 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 )}
               </div>
 
-              {/* Camera skipper - shown when multiple cameras, not merged, not stereo */}
-              {!isMerged && !isStereoData && cameraOptions.length > 1 && (
-                <div className="flex items-center justify-center gap-2 p-2 bg-gray-50 border rounded-lg">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 w-8 p-0"
-                    disabled={cameraOptions.indexOf(camera) <= 0}
-                    onClick={() => {
-                      const idx = cameraOptions.indexOf(camera);
-                      if (idx > 0) setCamera(cameraOptions[idx - 1]);
-                    }}
-                  >
-                    &lsaquo;
-                  </Button>
-                  <span className="text-sm font-medium min-w-[80px] text-center">
-                    Camera {camera}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 w-8 p-0"
-                    disabled={cameraOptions.indexOf(camera) >= cameraOptions.length - 1}
-                    onClick={() => {
-                      const idx = cameraOptions.indexOf(camera);
-                      if (idx < cameraOptions.length - 1) setCamera(cameraOptions[idx + 1]);
-                    }}
-                  >
-                    &rsaquo;
-                  </Button>
-                  <span className="text-xs text-gray-500">
-                    {cameraOptions.indexOf(camera) + 1} / {cameraOptions.length}
-                  </span>
-                </div>
-              )}
-
-              {/* Frame controls - Hidden for ensemble, statistics, and mean variables */}
-              {maxFrameCount > 0 && hasFrameNavigation && (
-                <div className="flex flex-col md:flex-row items-center justify-center gap-4 p-4 bg-gray-50 border rounded-lg">
-                  {/* Frame slider + numeric input */}
-                  <div className="flex items-center gap-3 flex-1 w-full">
-                    <label htmlFor="frame-slider" className="text-sm font-medium whitespace-nowrap">Frame:</label>
-                    <input
-                      id="frame-slider"
-                      type="range"
-                      min={1}
-                      max={maxFrameCount}
-                      value={index}
-                      onChange={e => setIndex(Number(e.target.value))}
-                      className="flex-1 min-w-[200px]"
-                    />
-                    <Input
-                      id="frame-input"
-                      type="text" inputMode="numeric"
-                      min={1}
-                      max={maxFrameCount}
-                      value={frameInputValue}
-                      onChange={e => {
-                        const val = e.target.value;
-                        setFrameInputValue(val);
-                        if (val && !isNaN(Number(val))) {
-                          const num = Math.max(1, Math.min(maxFrameCount, Number(val)));
-                          setIndex(num);
-                        }
+              {/* Navigation controls: Camera, Pass, Frame */}
+              <div className="flex flex-col md:flex-row items-center justify-center gap-4 p-4 bg-gray-50 border rounded-lg">
+                {/* Camera selector - shown when multiple cameras available and not merged/stereo */}
+                {!isMerged && !isStereoData && cameraOptions.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium whitespace-nowrap">Camera:</label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-8 p-0"
+                      disabled={cameraOptions.indexOf(camera) <= 0}
+                      onClick={() => {
+                        const idx = cameraOptions.indexOf(camera);
+                        if (idx > 0) setCamera(cameraOptions[idx - 1]);
                       }}
-                      onBlur={e => {
-                        const val = e.target.value;
-                        if (!val || isNaN(Number(val))) {
-                          setFrameInputValue(String(index));
-                        } else {
-                          const num = Math.max(1, Math.min(maxFrameCount, Number(val)));
-                          setIndex(num);
-                          setFrameInputValue(String(num));
-                        }
+                    >
+                      &lsaquo;
+                    </Button>
+                    <span className="text-sm font-medium min-w-[24px] text-center">{camera}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 w-8 p-0"
+                      disabled={cameraOptions.indexOf(camera) >= cameraOptions.length - 1}
+                      onClick={() => {
+                        const idx = cameraOptions.indexOf(camera);
+                        if (idx < cameraOptions.length - 1) setCamera(cameraOptions[idx + 1]);
                       }}
-                      className="w-24"
-                    />
-                    <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrameCount}</span>
+                    >
+                      &rsaquo;
+                    </Button>
+                    <span className="text-xs text-gray-500">{cameraOptions.indexOf(camera) + 1}/{cameraOptions.length}</span>
                   </div>
+                )}
 
-                  {/* Play button - advances as fast as frames load, capped at ~3 FPS */}
-                  <Button
-                    size="sm"
-                    variant={playing ? "default" : "outline"}
-                    onClick={() => setPlaying(!playing)}
-                    className="flex items-center gap-1"
-                  >
-                    {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
-                  </Button>
+                {/* Pass selector */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium whitespace-nowrap">Pass:</label>
+                  <Input
+                    type="text" inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={runInput}
+                    onChange={e => setRunInput(e.target.value)}
+                    onBlur={() => validateAndSetRun(runInput)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") {
+                        validateAndSetRun(runInput);
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className={`w-16 h-8 ${runError ? "border-red-500" : ""}`}
+                  />
+                  {availableRuns.length > 0 && (
+                    <span className="text-xs text-gray-500 whitespace-nowrap">/ {Math.max(...availableRuns)}</span>
+                  )}
+                  {runError && (
+                    <span className="text-xs text-red-500 whitespace-nowrap">{runError}</span>
+                  )}
                 </div>
-              )}
+
+                {/* Frame slider + numeric input - Hidden for ensemble, statistics, and mean variables */}
+                {maxFrameCount > 0 && hasFrameNavigation && (
+                  <>
+                    <div className="flex items-center gap-3 flex-1 w-full">
+                      <label htmlFor="frame-slider" className="text-sm font-medium whitespace-nowrap">Frame:</label>
+                      <input
+                        id="frame-slider"
+                        type="range"
+                        min={1}
+                        max={maxFrameCount}
+                        value={index}
+                        onChange={e => setIndex(Number(e.target.value))}
+                        className="flex-1 min-w-[200px]"
+                      />
+                      <Input
+                        id="frame-input"
+                        type="text" inputMode="numeric"
+                        min={1}
+                        max={maxFrameCount}
+                        value={frameInputValue}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setFrameInputValue(val);
+                          if (val && !isNaN(Number(val))) {
+                            const num = Math.max(1, Math.min(maxFrameCount, Number(val)));
+                            setIndex(num);
+                          }
+                        }}
+                        onBlur={e => {
+                          const val = e.target.value;
+                          if (!val || isNaN(Number(val))) {
+                            setFrameInputValue(String(index));
+                          } else {
+                            const num = Math.max(1, Math.min(maxFrameCount, Number(val)));
+                            setIndex(num);
+                            setFrameInputValue(String(num));
+                          }
+                        }}
+                        className="w-24"
+                      />
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{index} / {maxFrameCount}</span>
+                    </div>
+
+                    {/* Play button */}
+                    <Button
+                      size="sm"
+                      variant={playing ? "default" : "outline"}
+                      onClick={() => setPlaying(!playing)}
+                      className="flex items-center gap-1"
+                    >
+                      {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
+                    </Button>
+                  </>
+                )}
+              </div>
             </>
           ) : (
             <div className="w-full h-64 flex items-center justify-center bg-gray-100 border rounded">
