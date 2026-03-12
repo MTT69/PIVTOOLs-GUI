@@ -37,6 +37,41 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
 
   // Spatial Filters
   {
+    type: 'invert',
+    name: 'Invert',
+    description: 'Invert image intensity (max - pixel). For shadowgraph PIV where particles are dark on a bright background.',
+    category: 'spatial',
+    parameters: []
+  },
+  {
+    type: 'clahe',
+    name: 'CLAHE',
+    description: 'Contrast Limited Adaptive Histogram Equalization. Enhances local contrast for shadowgraph and BOS images.',
+    category: 'spatial',
+    parameters: [
+      {
+        name: 'Clip Limit',
+        key: 'clip_limit',
+        type: 'number',
+        default: 2.0,
+        min: 0.1,
+        max: 40.0,
+        step: 0.1,
+        description: 'Contrast limit threshold'
+      },
+      {
+        name: 'Tile Grid Size',
+        key: 'tile_grid_size',
+        type: 'tuple',
+        default: [8, 8],
+        min: 2,
+        max: 64,
+        step: 1,
+        description: 'Grid size for local histogram regions'
+      }
+    ]
+  },
+  {
     type: 'gaussian',
     name: 'Gaussian Blur',
     description: 'Gaussian smoothing filter',

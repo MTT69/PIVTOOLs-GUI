@@ -11,6 +11,8 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCharucoCalibration, StereoCharucoFrameDetection, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import { SelfCalibrationSection, SelfCalibrationWarning } from "@/components/setup/SelfCalibrationSection";
+import { useSelfCalibration } from "@/hooks/useSelfCalibration";
 
 interface StereoCharucoCalibrationProps {
   config: any;
@@ -110,6 +112,9 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     loadModel,
     reconstructVectors,
   } = calibration;
+
+  // Self-calibration hook
+  const selfCal = useSelfCalibration(cam1, cam2, "charuco");
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -663,6 +668,9 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 )}
               </Button>
 
+              {/* Self-calibration warning */}
+              <SelfCalibrationWarning hasModel={hasModel} hasSelfCal={selfCal.hasSelfCal} />
+
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
                 <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
@@ -901,6 +909,14 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
           </CardContent>
         </Card>
       )}
+
+      {/* Section 9: Self-Calibration */}
+      <SelfCalibrationSection
+        cam1={cam1}
+        cam2={cam2}
+        method="charuco"
+        hasModel={hasModel}
+      />
     </div>
   );
 };

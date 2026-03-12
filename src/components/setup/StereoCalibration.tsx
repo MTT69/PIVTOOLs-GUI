@@ -11,6 +11,8 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCalibration, StereoFrameDetection } from "@/hooks/useStereoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import { SelfCalibrationSection, SelfCalibrationWarning } from "@/components/setup/SelfCalibrationSection";
+import { useSelfCalibration } from "@/hooks/useSelfCalibration";
 
 interface StereoCalibrationProps {
   config: any;
@@ -100,6 +102,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     loadModel,
     reconstructVectors,
   } = calibration;
+
+  // Self-calibration hook
+  const selfCal = useSelfCalibration(cam1, cam2, "dotboard");
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -576,6 +581,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 )}
               </Button>
 
+              {/* Self-calibration warning */}
+              <SelfCalibrationWarning hasModel={hasModel} hasSelfCal={selfCal.hasSelfCal} />
+
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
                 <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
@@ -814,6 +822,14 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           </CardContent>
         </Card>
       )}
+
+      {/* Section 9: Self-Calibration */}
+      <SelfCalibrationSection
+        cam1={cam1}
+        cam2={cam2}
+        method="dotboard"
+        hasModel={hasModel}
+      />
     </div>
   );
 };

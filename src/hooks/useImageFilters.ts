@@ -2,12 +2,14 @@ import { useState, useCallback, useEffect } from 'react';
 
 export type FilterType =
   | "time" | "pod"  // Batch filters
-  | "lmax" | "maxnorm" | "median" | "norm" | "gaussian";  // Spatial filters
+  | "lmax" | "maxnorm" | "median" | "norm" | "gaussian" | "invert" | "clahe";  // Spatial filters
 
 export interface ImageFilter {
   type: FilterType;
   size?: [number, number];  // For spatial filters like median, lmax, maxnorm, norm
   sigma?: number;  // For gaussian
+  clip_limit?: number;  // For clahe
+  tile_grid_size?: [number, number];  // For clahe
   max_gain?: number;  // For maxnorm, norm
   threshold?: number;  // For lmax
   n?: number;  // For time (temporal) filter
@@ -245,6 +247,8 @@ export function useImageFilters(backendUrl: string) {
       median: { size: [5, 5] },
       norm: { size: [7, 7], max_gain: 1.0 },
       gaussian: { sigma: 1.0 },
+      invert: {},
+      clahe: { clip_limit: 2.0, tile_grid_size: [8, 8] as [number, number] },
     };
 
     setFilters(f => [...f, { type, ...defaultParams[type], ...params }]);
