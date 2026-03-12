@@ -38,6 +38,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
   const [infillingOpen, setInfillingOpen] = useState(false);
   const [peakFinderOpen, setPeakFinderOpen] = useState(false);
   const [predictorOpen, setPredictorOpen] = useState(false);
+  const [outputOpen, setOutputOpen] = useState(false);
 
   // Helper function to save camera selection to backend
   const saveCameraSelection = useCallback(async (cameras: number[]) => {
@@ -357,7 +358,57 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 <InfillingSettings config={config} updateConfigValue={updateConfigValue} />
               </div>
             )}
-          </div>        </CardContent>
+          </div>
+
+          {/* Output Settings */}
+          <div>
+            <Button variant="outline" className="w-full justify-between" onClick={() => setOutputOpen(!outputOpen)}>
+              <span className="flex items-center gap-2">
+                <Save className="h-4 w-4" />
+                Output Settings
+              </span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${outputOpen ? 'rotate-90' : ''}`} />
+            </Button>
+            {outputOpen && (
+              <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
+                <div className="space-y-2">
+                  <Label className="text-sm">Save Mode</Label>
+                  <Select
+                    value={config?.instantaneous_piv?.save_mode || 'full'}
+                    onValueChange={(value) => updateConfigValue(['instantaneous_piv', 'save_mode'], value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="full">Full (all fields)</SelectItem>
+                      <SelectItem value="minimal">Minimal (ux, uy, mask only)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Full saves all 11 fields per pass. Minimal saves only ux, uy, and mask — sufficient for calibration, statistics, and most post-processing. Minimal is significantly faster.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">File Compression</Label>
+                    <Button
+                      variant={(config?.instantaneous_piv?.save_compression ?? true) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['instantaneous_piv', 'save_compression'], !(config?.instantaneous_piv?.save_compression ?? true))}
+                    >
+                      {(config?.instantaneous_piv?.save_compression ?? true) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Zlib compression reduces file size but adds CPU overhead per frame. Disable for faster saves when disk space is not a concern.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
       </Card>
 
       {/* PIV Runner */}
