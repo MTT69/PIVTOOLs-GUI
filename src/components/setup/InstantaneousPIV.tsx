@@ -374,7 +374,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 <div className="space-y-2">
                   <Label className="text-sm">Save Mode</Label>
                   <Select
-                    value={config?.instantaneous_piv?.save_mode || 'full'}
+                    value={config?.instantaneous_piv?.save_mode || 'minimal'}
                     onValueChange={(value) => updateConfigValue(['instantaneous_piv', 'save_mode'], value)}
                   >
                     <SelectTrigger>
@@ -394,11 +394,11 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                   <div className="flex items-center justify-between">
                     <Label className="text-sm">File Compression</Label>
                     <Button
-                      variant={(config?.instantaneous_piv?.save_compression ?? true) ? "default" : "outline"}
+                      variant={(config?.instantaneous_piv?.save_compression ?? false) ? "default" : "outline"}
                       size="sm"
-                      onClick={() => updateConfigValue(['instantaneous_piv', 'save_compression'], !(config?.instantaneous_piv?.save_compression ?? true))}
+                      onClick={() => updateConfigValue(['instantaneous_piv', 'save_compression'], !(config?.instantaneous_piv?.save_compression ?? false))}
                     >
-                      {(config?.instantaneous_piv?.save_compression ?? true) ? "Enabled" : "Disabled"}
+                      {(config?.instantaneous_piv?.save_compression ?? false) ? "Enabled" : "Disabled"}
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
