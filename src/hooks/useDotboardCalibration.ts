@@ -12,10 +12,23 @@ export interface FrameDetection {
  * Camera model from calibration
  */
 export interface CameraModel {
-  camera_matrix: number[][];
-  dist_coeffs: number[];
-  focal_length: [number, number];
-  principal_point: [number, number];
+  model_type?: "pinhole" | "polynomial";
+  // Pinhole fields
+  camera_matrix?: number[][];
+  dist_coeffs?: number[];
+  focal_length?: [number, number];
+  principal_point?: [number, number];
+  // Polynomial fields
+  mm_per_pixel?: number;
+  origin_x?: number;
+  origin_y?: number;
+  normalisation_nx?: number;
+  normalisation_ny?: number;
+  coefficients_x?: number[];
+  coefficients_y?: number[];
+  image_width?: number;
+  image_height?: number;
+  // Shared fields
   reprojection_error: number;
   num_images_used: number;
 }

@@ -743,63 +743,119 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Camera Matrix */}
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
-                <div className="font-mono text-xs bg-muted p-2 rounded">
-                  {cameraModel.camera_matrix?.map((row: number[], i: number) => (
-                    <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
-                  ))}
+            {cameraModel.model_type === "polynomial" ? (
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Polynomial Parameters */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Polynomial Parameters</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Scale:</span>
+                      <span className="ml-2 font-medium">{cameraModel.mm_per_pixel?.toFixed(6)} mm/px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Image Size:</span>
+                      <span className="ml-2 font-medium">{cameraModel.image_width} × {cameraModel.image_height}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Origin (x):</span>
+                      <span className="ml-2 font-medium">{cameraModel.origin_x?.toFixed(2)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Origin (y):</span>
+                      <span className="ml-2 font-medium">{cameraModel.origin_y?.toFixed(2)} px</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              {/* Intrinsic Parameters */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Focal Length (fx):</span>
-                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length (fy):</span>
-                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Principal Point (cx):</span>
-                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Principal Point (cy):</span>
-                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                {/* Calibration Quality */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">RMS Error:</span>
+                      <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Images Used:</span>
+                      <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Distortion Coefficients */}
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
-                <div className="font-mono text-xs bg-muted p-2 rounded">
-                  [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                {/* Polynomial Coefficients */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">X Coefficients ({cameraModel.coefficients_x?.length ?? 0}-term)</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    [{cameraModel.coefficients_x?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Y Coefficients ({cameraModel.coefficients_y?.length ?? 0}-term)</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    [{cameraModel.coefficients_y?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
+                  </div>
                 </div>
               </div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Camera Matrix */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    {cameraModel.camera_matrix?.map((row: number[], i: number) => (
+                      <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
+                    ))}
+                  </div>
+                </div>
 
-              {/* Calibration Quality */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                {/* Intrinsic Parameters */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Focal Length (fx):</span>
+                      <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Focal Length (fy):</span>
+                      <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Principal Point (cx):</span>
+                      <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Principal Point (cy):</span>
+                      <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Images Used:</span>
-                    <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                </div>
+
+                {/* Distortion Coefficients */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                  </div>
+                </div>
+
+                {/* Calibration Quality */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">RMS Error:</span>
+                      <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Images Used:</span>
+                      <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* Detection Summary */}
             {detections && Object.keys(detections).length > 0 && (
