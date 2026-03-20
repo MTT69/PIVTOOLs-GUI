@@ -225,6 +225,21 @@ const PerformanceSettings = memo(function PerformanceSettings({
         </div>
         <p className="text-xs text-muted-foreground">Auto-open the Dask performance dashboard in your browser when processing starts.</p>
       </div>
+
+      {/* Dask Nanny */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label>Worker Nanny</Label>
+          <Button
+            variant={(config?.processing?.dask_nanny ?? false) ? "default" : "outline"}
+            size="sm"
+            onClick={() => updateConfigValue(['processing', 'dask_nanny'], !(config?.processing?.dask_nanny ?? false))}
+          >
+            {(config?.processing?.dask_nanny ?? false) ? "Enabled" : "Disabled"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">Monitor worker processes via nanny. Captures exit codes and crash reasons. Disable if nanny causes issues with C library cleanup.</p>
+      </div>
     </div>
   );
 });
