@@ -243,6 +243,80 @@ const RunPIV: React.FC<RunPIVProps> = ({
     <Card>
       <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-6">
+
+        {/* Setup Summary */}
+        {config && (() => {
+          const images = config.images || {};
+          const paths = config.paths || {};
+          const processing = config.processing || {};
+          const pivConfig = mode === "ensemble" ? (config.ensemble_piv || {}) : (config.instantaneous_piv || {});
+          const masking = config.masking || {};
+          const filters = config.filters || [];
+
+          const sourceName = basename(paths.source_paths?.[0] || "");
+          const numLoops = images.num_loops || 1;
+          const numImages = images.num_images || 0;
+          const numPairs = images.num_frame_pairs || 0;
+          const preset = images.pairing_preset || "";
+          const format = Array.isArray(images.image_format) ? images.image_format[0] : images.image_format || "";
+
+          // Window sizes: [[128,128],[64,64],...] → "128→64→32→16"
+          const windowSizes = pivConfig.window_size || [];
+          const windowStr = windowSizes.map((ws: number[]) =>
+            Array.isArray(ws) ? (ws[0] === ws[1] ? `${ws[0]}` : `${ws[0]}x${ws[1]}`) : ws
+          ).join(" > ");
+          const overlaps = pivConfig.overlap || [];
+          const overlapStr = overlaps.length > 0
+            ? (overlaps.every((o: number) => o === overlaps[0]) ? `${overlaps[0]}%` : overlaps.join("/") + "%")
+            : "";
+          const numPasses = windowSizes.length;
+
+          const batchSize = config.batches?.size || 1;
+          const workers = processing.dask_workers_per_node || 1;
+          const memLimit = processing.dask_memory_limit || "4GB";
+
+          // Filter names
+          const filterNames = filters.map((f: any) => f.type || "unknown").join(", ");
+
+          return (
+            <div className="p-3 bg-muted/50 rounded-md border text-xs space-y-1">
+              <div className="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1">
+                <span className="text-muted-foreground font-medium">Source</span>
+                <span>{sourceName}{numLoops > 1 ? ` + ${numLoops - 1} more loop${numLoops > 2 ? "s" : ""}` : ""}</span>
+
+                <span className="text-muted-foreground font-medium">Images</span>
+                <span>
+                  {numImages > 0 ? `${numImages} ${images.image_type === "cine" ? "frames" : "files"}` : "not set"}
+                  {numLoops > 1 ? ` x ${numLoops} loops = ${numPairs} pairs` : numPairs > 0 ? ` = ${numPairs} pairs` : ""}
+                  {preset ? ` (${preset.replace(/_/g, " ")})` : ""}
+                </span>
+
+                <span className="text-muted-foreground font-medium">Format</span>
+                <span className="font-mono">{format}</span>
+
+                {numPasses > 0 && (<>
+                  <span className="text-muted-foreground font-medium">PIV</span>
+                  <span>
+                    {mode === "ensemble" ? "Ensemble" : "Instantaneous"} - {numPasses} pass{numPasses !== 1 ? "es" : ""} - {windowStr} - {overlapStr} overlap
+                  </span>
+                </>)}
+
+                <span className="text-muted-foreground font-medium">Workers</span>
+                <span>{workers} worker{workers !== 1 ? "s" : ""} - {batchSize} pairs/batch - {memLimit} per worker</span>
+
+                {(masking.enabled || filters.length > 0) && (<>
+                  <span className="text-muted-foreground font-medium">Pre-proc</span>
+                  <span>
+                    {masking.enabled ? `Mask (${masking.mode || "file"})` : ""}
+                    {masking.enabled && filters.length > 0 ? " + " : ""}
+                    {filters.length > 0 ? filterNames : ""}
+                  </span>
+                </>)}
+              </div>
+            </div>
+          );
+        })()}
+
         <div className="space-y-3">
           <div>
             <label className="text-sm font-medium block mb-2">Source/Base Path Pairs to Process</label>

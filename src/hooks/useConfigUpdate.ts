@@ -22,6 +22,12 @@ export interface ValidationState {
   abCountWarning?: string | null;
   /** Suggested camera subfolder when the configured one doesn't exist */
   suggested_subfolder?: string | null;
+  /** Warning if memory per worker may be insufficient for image resolution */
+  memoryWarning?: string | null;
+  /** Auto-detected frame/file count from container metadata or glob */
+  detectedCount?: number | null;
+  /** Sample files found in the source folder (shown on validation error for context) */
+  sampleFiles?: string[];
   // Legacy fields for backward compatibility
   suggested_pattern?: string | null;
   suggested_pattern_b?: string | null;  // For A/B pair detection
@@ -138,10 +144,11 @@ export function useAutoValidation(config: any) {
           const json = await res.json();
           const details = json.details || {};
 
-          // Extract per-pattern validations and A/B count warning from first camera
+          // Extract per-pattern validations, A/B count warning, and sample files from first camera
           const firstCamera = Object.values(details)[0] as any;
           const patternValidations: PatternValidation[] = firstCamera?.pattern_validations || [];
           const abCountWarning = firstCamera?.ab_count_warning || null;
+          const sampleFiles: string[] = firstCamera?.sample_files || [];
 
           if (json.valid) {
             // Check for color images or subset processing
@@ -170,6 +177,9 @@ export function useAutoValidation(config: any) {
               error: message,
               patternValidations,
               abCountWarning,
+              memoryWarning: json.memory_warning || null,
+              detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
+              sampleFiles,
             });
 
             // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
@@ -213,6 +223,11 @@ export function useAutoValidation(config: any) {
               }
             });
 
+            // Include memory warning as an error if present
+            if (json.memory_warning) {
+              errors.push(json.memory_warning);
+            }
+
             const errorMsg = [
               ...errors,
               ...warnings,
@@ -224,6 +239,8 @@ export function useAutoValidation(config: any) {
               error: errorMsg,
               patternValidations,
               abCountWarning,
+              detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
+              sampleFiles,
               suggested_subfolder: suggestedSubfolder,
               // Legacy fields
               suggested_pattern: suggestedPattern,

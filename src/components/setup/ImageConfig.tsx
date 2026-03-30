@@ -188,6 +188,20 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     }
   }, [config]);
 
+  // Auto-fill num_images when empty and validation detects a count
+  useEffect(() => {
+    if (
+      validation.checked &&
+      validation.detectedCount != null &&
+      validation.detectedCount > 0 &&
+      (numImages === "" || numImages === "0")
+    ) {
+      const val = String(validation.detectedCount);
+      setNumImages(val);
+      saveConfig({ numImages: val });
+    }
+  }, [validation.detectedCount, validation.checked]);
+
   // Fetch frame pair preview
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -350,10 +364,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
   // Pairs description for helper text
   const loops = Number(numLoops) || 1;
-  const totalPairs = numPairs * (imageType === "lavision_set" ? loops : 1);
+  const totalPairs = numPairs * loops;
   const getPairsDescription = (): string => {
     const fileWord = imageType === "cine" ? "frames" : imageType.startsWith("lavision") ? "entries" : "files";
-    const loopSuffix = imageType === "lavision_set" && loops > 1
+    const loopSuffix = loops > 1
       ? ` per loop (\u00d7${loops} loops = ${totalPairs} total)`
       : "";
     if (pairingPreset === "ab_format") return `${numImages} ${fileWord} → ${numPairs} frame pairs (A+B sets)${loopSuffix}`;
@@ -475,32 +489,88 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     onChange={e => setNumImages(e.target.value)}
                     onBlur={() => saveConfig()}
                   />
+                  {validation.checked && validation.detectedCount != null && validation.detectedCount > 0 && (
+                    Number(numImages) !== validation.detectedCount ? (
+                      <button
+                        type="button"
+                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline mt-1 cursor-pointer"
+                        onClick={() => {
+                          const val = String(validation.detectedCount);
+                          setNumImages(val);
+                          saveConfig({ numImages: val });
+                        }}
+                      >
+                        Detected: {validation.detectedCount} {imageType === "cine" ? "frames" : "files"} — click to apply
+                      </button>
+                    ) : (
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Matches detected count
+                      </p>
+                    )
+                  )}
                   <p className="text-xs text-muted-foreground mt-1">
                     {getPairsDescription()}
                   </p>
                 </div>
               </div>
 
-              {imageType === "lavision_set" && (
-                <div className="grid md:grid-cols-2 gap-4 mt-4">
-                  <div>
-                    <Label htmlFor="num_loops">Number of Loops</Label>
-                    <Input
-                      id="num_loops"
-                      type="text" inputMode="numeric"
-                      min="1"
-                      value={numLoops}
-                      onChange={e => setNumLoops(e.target.value)}
-                      onBlur={() => saveConfig()}
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {Number(numLoops) > 1
-                        ? `${numPairs} pairs/loop \u00d7 ${numLoops} loops = ${numPairs * Number(numLoops)} total frame pairs`
-                        : "Single acquisition (no loops)"}
-                    </p>
-                  </div>
+              <div className="grid md:grid-cols-2 gap-4 mt-4">
+                <div>
+                  <Label htmlFor="num_loops">Number of Loops</Label>
+                  <Input
+                    id="num_loops"
+                    type="text" inputMode="numeric"
+                    min="1"
+                    value={numLoops}
+                    onChange={e => setNumLoops(e.target.value)}
+                    onBlur={() => saveConfig()}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {Number(numLoops) > 1
+                      ? `${numPairs} pairs/loop \u00d7 ${numLoops} loops = ${numPairs * Number(numLoops)} total frame pairs`
+                      : "Single acquisition (no loops)"}
+                  </p>
+                  {Number(numLoops) > 1 && (() => {
+                    const sourcePath = config?.paths?.source_paths?.[0] || "";
+                    const name = sourcePath.replace(/\\/g, "/").split("/").pop() || "";
+                    // Find the last number in the folder/file name
+                    const matches = [...name.matchAll(/(\d+)/g)];
+                    if (matches.length === 0) return (
+                      <p className="text-xs text-amber-600 mt-1">
+                        No number found in source path name &quot;{name}&quot; — cannot resolve loop folders.
+                      </p>
+                    );
+                    const lastMatch = matches[matches.length - 1];
+                    const baseNum = parseInt(lastMatch[1]);
+                    const pos = lastMatch.index!;
+                    const numWidth = lastMatch[1].length;
+                    const loops = Number(numLoops) || 1;
+                    const loopNames = Array.from({ length: Math.min(loops, 8) }, (_, i) => {
+                      const newNum = numWidth > 1
+                        ? String(baseNum + i).padStart(numWidth, "0")
+                        : String(baseNum + i);
+                      return name.slice(0, pos) + newNum + name.slice(pos + numWidth);
+                    });
+                    return (
+                      <div className="mt-2 p-2 bg-muted/50 rounded-md border text-xs">
+                        <p className="font-medium text-muted-foreground mb-1">
+                          Loop sources (last number in name incremented):
+                        </p>
+                        <div className="space-y-0.5 font-mono">
+                          {loopNames.map((ln, i) => (
+                            <div key={i} className="text-muted-foreground">
+                              <span className="text-foreground font-medium">Loop {i}:</span> {ln}
+                            </div>
+                          ))}
+                          {loops > 8 && (
+                            <div className="text-muted-foreground italic">... and {loops - 8} more</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
-              )}
+              </div>
 
               <div className="grid md:grid-cols-2 gap-4 mt-4">
                 <div>
@@ -645,13 +715,45 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {pairingPreset === "ab_format" && "Separate A and B files with same index"}
-                    {pairingPreset === "pre_paired" && "Each file contains both A and B frames internally"}
-                    {pairingPreset === "skip_frames" && "Non-overlapping consecutive pairs from single sequence"}
-                    {pairingPreset === "time_resolved" && "Sequential overlapping pairs - typical for high-speed PIV"}
-                    {pairingPreset === "custom" && "Custom frame stride and pair stride values"}
-                  </p>
+                  {pairingPreset === "skip_frames" && (
+                    <div className="flex items-center gap-1 mt-2 text-xs font-mono">
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">1+2</span>
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">3+4</span>
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">5+6</span>
+                      <span className="text-muted-foreground">...</span>
+                      <span className="ml-2 text-muted-foreground font-sans">Non-overlapping consecutive pairs</span>
+                    </div>
+                  )}
+                  {pairingPreset === "time_resolved" && (
+                    <div className="flex items-center gap-1 mt-2 text-xs font-mono">
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">1+2</span>
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">2+3</span>
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">3+4</span>
+                      <span className="text-muted-foreground">...</span>
+                      <span className="ml-2 text-muted-foreground font-sans">Overlapping pairs — typical for high-speed PIV</span>
+                    </div>
+                  )}
+                  {pairingPreset === "ab_format" && (
+                    <div className="flex items-center gap-1 mt-2 text-xs font-mono">
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">1A+1B</span>
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">2A+2B</span>
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">3A+3B</span>
+                      <span className="text-muted-foreground">...</span>
+                      <span className="ml-2 text-muted-foreground font-sans">Separate A and B files per pair</span>
+                    </div>
+                  )}
+                  {pairingPreset === "pre_paired" && (
+                    <div className="flex items-center gap-1 mt-2 text-xs font-mono">
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">[1: A+B]</span>
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded">[2: A+B]</span>
+                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">[3: A+B]</span>
+                      <span className="text-muted-foreground">...</span>
+                      <span className="ml-2 text-muted-foreground font-sans">Each entry contains both frames</span>
+                    </div>
+                  )}
+                  {pairingPreset === "custom" && (
+                    <p className="text-xs text-muted-foreground mt-1">Custom frame stride and pair stride values</p>
+                  )}
                 </div>
 
                 {/* Custom stride inputs */}

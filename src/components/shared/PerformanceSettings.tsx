@@ -26,7 +26,7 @@ const PerformanceSettings = memo(function PerformanceSettings({
 
   const daskWorkers = useNumericInput({
     configValue: config?.processing?.dask_workers_per_node,
-    defaultValue: 2,
+    defaultValue: 1,
     onCommit: (val) => updateConfigValue(['processing', 'dask_workers_per_node'], val),
     min: 1,
   });
@@ -40,7 +40,7 @@ const PerformanceSettings = memo(function PerformanceSettings({
 
   const batchSize = useNumericInput({
     configValue: config?.batches?.size,
-    defaultValue: 30,
+    defaultValue: 10,
     onCommit: (val) => updateConfigValue(['batches', 'size'], val),
     min: 1,
   });
@@ -50,7 +50,7 @@ const PerformanceSettings = memo(function PerformanceSettings({
   const isEditingPpWorkersRef = useRef(false);
 
   // Memory per worker state
-  const [memoryNumber, setMemoryNumber] = useState<string>('8');
+  const [memoryNumber, setMemoryNumber] = useState<string>('12');
   const [memoryUnit, setMemoryUnit] = useState<string>('GB');
   const isEditingMemoryRef = useRef(false);
 
@@ -64,13 +64,13 @@ const PerformanceSettings = memo(function PerformanceSettings({
   // Memory per worker initialization — only sync when not editing
   useEffect(() => {
     if (isEditingMemoryRef.current) return;
-    const mem = config?.processing?.dask_memory_limit || '8GB';
+    const mem = config?.processing?.dask_memory_limit || '12GB';
     const match = mem.match(/^(\d+)(MB|GB)?$/);
     if (match) {
       setMemoryNumber(match[1]);
       setMemoryUnit(match[2] || 'GB');
     } else {
-      setMemoryNumber('8');
+      setMemoryNumber('12');
       setMemoryUnit('GB');
     }
   }, [config?.processing?.dask_memory_limit]);
@@ -120,8 +120,8 @@ const PerformanceSettings = memo(function PerformanceSettings({
               isEditingMemoryRef.current = false;
               const num = parseInt(memoryNumber, 10);
               if (isNaN(num) || memoryNumber === '') {
-                setMemoryNumber('8');
-                updateConfigValue(['processing', 'dask_memory_limit'], `8${memoryUnit}`);
+                setMemoryNumber('12');
+                updateConfigValue(['processing', 'dask_memory_limit'], `12${memoryUnit}`);
               } else {
                 setMemoryNumber(String(num));
                 updateConfigValue(['processing', 'dask_memory_limit'], `${num}${memoryUnit}`);

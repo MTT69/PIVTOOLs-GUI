@@ -18,6 +18,8 @@ interface BaseValidationState {
   suggested_subfolder?: string | null;
   patternValidations?: PatternValidation[];
   abCountWarning?: string | null;
+  sampleFiles?: string[];
+  memoryWarning?: string | null;
 }
 
 interface ValidationAlertProps {
@@ -55,16 +57,24 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
         : "Image files found and validated successfully!";
 
-    // Check for A/B count warning (validation passed but counts differ)
-    if (validation.abCountWarning) {
+    // Check for warnings (A/B count mismatch or memory insufficient)
+    const hasWarnings = validation.abCountWarning || validation.memoryWarning;
+    if (hasWarnings) {
       return (
         <Alert className="border-yellow-500 bg-yellow-50">
           <AlertTriangle className="h-4 w-4 text-yellow-600" />
           <AlertDescription className="text-sm text-yellow-800">
             {message}
-            <div className="mt-1 text-yellow-700">
-              <strong>Warning:</strong> {validation.abCountWarning}
-            </div>
+            {validation.abCountWarning && (
+              <div className="mt-1 text-yellow-700">
+                <strong>Warning:</strong> {validation.abCountWarning}
+              </div>
+            )}
+            {validation.memoryWarning && (
+              <div className="mt-1 text-yellow-700">
+                <strong>Warning:</strong> {validation.memoryWarning}
+              </div>
+            )}
           </AlertDescription>
         </Alert>
       );
@@ -112,6 +122,15 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         <AlertTitle>Validation Failed</AlertTitle>
         <AlertDescription className="text-sm">
           {errorSummary}
+          {/* Show files found in folder for context */}
+          {validation.sampleFiles && validation.sampleFiles.length > 0 && (
+            <div className="mt-2 p-2 bg-muted/30 rounded text-xs font-mono">
+              <p className="font-medium text-muted-foreground mb-1">Files found in folder:</p>
+              {validation.sampleFiles.map((f, i) => (
+                <div key={i} className="text-muted-foreground">{f}</div>
+              ))}
+            </div>
+          )}
           {/* Only show legacy global suggestion if no per-pattern suggestions */}
           {!hasPerPatternSuggestions && validation.suggested_pattern && onApplySuggestedPattern && (
             <div className="mt-2 flex items-center gap-2">
