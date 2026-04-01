@@ -14,6 +14,7 @@ interface CameraValidation {
   format_detected: string | null;
   error: string | null;
   suggested_pattern?: string | null;
+  suggested_subfolder?: string | null;
 }
 
 /**
@@ -33,6 +34,7 @@ export interface PinholeValidationResult {
   container_format: boolean;
   error: string | null;
   suggested_pattern?: string | null;
+  suggested_subfolder?: string | null;
 }
 
 /**
@@ -176,6 +178,7 @@ export function usePinholeValidation(
             container_format: json.container_format || json.is_container_format || false,
             error: json.error,
             suggested_pattern: json.suggested_pattern || null,
+            suggested_subfolder: json.suggested_subfolder || null,
           });
         } else {
           setValidation(prev => ({

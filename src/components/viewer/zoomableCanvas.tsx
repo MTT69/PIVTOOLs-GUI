@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { RawImage, buildColormap } from "@/lib/imageUtils";
 
-interface OverlayPoint {
+export interface OverlayPoint {
   x: number;
   y: number;
+  color?: string;  // Per-point color override; falls back to overlayColor prop
 }
 
 export interface MarkerPoint {
@@ -14,6 +15,12 @@ export interface MarkerPoint {
   y: number;
   color: string;
   label?: string;
+}
+
+export interface OverlayLine {
+  x1: number; y1: number;
+  x2: number; y2: number;
+  color?: string;
 }
 
 interface ZoomableCanvasProps {
@@ -35,6 +42,9 @@ interface ZoomableCanvasProps {
   overlayPoints?: OverlayPoint[];
   overlayColor?: string;
   overlayRadius?: number;
+  overlayLines?: OverlayLine[];
+  overlayLineColor?: string;
+  overlayLineWidth?: number;
   // Click mode for point selection
   onImageClick?: (imageX: number, imageY: number) => void;
   clickMode?: boolean;
@@ -48,6 +58,7 @@ export default function ZoomableCanvas({
   useGrid, gridSize = 16, gridThickness = 1,
   zoomLevel, panX, panY, onZoomChange,
   overlayPoints, overlayColor = '#ff0000', overlayRadius = 8,
+  overlayLines, overlayLineColor = 'rgba(0, 220, 0, 0.9)', overlayLineWidth = 2,
   onImageClick, clickMode = false, markerPoints,
   measureLine
 }: ZoomableCanvasProps) {
@@ -176,7 +187,7 @@ export default function ZoomableCanvas({
     }
   }, [raw, imgEl, vmin, vmax, colormap, cmap, cmapLUT]);
 
-  // Draw overlay dots on a dedicated canvas (much faster than SVG <circle> elements)
+  // Draw overlay lines + dots on a dedicated canvas (much faster than SVG)
   useEffect(() => {
     const canvas = overlayCanvasRef.current;
     if (!canvas) return;
@@ -190,16 +201,31 @@ export default function ZoomableCanvas({
     canvas.height = h;
     ctx.clearRect(0, 0, w, h);
 
-    if (!overlayPoints || overlayPoints.length === 0) return;
-
-    ctx.fillStyle = overlayColor;
-    ctx.globalAlpha = 0.8;
-    for (const pt of overlayPoints) {
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
-      ctx.fill();
+    // Draw lines first (behind dots)
+    if (overlayLines && overlayLines.length > 0) {
+      ctx.globalAlpha = 0.8;
+      const baseDim = Math.max(w, h);
+      ctx.lineWidth = Math.max(overlayLineWidth, baseDim * 0.002);
+      for (const line of overlayLines) {
+        ctx.strokeStyle = line.color || overlayLineColor;
+        ctx.beginPath();
+        ctx.moveTo(line.x1, line.y1);
+        ctx.lineTo(line.x2, line.y2);
+        ctx.stroke();
+      }
     }
-  }, [overlayPoints, overlayColor, overlayRadius, raw, imgEl]);
+
+    // Draw dots on top
+    if (overlayPoints && overlayPoints.length > 0) {
+      ctx.globalAlpha = 0.8;
+      for (const pt of overlayPoints) {
+        ctx.fillStyle = pt.color || overlayColor;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }, [overlayPoints, overlayColor, overlayRadius, overlayLines, overlayLineColor, overlayLineWidth, raw, imgEl]);
 
   // Draw marker points (labeled circles + crosshairs for point selection)
   useEffect(() => {

@@ -20,8 +20,10 @@ export interface ValidationState {
   patternValidations?: PatternValidation[];
   /** Warning if A/B file counts differ significantly */
   abCountWarning?: string | null;
-  /** Suggested camera subfolder when the configured one doesn't exist */
+  /** Suggested camera subfolder when the configured one doesn't exist (first match, legacy) */
   suggested_subfolder?: string | null;
+  /** Per-camera suggested subfolders (camera key → suggestion) */
+  suggested_subfolders?: Record<string, string>;
   /** Warning if memory per worker may be insufficient for image resolution */
   memoryWarning?: string | null;
   /** Auto-detected frame/file count from container metadata or glob */
@@ -192,6 +194,7 @@ export function useAutoValidation(config: any) {
             let suggestedPatternB: string | null = null;
             let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
             let suggestedSubfolder: string | null = null;
+            const perCameraSuggestions: Record<string, string> = {};
 
             Object.entries(details).forEach(([key, value]: [string, any]) => {
               if (value.status === 'error') {
@@ -201,9 +204,12 @@ export function useAutoValidation(config: any) {
                     ? `Found ${value.actual_count}/${value.expected_count} files`
                     : 'Cannot read files');
                 errors.push(`${key}: ${errorDetail}`);
-                // Capture first suggested subfolder from any camera
-                if (value.suggested_subfolder && !suggestedSubfolder) {
-                  suggestedSubfolder = value.suggested_subfolder;
+                // Capture per-camera suggested subfolder
+                if (value.suggested_subfolder) {
+                  perCameraSuggestions[key] = value.suggested_subfolder;
+                  if (!suggestedSubfolder) {
+                    suggestedSubfolder = value.suggested_subfolder;
+                  }
                 }
                 // Capture first suggested pattern from any camera (legacy)
                 if (value.suggested_pattern && !suggestedPattern) {
@@ -242,6 +248,7 @@ export function useAutoValidation(config: any) {
               detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
               sampleFiles,
               suggested_subfolder: suggestedSubfolder,
+              suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
               // Legacy fields
               suggested_pattern: suggestedPattern,
               suggested_pattern_b: suggestedPatternB,

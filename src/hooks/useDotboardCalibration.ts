@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 export interface FrameDetection {
   grid_points: [number, number][];
+  grid_indices?: [number, number][];
   reprojection_error?: number;
 }
 
@@ -48,6 +49,7 @@ export interface ValidationResult {
   container_format?: boolean;
   error?: string;
   suggested_pattern?: string;
+  suggested_subfolder?: string;
 }
 
 /**
@@ -62,6 +64,8 @@ export interface JobStatus {
   elapsed_time?: number;
   estimated_remaining?: number;
   error?: string;
+  rms_error?: number;
+  num_images_used?: number;
 }
 
 /**
@@ -80,7 +84,11 @@ export interface MultiCameraJobStatus {
   processed_cameras: number;
   total_cameras: number;
   current_camera?: number;
-  camera_results?: Record<string, { status: string; error?: string }> & {
+  current_camera_progress?: number;
+  processed_images?: number;
+  total_images?: number;
+  valid_images?: number;
+  camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string }> & {
     global_alignment?: GlobalAlignmentResult;
   };
   camera_progress?: Record<number, { current: number; total: number; message?: string }>;
@@ -186,11 +194,54 @@ export function useDotboardCalibration(
         console.error('Failed to load config:', e);
       }
       configLoadedRef.current = true;
+
+      // Run initial validation
+      setValidating(true);
+      try {
+        const valRes = await fetch('/backend/calibration/dotboard/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: sourcePathIdx, camera }),
+        });
+        const valData = await valRes.json();
+        setValidation(valData);
+      } catch (e) {
+        console.error('Initial validation failed:', e);
+      } finally {
+        setValidating(false);
+      }
     };
     loadConfig();
   }, []);
 
-  // Save config (debounced)
+  // Validate images
+  const validateImages = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch('/backend/calibration/dotboard/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          camera: camera,
+        }),
+      });
+
+      const data = await res.json();
+      setValidation(data);
+    } catch (e) {
+      console.error('Validation failed:', e);
+      setValidation({
+        valid: false,
+        found_count: 0,
+        error: String(e),
+      });
+    } finally {
+      setValidating(false);
+    }
+  }, [sourcePathIdx, camera]);
+
+  // Save config (debounced), then validate after save completes
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) {
       clearTimeout(configDebounceRef.current);
@@ -213,7 +264,6 @@ export function useDotboardCalibration(
         });
 
         // Save dotboard-specific settings
-        // NOTE: pattern_cols and pattern_rows no longer saved - auto-detected
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -231,52 +281,17 @@ export function useDotboardCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-    }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame, modelType]);
 
-  // Auto-save when params change (skip until initial config load completes)
+      // Validate after save completes so backend has current config
+      validateImages();
+    }, 500);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame, modelType, validateImages]);
+
+  // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
     if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
-
-  // Validate images (debounced)
-  const validateImages = useCallback(async () => {
-    if (validationDebounceRef.current) {
-      clearTimeout(validationDebounceRef.current);
-    }
-
-    validationDebounceRef.current = setTimeout(async () => {
-      setValidating(true);
-      try {
-        const res = await fetch('/backend/calibration/dotboard/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            camera: camera,
-          }),
-        });
-
-        const data = await res.json();
-        setValidation(data);
-      } catch (e) {
-        console.error('Validation failed:', e);
-        setValidation({
-          valid: false,
-          found_count: 0,
-          error: String(e),
-        });
-      } finally {
-        setValidating(false);
-      }
-    }, 500);
-  }, [sourcePathIdx, camera]);
-
-  // Auto-validate on param changes
-  useEffect(() => {
-    validateImages();
-  }, [validateImages, imageFormat, numImages, calibrationSources, imageType, useCameraSubfolders, cameraSubfolders]);
 
   // Generate camera model
   const generateCameraModel = useCallback(async () => {

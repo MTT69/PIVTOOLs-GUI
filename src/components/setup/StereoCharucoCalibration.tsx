@@ -220,6 +220,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
       if (!isNaN(frameIdx) && value.grid_points) {
         result[frameIdx] = {
           grid_points: value.grid_points,
+          grid_indices: value.grid_indices,
         };
       }
     }
@@ -459,6 +460,27 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   </Button>
                 </div>
               )}
+
+              {/* Suggested Subfolder Button */}
+              {!validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-600">Subfolder suggestion:</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setUseCameraSubfolders(true);
+                      setCameraSubfolders([
+                        validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
+                        validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
+                      ]);
+                    }}
+                    className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                  >
+                    Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -620,6 +642,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               camera={activeCam}
               numImages={parseInt(numImages) || 10}
               calibrationType="stereo_charuco"
+              refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
               calibrationParams={{
                 squares_h: squaresH,
                 squares_v: squaresV,

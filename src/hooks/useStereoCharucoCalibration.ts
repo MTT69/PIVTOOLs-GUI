@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 export interface StereoCharucoFrameDetection {
   grid_points: [number, number][];
+  grid_indices?: [number, number][];
   corner_ids?: number[];
 }
 
@@ -56,6 +57,7 @@ export interface CameraValidationResult {
   format_detected?: string;
   container_format?: boolean;
   suggested_pattern?: string;
+  suggested_subfolder?: string;
   error?: string;
 }
 
@@ -183,6 +185,9 @@ export function useStereoCharucoCalibration(
   // Active camera for image viewer
   const [activeCam, setActiveCam] = useState<number>(1);
 
+  // Guard: prevent auto-save from firing before initial config load completes
+  const configLoadedRef = useRef(false);
+
   // Refs for debouncing and polling
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -225,11 +230,58 @@ export function useStereoCharucoCalibration(
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      configLoadedRef.current = true;
+
+      // Run initial validation
+      setValidating(true);
+      try {
+        const valRes = await fetch('/backend/calibration/stereo/charuco/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: sourcePathIdx, cam1, cam2 }),
+        });
+        const valData = await valRes.json();
+        setValidation(valData);
+      } catch (e) {
+        console.error('Initial validation failed:', e);
+      } finally {
+        setValidating(false);
+      }
     };
     loadConfig();
   }, []);
 
-  // Save config (debounced)
+  // Validate images for both cameras
+  const validateImages = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch('/backend/calibration/stereo/charuco/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          cam1: cam1,
+          cam2: cam2,
+        }),
+      });
+
+      const data = await res.json();
+      setValidation(data);
+    } catch (e) {
+      console.error('Stereo ChArUco validation failed:', e);
+      setValidation({
+        valid: false,
+        cam1: { valid: false, found_count: 0, error: String(e) },
+        cam2: { valid: false, found_count: 0, error: String(e) },
+        matching_count: 0,
+        error: String(e),
+      });
+    } finally {
+      setValidating(false);
+    }
+  }, [sourcePathIdx, cam1, cam2]);
+
+  // Save config (debounced), then validate after save completes
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) {
       clearTimeout(configDebounceRef.current);
@@ -276,54 +328,17 @@ export function useStereoCharucoCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-    }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, datumCamera, datumFrame]);
 
-  // Auto-save when params change
+      // Validate after save completes so backend has current config
+      validateImages();
+    }, 500);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, datumCamera, datumFrame, validateImages]);
+
+  // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
+    if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
-
-  // Validate images for both cameras (debounced)
-  const validateImages = useCallback(async () => {
-    if (validationDebounceRef.current) {
-      clearTimeout(validationDebounceRef.current);
-    }
-
-    validationDebounceRef.current = setTimeout(async () => {
-      setValidating(true);
-      try {
-        const res = await fetch('/backend/calibration/stereo/charuco/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            cam1: cam1,
-            cam2: cam2,
-          }),
-        });
-
-        const data = await res.json();
-        setValidation(data);
-      } catch (e) {
-        console.error('Stereo ChArUco validation failed:', e);
-        setValidation({
-          valid: false,
-          cam1: { valid: false, found_count: 0, error: String(e) },
-          cam2: { valid: false, found_count: 0, error: String(e) },
-          matching_count: 0,
-          error: String(e),
-        });
-      } finally {
-        setValidating(false);
-      }
-    }, 500);
-  }, [sourcePathIdx, cam1, cam2]);
-
-  // Auto-validate on param changes
-  useEffect(() => {
-    validateImages();
-  }, [validateImages, imageFormat, numImages, calibrationSources, imageType, useCameraSubfolders, cameraSubfolders]);
 
   // Generate stereo ChArUco model
   const generateStereoModel = useCallback(async () => {
@@ -417,8 +432,32 @@ export function useStereoCharucoCalibration(
 
       if (res.ok && data.exists) {
         setStereoModel(data.stereo_model);
-        setDetectionsCam1(data.detections_cam1 || {});
-        setDetectionsCam2(data.detections_cam2 || {});
+
+        // Derive grid_indices from corner_ids for grid line rendering
+        // ChArUco corner IDs are linearized: id = row * innerCols + col
+        const innerCols = squaresH - 1;
+        const enrichDetections = (
+          detections: Record<string, StereoCharucoFrameDetection>
+        ): Record<string, StereoCharucoFrameDetection> => {
+          if (!detections || innerCols <= 0) return detections;
+          const result: Record<string, StereoCharucoFrameDetection> = {};
+          for (const [key, det] of Object.entries(detections)) {
+            result[key] = {
+              ...det,
+              grid_indices: det.corner_ids
+                ? det.corner_ids.map((id: number) => {
+                    const col = id % innerCols;
+                    const row = Math.floor(id / innerCols);
+                    return [col, row] as [number, number];
+                  })
+                : undefined,
+            };
+          }
+          return result;
+        };
+
+        setDetectionsCam1(enrichDetections(data.detections_cam1 || {}));
+        setDetectionsCam2(enrichDetections(data.detections_cam2 || {}));
         console.log(`Loaded stereo ChArUco model with ${Object.keys(data.detections_cam1 || {}).length} cam1 detections, ${Object.keys(data.detections_cam2 || {}).length} cam2 detections`);
       } else {
         console.log('No saved stereo ChArUco model found');
@@ -431,7 +470,7 @@ export function useStereoCharucoCalibration(
     } finally {
       setModelLoading(false);
     }
-  }, [sourcePathIdx, cam1, cam2]);
+  }, [sourcePathIdx, cam1, cam2, squaresH]);
 
   // Reconstruct 3D vectors
   const reconstructVectors = useCallback(async (typeName: string = 'instantaneous') => {

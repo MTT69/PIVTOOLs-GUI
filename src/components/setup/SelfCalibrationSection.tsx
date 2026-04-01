@@ -17,6 +17,7 @@ interface SelfCalibrationSectionProps {
   cam2: number;
   method: string;
   hasModel: boolean;
+  sourcePathIdx?: number;
 }
 
 export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
@@ -24,8 +25,9 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
   cam2,
   method,
   hasModel,
+  sourcePathIdx = 0,
 }) => {
-  const selfCal = useSelfCalibration(cam1, cam2, method);
+  const selfCal = useSelfCalibration(cam1, cam2, method, sourcePathIdx);
 
   // Shared zoom state for side-by-side mode
   const [zoomLevel, setZoomLevel] = useState(1);

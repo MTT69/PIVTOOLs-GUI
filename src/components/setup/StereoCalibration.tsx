@@ -190,6 +190,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
       if (!isNaN(frameIdx) && value.grid_points) {
         result[frameIdx] = {
           grid_points: value.grid_points,
+          grid_indices: value.grid_indices,
         };
       }
     }
@@ -434,6 +435,27 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
+          {/* Suggested Subfolder Button */}
+          {validation && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Subfolder suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setUseCameraSubfolders(true);
+                  setCameraSubfolders([
+                    validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
+                    validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
+                  ]);
+                }}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
+              </Button>
+            </div>
+          )}
+
           {/* Section 4: Grid Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
@@ -537,6 +559,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               camera={activeCam}
               numImages={parseInt(numImages) || 10}
               calibrationType="stereo_dotboard"
+              refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
               calibrationParams={{
                 // NOTE: pattern_cols/rows removed - auto-detected
               }}

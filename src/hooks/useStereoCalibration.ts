@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 export interface StereoFrameDetection {
   grid_points: [number, number][];
+  grid_indices?: [number, number][];
 }
 
 /**
@@ -55,6 +56,7 @@ export interface CameraValidationResult {
   format_detected?: string;
   container_format?: boolean;
   suggested_pattern?: string;
+  suggested_subfolder?: string;
   error?: string;
 }
 
@@ -202,11 +204,57 @@ export function useStereoCalibration(
         console.error('Failed to load config:', e);
       }
       configLoadedRef.current = true;
+
+      // Run initial validation
+      setValidating(true);
+      try {
+        const valRes = await fetch('/backend/calibration/stereo/dotboard/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_path_idx: sourcePathIdx, cam1, cam2 }),
+        });
+        const valData = await valRes.json();
+        setValidation(valData);
+      } catch (e) {
+        console.error('Initial validation failed:', e);
+      } finally {
+        setValidating(false);
+      }
     };
     loadConfig();
   }, []);
 
-  // Save config (debounced)
+  // Validate images for both cameras
+  const validateImages = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch('/backend/calibration/stereo/dotboard/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          cam1: cam1,
+          cam2: cam2,
+        }),
+      });
+
+      const data = await res.json();
+      setValidation(data);
+    } catch (e) {
+      console.error('Stereo validation failed:', e);
+      setValidation({
+        valid: false,
+        cam1: { valid: false, found_count: 0, error: String(e) },
+        cam2: { valid: false, found_count: 0, error: String(e) },
+        matching_count: 0,
+        error: String(e),
+      });
+    } finally {
+      setValidating(false);
+    }
+  }, [sourcePathIdx, cam1, cam2]);
+
+  // Save config (debounced), then validate after save completes
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) {
       clearTimeout(configDebounceRef.current);
@@ -229,7 +277,6 @@ export function useStereoCalibration(
         });
 
         // Save stereo_dotboard-specific settings
-        // NOTE: pattern_cols and pattern_rows no longer saved - auto-detected
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -247,55 +294,17 @@ export function useStereoCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-    }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumCamera, datumFrame]);
 
-  // Auto-save when params change (skip until initial config load completes)
+      // Validate after save completes so backend has current config
+      validateImages();
+    }, 500);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumCamera, datumFrame, validateImages]);
+
+  // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
     if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
-
-  // Validate images for both cameras (debounced)
-  const validateImages = useCallback(async () => {
-    if (validationDebounceRef.current) {
-      clearTimeout(validationDebounceRef.current);
-    }
-
-    validationDebounceRef.current = setTimeout(async () => {
-      setValidating(true);
-      try {
-        const res = await fetch('/backend/calibration/stereo/dotboard/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_path_idx: sourcePathIdx,
-            cam1: cam1,
-            cam2: cam2,
-          }),
-        });
-
-        const data = await res.json();
-        setValidation(data);
-      } catch (e) {
-        console.error('Stereo validation failed:', e);
-        setValidation({
-          valid: false,
-          cam1: { valid: false, found_count: 0, error: String(e) },
-          cam2: { valid: false, found_count: 0, error: String(e) },
-          matching_count: 0,
-          error: String(e),
-        });
-      } finally {
-        setValidating(false);
-      }
-    }, 500);
-  }, [sourcePathIdx, cam1, cam2]);
-
-  // Auto-validate on param changes
-  useEffect(() => {
-    validateImages();
-  }, [validateImages, imageFormat, numImages, calibrationSources, imageType, useCameraSubfolders, cameraSubfolders]);
 
   // Generate stereo model
   const generateStereoModel = useCallback(async () => {

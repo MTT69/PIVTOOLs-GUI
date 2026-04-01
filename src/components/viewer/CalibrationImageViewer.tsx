@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useCalibrationImageViewer } from '@/hooks/useCalibrationImageViewer';
-import ZoomableCanvas, { MarkerPoint } from './zoomableCanvas';
+import ZoomableCanvas, { MarkerPoint, OverlayLine } from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 
 // Loading spinner component
@@ -23,6 +23,7 @@ const LoadingSpinner = ({ className = "" }: { className?: string }) => (
  */
 export interface FrameDetectionData {
   grid_points: [number, number][];
+  grid_indices?: [number, number][];  // [col, row] per point
   reprojection_error?: number;
 }
 
@@ -31,7 +32,7 @@ export interface CalibrationImageViewerProps {
   sourcePathIdx: number;
   camera: number;
   numImages: number;
-  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco';
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board';
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;
@@ -52,6 +53,39 @@ export interface CalibrationImageViewerProps {
   settingsBarExtras?: React.ReactNode;
   // Loading state for detection data (model loading)
   detectionLoading?: boolean;
+  // External overlay points (with optional per-point color, e.g. stepped board)
+  externalOverlayPoints?: { x: number; y: number; color?: string }[];
+  // External overlay lines (e.g. stepped board grid network)
+  externalOverlayLines?: OverlayLine[];
+  // Optional key that forces cache invalidation when changed (e.g. calibration image file pattern)
+  refreshKey?: string;
+}
+
+/**
+ * Compute grid network lines from points + grid indices.
+ * Connects each point to its right (col+1) and down (row+1) neighbor.
+ */
+function computeGridLines(
+  points: [number, number][],
+  indices: [number, number][]
+): OverlayLine[] {
+  if (!points || !indices || points.length !== indices.length) return [];
+  const lookup = new Map<string, number>();
+  for (let i = 0; i < indices.length; i++) {
+    lookup.set(`${indices[i][0]},${indices[i][1]}`, i);
+  }
+  const lines: OverlayLine[] = [];
+  for (let i = 0; i < indices.length; i++) {
+    const [col, row] = indices[i];
+    const [x1, y1] = points[i];
+    // Right neighbor
+    const ri = lookup.get(`${col + 1},${row}`);
+    if (ri !== undefined) lines.push({ x1, y1, x2: points[ri][0], y2: points[ri][1] });
+    // Down neighbor
+    const di = lookup.get(`${col},${row + 1}`);
+    if (di !== undefined) lines.push({ x1, y1, x2: points[di][0], y2: points[di][1] });
+  }
+  return lines;
 }
 
 export default function CalibrationImageViewer({
@@ -74,6 +108,9 @@ export default function CalibrationImageViewer({
   externalFrame,
   settingsBarExtras,
   detectionLoading = false,
+  externalOverlayPoints,
+  externalOverlayLines,
+  refreshKey,
 }: CalibrationImageViewerProps) {
   // Frame navigation state
   const [index, setIndex] = useState(1);
@@ -122,7 +159,8 @@ export default function CalibrationImageViewer({
     index,
     imageFormat,
     autoScale,
-    calibrationType
+    calibrationType,
+    refreshKey
   );
 
   // Actual frame count (from server or prop)
@@ -228,14 +266,28 @@ export default function CalibrationImageViewer({
   // Measure line prop for ZoomableCanvas
   const measureLine = measureP1 ? { p1: measureP1, p2: measureP2 ?? undefined } : null;
 
-  // Compute overlay points from saved detections for current frame
+  // Compute overlay points from saved detections for current frame + external
   const savedOverlayPoints = useMemo(() => {
+    // External overlay takes priority (stepped board etc.)
+    if (externalOverlayPoints && externalOverlayPoints.length > 0) {
+      return externalOverlayPoints;
+    }
     if (!showSavedOverlay || !savedDetections) return undefined;
     const frameData = savedDetections[index];
     if (!frameData?.grid_points) return undefined;
     // Convert [number, number][] to {x, y}[]
     return frameData.grid_points.map(([x, y]) => ({ x, y }));
-  }, [showSavedOverlay, savedDetections, index]);
+  }, [showSavedOverlay, savedDetections, index, externalOverlayPoints]);
+
+  // Compute grid network lines from saved detections or external source
+  const savedOverlayLines = useMemo(() => {
+    if (externalOverlayLines && externalOverlayLines.length > 0) return externalOverlayLines;
+    if (!showSavedOverlay || !savedDetections) return undefined;
+    if (externalOverlayPoints && externalOverlayPoints.length > 0) return undefined;
+    const frameData = savedDetections[index];
+    if (!frameData?.grid_points || !frameData?.grid_indices) return undefined;
+    return computeGridLines(frameData.grid_points, frameData.grid_indices);
+  }, [showSavedOverlay, savedDetections, index, externalOverlayPoints, externalOverlayLines]);
 
   // Count of detected points for current frame
   const savedPointCount = useMemo(() => {
@@ -331,6 +383,7 @@ export default function CalibrationImageViewer({
             panY={panY}
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
+            overlayLines={savedOverlayLines}
             clickMode={pointSelectMode}
             onImageClick={handleImageClick}
             markerPoints={selectedMarkers}
@@ -461,6 +514,7 @@ export default function CalibrationImageViewer({
             panY={panY}
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
+            overlayLines={savedOverlayLines}
             clickMode={pointSelectMode || measureMode}
             onImageClick={handleImageClick}
             markerPoints={selectedMarkers}

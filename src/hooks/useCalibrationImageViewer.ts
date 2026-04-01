@@ -35,7 +35,8 @@ export function useCalibrationImageViewer(
   idx: number,
   imageFormat: 'jpeg' | 'png' = 'jpeg',
   autoLimits: boolean = true,
-  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' = 'dotboard'
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board' = 'dotboard',
+  refreshKey?: string,
 ) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +66,8 @@ export function useCalibrationImageViewer(
 
   // Generate cache key
   const getCacheKey = useCallback((frameIdx: number) => {
-    return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${autoLimits}-${calibrationType}`;
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType]);
+    return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${autoLimits}-${calibrationType}-${refreshKey || ''}`;
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, refreshKey]);
 
   // Build frame URL based on calibration type
   const buildFrameUrl = useCallback((frameIdx: number) => {
@@ -270,7 +271,7 @@ export function useCalibrationImageViewer(
       }).catch(() => {}); // Silent fail — cache clear is best-effort
       prevCameraRef.current = camera;
     }
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, cancelPrefetches, backendUrl]);
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, cancelPrefetches, backendUrl, refreshKey]);
 
   return {
     // Image state

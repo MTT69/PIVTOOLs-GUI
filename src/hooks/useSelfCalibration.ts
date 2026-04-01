@@ -50,7 +50,7 @@ export interface SelfCalStatus {
 /**
  * Hook for managing stereo self-calibration state and operations.
  */
-export function useSelfCalibration(cam1: number, cam2: number, method: string) {
+export function useSelfCalibration(cam1: number, cam2: number, method: string, sourcePathIdx: number = 0) {
   // Parameters
   const [nImages, setNImages] = useState(20);
   const [windowSize, setWindowSize] = useState(64);
@@ -120,7 +120,7 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string) {
         method,
         frame_idx: previewFrameIdx,
         sub_frame: subFrame,
-        source_path_idx: 0,
+        source_path_idx: sourcePathIdx,
       };
       if (corrected) {
         // Prefer fresh result (just-completed run) over saved config status
@@ -157,7 +157,7 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string) {
     } finally {
       setPreviewLoading(false);
     }
-  }, [cam1, cam2, method, previewFrameIdx, subFrame, status, result]);
+  }, [cam1, cam2, method, previewFrameIdx, subFrame, status, result, sourcePathIdx]);
 
   // Auto-reload preview when frame, subFrame, or showCorrected changes.
   // Only fires after the user has loaded at least one preview (Load Preview click).
@@ -227,7 +227,7 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string) {
           cam1,
           cam2,
           method,
-          source_path_idx: 0,
+          source_path_idx: sourcePathIdx,
           n_images: nImages,
           window_size: windowSize,
           overlap,
@@ -247,7 +247,7 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string) {
       setError(e.message || 'Failed to start self-calibration');
       setIsRunning(false);
     }
-  }, [cam1, cam2, method, nImages, windowSize, overlap, pollJob]);
+  }, [cam1, cam2, method, nImages, windowSize, overlap, pollJob, sourcePathIdx]);
 
   // Cleanup on unmount
   useEffect(() => {

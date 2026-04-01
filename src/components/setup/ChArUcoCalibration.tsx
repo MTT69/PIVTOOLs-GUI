@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
 import { useChArUcoCalibration, ARUCO_DICTS, FrameDetection } from "@/hooks/useChArUcoCalibration";
-import { usePinholeValidation, isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
+import { isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
 import { useToast } from "@/components/ui/use-toast";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
@@ -54,6 +54,24 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     calibrating,
     jobId,
 
+    // Image config (from hook)
+    imageFormat,
+    setImageFormat,
+    imageType,
+    setImageType,
+    numImages,
+    setNumImages,
+    calibrationSources,
+    setCalibrationSources,
+    useCameraSubfolders,
+    setUseCameraSubfolders,
+    cameraSubfolders,
+    setCameraSubfolders,
+
+    // Validation (from hook)
+    validation,
+    validating,
+
     // Model and detections (like dotboard)
     cameraModel,
     detections,
@@ -87,26 +105,17 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     loadModel,
     calibrateVectors,
   } = useChArUcoCalibration(
-    config.calibration?.charuco || {},
-    updateConfig,
     cameraOptions,
     sourcePaths
   );
 
-  // Calibration image settings state (unified from calibration block)
   const [showImageViewer, setShowImageViewer] = useState(false);
-  const [imageFormat, setImageFormat] = useState("calib%05d.tif");
-  const [imageType, setImageType] = useState("standard");
-  const [numImages, setNumImages] = useState<string>("10");
-  const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
 
   // Global coordinate system — pass calibrationSources so stale features reset on source change
   const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
   const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
-  const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
-  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
@@ -142,13 +151,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     }
   };
 
-  // Automatic validation using unified validation hook (same as Pinhole)
-  const validation = usePinholeValidation(
-    sourcePathIdx,
-    camera,
-    imageFormat,
-    parseInt(numImages) || 10
-  );
   const isMacOS = useIsMacOS();
   const hasUnsupportedFormat = isContainerFormat(imageFormat);
 
@@ -161,33 +163,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
       if (!isNaN(frameIdx) && value.grid_points) {
         result[frameIdx] = {
           grid_points: value.grid_points,
+          grid_indices: value.grid_indices,
           reprojection_error: value.reprojection_error,
         };
       }
     }
     return Object.keys(result).length > 0 ? result : undefined;
   }, [detections]);
-
-  // Load calibration config on mount
-  useEffect(() => {
-    const loadCalibrationConfig = async () => {
-      try {
-        const res = await fetch("/backend/calibration/config");
-        const json = await res.json();
-        if (res.ok) {
-          setImageFormat(json.image_format || "calib%05d.tif");
-          setImageType(json.image_type || "standard");
-          setNumImages(String(json.num_images || 10));
-          setCalibrationSources(json.calibration_sources || []);
-          setUseCameraSubfolders(json.use_camera_subfolders || false);
-          setCameraSubfolders(json.camera_subfolders || []);
-        }
-      } catch (e) {
-        console.error("Failed to load calibration config:", e);
-      }
-    };
-    loadCalibrationConfig();
-  }, []);
 
   // Show toast notification when model load error occurs
   useEffect(() => {
@@ -221,23 +203,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
       });
     }
   }, [jobStatus, jobDetails?.error, toast]);
-
-  // Save calibration config when settings change
-  const saveCalibrationConfig = useCallback(async (updates: Record<string, any>) => {
-    try {
-      const res = await fetch("/backend/calibration/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-      if (!res.ok) {
-        const json = await res.json();
-        console.error("Failed to save calibration config:", json.error);
-      }
-    } catch (e) {
-      console.error("Failed to save calibration config:", e);
-    }
-  }, []);
 
   const setAsActiveMethod = async () => {
     try {
@@ -279,7 +244,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               newSources[sourcePathIdx] = e.target.value;
               setCalibrationSources(newSources);
             }}
-            onBlur={() => saveCalibrationConfig({ calibration_sources: calibrationSources })}
             placeholder="/path/to/calibration/images"
             className="font-mono"
           />
@@ -318,10 +282,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <label className="block text-xs font-medium">Image Type</label>
             <Select
               value={imageType}
-              onValueChange={v => {
-                setImageType(v);
-                saveCalibrationConfig({ image_type: v });
-              }}
+              onValueChange={setImageType}
             >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -338,7 +299,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               type="text"
               value={imageFormat}
               onChange={e => setImageFormat(e.target.value)}
-              onBlur={() => saveCalibrationConfig({ image_format: imageFormat })}
               placeholder="calib%05d.tif"
             />
           </div>
@@ -352,7 +312,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               onBlur={() => {
                 const finalVal = parseInt(numImages) || 10;
                 setNumImages(String(finalVal));
-                saveCalibrationConfig({ num_images: finalVal });
               }}
             />
           </div>
@@ -365,10 +324,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <Switch
                 id="charuco-use-camera-subfolders"
                 checked={useCameraSubfolders}
-                onCheckedChange={checked => {
-                  setUseCameraSubfolders(checked);
-                  saveCalibrationConfig({ use_camera_subfolders: checked });
-                }}
+                onCheckedChange={setUseCameraSubfolders}
               />
               <Label htmlFor="charuco-use-camera-subfolders" className="text-sm">
                 Use camera subfolders
@@ -410,7 +366,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                         newSubfolders[idx] = e.target.value;
                         setCameraSubfolders(newSubfolders);
                       }}
-                      onBlur={() => saveCalibrationConfig({ camera_subfolders: cameraSubfolders })}
                     />
                   </div>
                 ))}
@@ -528,27 +483,30 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           </Alert>
         )}
 
-        {/* Calibration Validation - automatic, same as Pinhole */}
-        <ValidationAlert
-          validation={validation}
-          customSuccessMessage={
-            validation.valid
-              ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
-              : undefined
-          }
-        />
+        {/* Calibration Validation */}
+        {validation && (
+          <ValidationAlert
+            validation={{
+              valid: validation.valid,
+              checked: !validating,
+              error: validation.error || null,
+            }}
+            customSuccessMessage={
+              validation.valid
+                ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
+                : undefined
+            }
+          />
+        )}
 
         {/* Suggested Pattern Button - show when validation fails but a suggestion is available */}
-        {!validation.valid && validation.suggested_pattern && (
+        {validation && !validation.valid && validation.suggested_pattern && (
           <div className="flex items-center gap-2 text-sm">
             <span className="text-gray-600">Suggestion:</span>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                setImageFormat(validation.suggested_pattern!);
-                saveCalibrationConfig({ image_format: validation.suggested_pattern });
-              }}
+              onClick={() => setImageFormat(validation.suggested_pattern!)}
               className="text-blue-600 border-blue-300 hover:bg-blue-50"
             >
               Use "{validation.suggested_pattern}"
@@ -556,8 +514,32 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           </div>
         )}
 
+        {/* Suggested Subfolder Button */}
+        {validation && !validation.valid && validation.suggested_subfolder && (() => {
+          const sub = validation.suggested_subfolder!;
+          const cams: number[] = config?.paths?.camera_numbers || [1, 2];
+          const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
+          const label = [...new Set(perCam)].join('" / "');
+          return (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Subfolder suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setUseCameraSubfolders(true);
+                  setCameraSubfolders(perCam);
+                }}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{label}"
+              </Button>
+            </div>
+          );
+        })()}
+
         {/* Calibration Image Viewer Button */}
-        {validation.valid && (
+        {validation?.valid && (
           <div className="flex items-center gap-4">
             <Button
               variant="outline"
@@ -590,13 +572,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         )}
 
         {/* Calibration Image Viewer */}
-        {showImageViewer && validation.valid && (
+        {showImageViewer && validation?.valid && (
           <CalibrationImageViewer
             backendUrl="/backend"
             sourcePathIdx={sourcePathIdx}
             camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
             numImages={parseInt(numImages) || 10}
             calibrationType="charuco"
+            refreshKey={`${validation?.camera_path}-${validation?.valid}`}
             calibrationParams={{
               squares_h: parseInt(squaresH) || 10,
               squares_v: parseInt(squaresV) || 9,
@@ -630,7 +613,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div className="flex gap-2 items-center flex-wrap">
             <Button
               onClick={() => calibrateAllCameras()}
-              disabled={calibrating || !validation.valid}
+              disabled={calibrating || !validation?.valid}
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
               {calibrating ? (

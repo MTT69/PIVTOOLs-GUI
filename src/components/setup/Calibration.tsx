@@ -14,6 +14,7 @@ import { StereoCalibration } from './StereoCalibration';
 import { StereoCharucoCalibration } from './StereoCharucoCalibration';
 import { PolynomialCalibration } from './PolynomialCalibration';
 import { ChArUcoCalibration } from './ChArUcoCalibration';
+import { SteppedBoardCalibration } from './SteppedBoardCalibration';
 
 interface CalibrationProps {
   config: any;
@@ -61,6 +62,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
     { id: 'polynomial', label: 'Polynomial', component: PolynomialCalibration },
     { id: 'stereo_dotboard', label: 'Stereo Dotboard', component: StereoCalibration },
     { id: 'stereo_charuco', label: 'Stereo ChArUco', component: StereoCharucoCalibration },
+    { id: 'stepped_board', label: 'Stepped Board', component: SteppedBoardCalibration },
   ];
 
   return (
@@ -80,6 +82,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
             <li><strong>Polynomial:</strong> Calibrate using 3rd order polynomial coefficients</li>
             <li><strong>Stereo Dotboard:</strong> Calibrate camera pairs for 3D reconstruction using dot grid</li>
             <li><strong>Stereo ChArUco:</strong> Calibrate camera pairs for 3D reconstruction using ChArUco board</li>
+            <li><strong>Stepped Board:</strong> Stereo calibration using stepped dotboard with two Z-planes</li>
           </ul>
 
           {snapshotInfo.exists && (
@@ -118,7 +121,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
           )}
 
           <Tabs key={configVersion} value={currentTab} onValueChange={setCurrentTab}>
-            <TabsList className="grid w-full grid-cols-6">
+            <TabsList className="grid w-full grid-cols-7">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>
                   {method.label}

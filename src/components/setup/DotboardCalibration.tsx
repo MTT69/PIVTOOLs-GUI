@@ -172,6 +172,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
       if (!isNaN(frameIdx) && value.grid_points) {
         result[frameIdx] = {
           grid_points: value.grid_points,
+          grid_indices: value.grid_indices,
           reprojection_error: value.reprojection_error,
         };
       }
@@ -398,6 +399,31 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             </div>
           )}
 
+          {/* Suggested Subfolder Button */}
+          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+            const sub = validation.suggested_subfolder!;
+            const cams: number[] = config?.paths?.camera_numbers || [1, 2];
+            // Infer per-camera subfolders by replacing the camera number in the suggestion
+            const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
+            const label = [...new Set(perCam)].join('" / "');
+            return (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-600">Subfolder suggestion:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setUseCameraSubfolders(true);
+                    setCameraSubfolders(perCam);
+                  }}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Use "{label}"
+                </Button>
+              </div>
+            );
+          })()}
+
           {/* Section 4: Grid Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
@@ -489,6 +515,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
               numImages={parseInt(numImages) || 10}
               calibrationType="dotboard"
+              refreshKey={`${validation?.camera_path}-${validation?.valid}`}
               calibrationParams={{
                 // NOTE: pattern_cols/rows removed - auto-detected
               }}
@@ -628,7 +655,13 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             {jobStatus?.status === 'completed' && (
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Camera model generation completed successfully!
+                Camera model generation completed!
+                {jobStatus.rms_error && (
+                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} px</span>
+                )}
+                {jobStatus.num_images_used && (
+                  <span className="ml-2">({jobStatus.num_images_used} images used)</span>
+                )}
               </div>
             )}
 
@@ -646,12 +679,23 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 <div className="flex items-center gap-2 text-sm mb-2">
                   <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                   <strong>Multi-Camera Model Generation:</strong>
-                  <span className="capitalize">{multiCameraJobStatus.status}</span>
+                  <span>Camera {multiCameraJobStatus.current_camera || '...'}</span>
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Processing camera {multiCameraJobStatus.current_camera}
+                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+                  <div
+                    className="h-2 bg-blue-600 transition-all"
+                    style={{ width: `${multiCameraJobStatus.current_camera_progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {multiCameraJobStatus.processed_images !== undefined && (
+                    <span>Images: {multiCameraJobStatus.processed_images}/{multiCameraJobStatus.total_images}</span>
+                  )}
+                  {multiCameraJobStatus.valid_images !== undefined && multiCameraJobStatus.valid_images > 0 && (
+                    <span> | Valid: {multiCameraJobStatus.valid_images}</span>
+                  )}
                   {multiCameraJobStatus.total_cameras > 0 && (
-                    <span> ({multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras} completed)</span>
+                    <span> | Cameras: {multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras}</span>
                   )}
                 </div>
               </div>
@@ -662,6 +706,17 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Multi-camera model generation completed! ({multiCameraJobStatus.processed_cameras} cameras)
+                {multiCameraJobStatus.camera_results && (
+                  <div className="mt-1 text-xs">
+                    {Object.entries(multiCameraJobStatus.camera_results).map(([cam, res]: [string, any]) => (
+                      <span key={cam} className="mr-3">
+                        {cam}: {res.status === 'completed' && res.rms_error
+                          ? `RMS ${Number(res.rms_error).toFixed(4)} px (${res.num_images_used} images)`
+                          : res.status}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
