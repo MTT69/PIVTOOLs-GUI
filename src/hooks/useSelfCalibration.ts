@@ -258,6 +258,41 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string, s
     };
   }, []);
 
+  // Save manual Z-offset / tilts
+  const saveManual = useCallback(async (zOffset: number, tiltXDeg: number, tiltYDeg: number) => {
+    try {
+      const res = await fetch('/backend/calibrate/self_calibration/save_manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ z_offset: zOffset, tilt_x_deg: tiltXDeg, tilt_y_deg: tiltYDeg }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setError(data.error);
+      } else {
+        await checkStatus();
+      }
+    } catch (e: any) {
+      setError(e.message || 'Failed to save manual self-cal');
+    }
+  }, [checkStatus]);
+
+  // Clear self-calibration
+  const clearSelfCal = useCallback(async () => {
+    try {
+      const res = await fetch('/backend/calibrate/self_calibration/clear', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        setError(data.error);
+      } else {
+        setResult(null);
+        await checkStatus();
+      }
+    } catch (e: any) {
+      setError(e.message || 'Failed to clear self-cal');
+    }
+  }, [checkStatus]);
+
   return {
     // Parameters
     nImages,
@@ -302,5 +337,7 @@ export function useSelfCalibration(cam1: number, cam2: number, method: string, s
 
     // Actions
     checkStatus,
+    saveManual,
+    clearSelfCal,
   };
 }

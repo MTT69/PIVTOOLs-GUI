@@ -470,7 +470,13 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
         {/* Saved status (no fresh result, but config has self-cal) */}
         {!selfCal.result && selfCal.hasSelfCal && selfCal.status && (
           <div className="p-3 bg-muted rounded text-sm">
-            <div className="font-semibold mb-1">Saved Self-Calibration</div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="font-semibold">Saved Self-Calibration</div>
+              <Button variant="outline" size="sm" className="h-6 text-xs"
+                onClick={() => selfCal.clearSelfCal()}>
+                Clear
+              </Button>
+            </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div>Z-offset: <span className="font-mono">{selfCal.status.z_offset.toFixed(4)} mm</span></div>
               <div>Tilt X: <span className="font-mono">{selfCal.status.tilt_x_deg.toFixed(4)}&deg;</span></div>
@@ -481,10 +487,82 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
             </div>
           </div>
         )}
+
+        {/* Manual Z-offset input — for when self-cal can't run (e.g., transmission stereo) */}
+        <ManualSelfCalInput
+          onSave={selfCal.saveManual}
+          onClear={selfCal.clearSelfCal}
+          currentZ={selfCal.status?.z_offset}
+          hasSavedValues={selfCal.hasSelfCal}
+        />
       </CardContent>
     </Card>
   );
 };
+
+/**
+ * Manual Z-offset/tilt input for cases where automatic self-calibration
+ * cannot run (e.g., transmission stereo with non-correlating particles).
+ *
+ * Z=0 is the calibration reference plane (camera 1's clicked level for
+ * stepped board). Positive Z-offset moves the laser sheet away from
+ * camera 1 toward camera 2.
+ */
+const ManualSelfCalInput: React.FC<{
+  onSave: (z: number, tiltXDeg: number, tiltYDeg: number) => Promise<void>;
+  onClear: () => Promise<void>;
+  currentZ?: number;
+  hasSavedValues: boolean;
+}> = ({ onSave, onClear, currentZ, hasSavedValues }) => {
+  const [zStr, setZStr] = useState(currentZ?.toFixed(4) ?? "0");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(parseFloat(zStr) || 0, 0, 0);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <details className="mt-3">
+      <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+        Manual laser sheet Z-offset
+      </summary>
+      <div className="mt-2 p-3 border rounded space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Set the laser sheet Z-offset from the calibration plane manually.
+          Z=0 is camera 1&apos;s calibration reference plane. Used when automatic
+          self-calibration cannot run.
+        </p>
+        <div className="flex items-end gap-3">
+          <div className="w-48">
+            <Label className="text-xs">Z-offset (mm)</Label>
+            <Input
+              type="text" inputMode="numeric"
+              value={zStr}
+              onChange={(e) => setZStr(e.target.value)}
+              onBlur={() => setZStr((parseFloat(zStr) || 0).toFixed(4))}
+              className="h-8 text-sm font-mono"
+            />
+          </div>
+          <Button size="sm" onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+            Save
+          </Button>
+          {hasSavedValues && (
+            <Button size="sm" variant="outline" onClick={onClear}>
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+};
+
 
 /**
  * Warning alert shown before Reconstruct 3D Vectors button when
