@@ -465,7 +465,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
-                <SelectItem value="polynomial">Polynomial (DaVis-compatible)</SelectItem>
+                <SelectItem value="polynomial">Polynomial (3rd-order bivariate)</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -472,10 +472,10 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
-                    <SelectItem value="polynomial">Polynomial (DaVis-compatible)</SelectItem>
+                    <SelectItem value="polynomial">Polynomial (3rd-order bivariate)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">Pinhole for 3D setups, polynomial for 2D planar PIV</p>
+                <p className="text-xs text-muted-foreground mt-1">Pinhole for multi-image 3D setups; polynomial is a single-image 2D fit (datum only)</p>
               </div>
             </div>
           </div>
