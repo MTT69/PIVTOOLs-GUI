@@ -724,6 +724,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 )}
               </div>
             )}
+            {jobStatus === 'completed' && Array.isArray(jobDetails.warnings) && jobDetails.warnings.length > 0 && (
+              <div className="mt-2 p-2 border rounded bg-amber-50 text-amber-800 text-xs">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                {jobDetails.warnings.map((w: string, i: number) => (
+                  <div key={i}>{w}</div>
+                ))}
+              </div>
+            )}
             {(jobStatus === 'failed' || jobStatus === 'error') && (
               <div className="mt-2 text-xs text-red-600">
                 Error: {jobDetails.error || 'Calibration failed'}

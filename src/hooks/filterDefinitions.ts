@@ -46,7 +46,7 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   {
     type: 'clahe',
     name: 'CLAHE',
-    description: 'Contrast Limited Adaptive Histogram Equalization. Enhances local contrast for shadowgraph and BOS images.',
+    description: 'Contrast Limited Adaptive Histogram Equalization. Enhances local contrast, useful for uneven illumination or low-contrast regions.',
     category: 'spatial',
     parameters: [
       {
@@ -74,9 +74,19 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   {
     type: 'gaussian',
     name: 'Gaussian Blur',
-    description: 'Gaussian smoothing filter',
+    description: 'Gaussian low-pass smoothing. Reduces high-frequency noise while preserving large-scale intensity.',
     category: 'spatial',
     parameters: [
+      {
+        name: 'Kernel Size',
+        key: 'size',
+        type: 'tuple',
+        default: [7, 7],
+        min: 3,
+        max: 21,
+        step: 2,
+        description: 'Kernel size [height, width] (odd numbers only)'
+      },
       {
         name: 'Sigma',
         key: 'sigma',
@@ -85,14 +95,14 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
         min: 0.1,
         max: 10.0,
         step: 0.1,
-        description: 'Standard deviation for Gaussian kernel'
+        description: 'Standard deviation of the Gaussian (pixels)'
       }
     ]
   },
   {
     type: 'median',
-    name: 'Median Filter',
-    description: 'Median filtering for noise reduction',
+    name: 'Median',
+    description: 'Replaces each pixel with the median of its neighbourhood. Removes salt-and-pepper noise and hot pixels without blurring edges.',
     category: 'spatial',
     parameters: [
       {
@@ -110,7 +120,7 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   {
     type: 'lmax',
     name: 'Local Maximum',
-    description: 'Morphological dilation using local maximum',
+    description: 'Replaces each pixel with the maximum in its neighbourhood (morphological dilation). Expands bright features — useful for detecting particle locations.',
     category: 'spatial',
     parameters: [
       {
@@ -127,8 +137,8 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
   },
   {
     type: 'maxnorm',
-    name: 'Max-Norm',
-    description: 'Normalize by local max-min contrast with smoothing',
+    name: 'Background Normalize',
+    description: 'Divides by the smoothed local background (sliding minimum). Equalizes illumination gradients across the image while preserving particle contrast. Max gain limits amplification in dark regions.',
     category: 'spatial',
     parameters: [
       {
@@ -149,14 +159,14 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
         min: 0.1,
         max: 10.0,
         step: 0.1,
-        description: 'Maximum normalization gain'
+        description: 'Maximum amplification allowed (caps gain in dark regions)'
       }
     ]
   },
   {
     type: 'norm',
-    name: 'Normalization',
-    description: 'Normalize by subtracting local min and dividing by range',
+    name: 'Range Normalize',
+    description: 'Subtracts the local minimum then divides by the local range (max − min). Maps each pixel to [0, 1] relative to its neighbourhood. Good general-purpose contrast equalization.',
     category: 'spatial',
     parameters: [
       {
@@ -177,7 +187,53 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
         min: 0.1,
         max: 10.0,
         step: 0.1,
-        description: 'Maximum normalization gain'
+        description: 'Maximum amplification allowed (caps gain in low-contrast regions)'
+      }
+    ]
+  },
+  {
+    type: 'norm2',
+    name: 'Smoothed Range Normalize',
+    description: 'Like Range Normalize, but smooths the min and max envelopes before normalizing. More robust to single-pixel noise spikes. Use when standard Range Normalize produces noisy results.',
+    category: 'spatial',
+    parameters: [
+      {
+        name: 'Kernel Size',
+        key: 'size',
+        type: 'tuple',
+        default: [7, 7],
+        min: 3,
+        max: 21,
+        step: 2,
+        description: 'Kernel size [height, width]'
+      },
+      {
+        name: 'Max Gain',
+        key: 'max_gain',
+        type: 'number',
+        default: 1.0,
+        min: 0.1,
+        max: 10.0,
+        step: 0.1,
+        description: 'Maximum amplification allowed'
+      }
+    ]
+  },
+  {
+    type: 'ssmin',
+    name: 'SSMin',
+    description: 'Sliding minimum background subtraction. Median-smooths, extracts the local minimum (background envelope), box-smooths it, and subtracts. Removes slowly-varying background (laser sheet profile, reflections). Output clipped to ≥ 0.',
+    category: 'spatial',
+    parameters: [
+      {
+        name: 'Kernel Size',
+        key: 'size',
+        type: 'tuple',
+        default: [7, 7],
+        min: 3,
+        max: 21,
+        step: 2,
+        description: 'Kernel size [height, width]'
       }
     ]
   },

@@ -77,6 +77,7 @@ export default function POD({ config, updateConfig }: PODProps) {
   const [cmap, setCmap] = useState<string>("default");
   const [hasCheckedVars, setHasCheckedVars] = useState<boolean>(false);
   const [runVis, setRunVis] = useState<number>(1);
+  const [runVisInput, setRunVisInput] = useState("1");
   const [lower, setLower] = useState<string>("");
   const [upper, setUpper] = useState<string>("");
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -894,7 +895,7 @@ export default function POD({ config, updateConfig }: PODProps) {
                   />
 
                   <label className="text-sm font-medium">Run:</label>
-                  <Input type="text" inputMode="numeric" min={1} value={runVis} onChange={e => setRunVis(Math.max(1, Number(e.target.value)))} className="w-24" />
+                  <Input type="text" inputMode="numeric" value={runVisInput} onChange={e => setRunVisInput(e.target.value)} onBlur={() => { const n = parseInt(runVisInput); const v = isNaN(n) ? 1 : Math.max(1, n); setRunVis(v); setRunVisInput(String(v)); }} className="w-24" />
                   <label className="text-sm font-medium">Lower:</label>
                   <Input type="text" inputMode="numeric" value={lower} onChange={e => setLower(e.target.value)} placeholder="auto" className="w-28" />
                   <label className="text-sm font-medium">Upper:</label>
@@ -926,7 +927,7 @@ export default function POD({ config, updateConfig }: PODProps) {
                   <label className="text-sm font-medium">Available POD Runs:</label>
                   <select
                     value={runVis}
-                    onChange={e => setRunVis(Number(e.target.value))}
+                    onChange={e => { const v = Number(e.target.value); setRunVis(v); setRunVisInput(String(v)); }}
                     className="border rounded px-2 py-1"
                   >
                     {availablePodRuns.map(r => (

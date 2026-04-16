@@ -173,13 +173,35 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Resolution settings
   const [resolution, setResolution] = useState<string>('1080p');
   const resolutionOptions = [
+    { label: 'Native (no upscale)', value: 'native' },
     { label: '1080p (1920x1080)', value: '1080p' },
+    { label: '4K (3840x2160)', value: '4k' },
   ];
   const [fps, setFps] = useState<number>(30);
+
+  // Quality preset (maps to CRF)
+  const [quality, setQuality] = useState<string>('high');
+  const qualityOptions = [
+    { label: 'Standard (smaller files)', value: 'standard' },
+    { label: 'High (recommended)', value: 'high' },
+    { label: 'Publication (near-lossless)', value: 'publication' },
+  ];
+  const qualityToCrf: Record<string, number> = {
+    standard: 18,
+    high: 15,
+    publication: 8,
+  };
 
   // Video browser state
   const [activeTab, setActiveTab] = useState<string>('create');
   const [availableVideos, setAvailableVideos] = useState<string[]>([]);
+  const [availableVideosMeta, setAvailableVideosMeta] = useState<Array<{
+    path: string;
+    filename: string;
+    size_mb: number;
+    modified: number;
+    data_source: string;
+  }>>([]);
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [loadingVideos, setLoadingVideos] = useState<boolean>(false);
 
@@ -398,28 +420,32 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     
     setLoadingVideos(true);
     setAvailableVideos([]);
+    setAvailableVideosMeta([]);
     setSelectedVideo('');
-    
+
     try {
       console.log(`Fetching videos from: ${effectiveDir}`);
       const response = await fetch(`${backendUrl}/video/list_videos?base_path=${encodeURIComponent(effectiveDir)}`);
-      
+
       if (!response.ok) {
         throw new Error(`Server returned ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log(`Found ${data.videos?.length || 0} videos`);
-      
+
       if (data.videos?.length) {
         setAvailableVideos(data.videos);
+        setAvailableVideosMeta(data.videos_meta || []);
         setSelectedVideo(data.videos[0]);
       } else {
         setAvailableVideos([]);
+        setAvailableVideosMeta([]);
       }
     } catch (error) {
       console.error('Error fetching videos:', error);
       setAvailableVideos([]);
+      setAvailableVideosMeta([]);
     } finally {
       setLoadingVideos(false);
     }
@@ -439,6 +465,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       upper: upper,
       fps: fps,
       resolution: resolution,
+      crf: qualityToCrf[quality] ?? 15,
     };
 
     try {
@@ -518,9 +545,8 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
                   message: isTest ? 'Test video created successfully!' : 'Video creation completed!',
                   out_path: status.out_path
                 });
-                if (activeTab === 'browse') {
-                  fetchAvailableVideos();
-                }
+                // Always refresh video list so browse tab is up-to-date
+                fetchAvailableVideos();
               }
             }
           })
@@ -567,6 +593,29 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         success: false,
         message: `Error canceling: ${error.message}`
       });
+    }
+  };
+
+  // Delete a video file
+  const handleDeleteVideo = async (videoPath: string) => {
+    try {
+      const response = await fetch(`${backendUrl}/video/delete_video`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: videoPath }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to delete video');
+      }
+      // Refresh the list
+      if (selectedVideo === videoPath) {
+        setSelectedVideo('');
+      }
+      fetchAvailableVideos();
+    } catch (error: any) {
+      console.error('Delete error:', error);
+      alert(`Failed to delete video: ${error.message}`);
     }
   };
 
@@ -755,9 +804,13 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     resolutionOptions,
     fps,
     setFps,
+    quality,
+    setQuality,
+    qualityOptions,
     activeTab,
     setActiveTab,
     availableVideos,
+    availableVideosMeta,
     selectedVideo,
     setSelectedVideo,
     loadingVideos,
@@ -804,6 +857,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     handleCreateVideo,
     handleCreateBatchVideo,
     handleCancelVideo,
+    handleDeleteVideo,
     basename,
     createVideoUrl,
     handleVideoError,

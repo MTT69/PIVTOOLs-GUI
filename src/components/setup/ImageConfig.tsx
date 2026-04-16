@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -109,6 +109,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
   const [framePairPreview, setFramePairPreview] = useState<any>(null);
   const [numLoops, setNumLoops] = useState<string>("1");
+  // Guard: prevent saves before config has loaded into state (avoids shipping empty rawPatterns)
+  const configLoadedRef = useRef(false);
   // String editing states for number inputs (lets user clear and retype)
   const [frameStrideStr, setFrameStrideStr] = useState<string>("0");
   const [pairStrideStr, setPairStrideStr] = useState<string>("1");
@@ -186,6 +188,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     } else {
       setRawPatterns(['B%05d_A.tif', 'B%05d_B.tif']);
     }
+    configLoadedRef.current = true;
   }, [config]);
 
   // Auto-fill num_images when empty and validation detects a count
@@ -221,6 +224,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       config.images?.num_loops]);
 
   const saveConfig = async (overrides: SaveOverrides = {}) => {
+    if (!configLoadedRef.current) return;
     setSavingMeta("Saving...");
     const ni = overrides.numImages ?? numImages;
     const nc = overrides.numCameras ?? numCameras;
@@ -234,6 +238,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     const it = overrides.imageType ?? imageType;
     const ucsfIM7 = overrides.useCameraSubfoldersIM7 ?? useCameraSubfoldersIM7;
 
+    // Guard: never save empty image_format — skip the images.image_format key
+    // to avoid wiping patterns due to race conditions between concurrent saves
+    const rpFiltered = rp.filter(p => p.trim() !== '');
+
     const camCount = Number(nc) || 1;
     const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
@@ -244,7 +252,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         frame_stride: fs,
         pair_stride: ps,
         pairing_preset: preset,
-        image_format: rp,
+        ...(rpFiltered.length > 0 ? { image_format: rpFiltered } : {}),
         vector_format: [vp],
         image_type: it,
         use_camera_subfolders: ucsfIM7,

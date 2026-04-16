@@ -87,6 +87,7 @@ export function useSteppedBoardCalibration(
 ) {
   // Source selection
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
+
   const [cam1, setCam1] = useState(1);
   const [cam2, setCam2] = useState(2);
 
@@ -103,10 +104,8 @@ export function useSteppedBoardCalibration(
   const [stepHeightMm, setStepHeightMm] = useState(3);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
   const [dt, setDt] = useState(1);
-  const [stereoConfig, setStereoConfig] = useState<string>('transmission');
 
   // Detection state
-  const [isDetecting, setIsDetecting] = useState(false);
   const [cam1Detection, setCam1Detection] = useState<SteppedDetection | null>(null);
   const [cam2Detection, setCam2Detection] = useState<SteppedDetection | null>(null);
 
@@ -123,6 +122,12 @@ export function useSteppedBoardCalibration(
   });
   const [cam1ClickedLevel, setCam1ClickedLevel] = useState<string>('peak');
   const [cam2ClickedLevel, setCam2ClickedLevel] = useState<string>('peak');
+
+  // Per-pose peak/trough labels, one entry per (camera, frame_idx).
+  // Required by the backend since the auto-detect was removed — the
+  // operator declares the label for every pose via the UI dropdown.
+  const [cam1PoseLevels, setCam1PoseLevels] = useState<Record<number, string>>({});
+  const [cam2PoseLevels, setCam2PoseLevels] = useState<Record<number, string>>({});
 
   // Validation state
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
@@ -146,6 +151,25 @@ export function useSteppedBoardCalibration(
   const [datumCamera, setDatumCamera] = useState(1);
   const [datumFrame, setDatumFrame] = useState(1);
 
+  // Multi-view sequence: capture N consecutive frames starting at frame 1,
+  // run detection across all of them, and send them as one joint fit via
+  // the sequence routes. The datum frame's fiducial clicks anchor the
+  // whole sequence.
+  const [numCalibrationFrames, setNumCalibrationFrames] = useState<number>(10);
+  const [sequenceId, setSequenceId] = useState<string | null>(null);
+  const [sequencePoses, setSequencePoses] = useState<
+    Array<{
+      frame_idx: number;
+      is_datum: boolean;
+      cam1: { ok: boolean; n_blobs?: number; n_level_A?: number; n_level_B?: number; error?: string } | null;
+      cam2: { ok: boolean; n_blobs?: number; n_level_A?: number; n_level_B?: number; error?: string } | null;
+    }>
+  >([]);
+  const [sequenceStatus, setSequenceStatus] = useState<
+    'idle' | 'detecting' | 'ready' | 'error'
+  >('idle');
+  const [sequenceError, setSequenceError] = useState<string | null>(null);
+
   // Detection progress
   const [detectionProgress, setDetectionProgress] = useState(0);
   // Model generation progress
@@ -160,7 +184,7 @@ export function useSteppedBoardCalibration(
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const detectPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const modelPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const generatePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconstructPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load config on mount
@@ -188,13 +212,34 @@ export function useSteppedBoardCalibration(
           if (stepped_board.step_height_mm) setStepHeightMm(stepped_board.step_height_mm);
           if (stepped_board.board_thickness_mm) setBoardThicknessMm(stepped_board.board_thickness_mm);
           if (stepped_board.dt) setDt(stepped_board.dt);
-          if (stepped_board.stereo_config) setStereoConfig(stepped_board.stereo_config);
           if (stepped_board.datum_camera) setDatumCamera(stepped_board.datum_camera);
           if (stepped_board.datum_frame) setDatumFrame(stepped_board.datum_frame);
+          if (stepped_board.num_calibration_frames) setNumCalibrationFrames(stepped_board.num_calibration_frames);
           if (stepped_board.cam1_fiducials) setCam1Fiducials(stepped_board.cam1_fiducials);
           if (stepped_board.cam2_fiducials) setCam2Fiducials(stepped_board.cam2_fiducials);
           if (stepped_board.cam1_clicked_level) setCam1ClickedLevel(stepped_board.cam1_clicked_level);
           if (stepped_board.cam2_clicked_level) setCam2ClickedLevel(stepped_board.cam2_clicked_level);
+          // Per-pose labels round-trip as { frame_idx: 'peak'|'trough' }.
+          // YAML loads integer keys as ints; coerce to Record<number,string>.
+          // Only keep entries within the valid frame range (1..numCalibrationFrames)
+          // to avoid stale entries from previous sessions with more frames.
+          const nFrames = stepped_board.num_calibration_frames || numCalibrationFrames;
+          if (stepped_board.cam1_pose_levels && typeof stepped_board.cam1_pose_levels === 'object') {
+            const parsed: Record<number, string> = {};
+            for (const [k, v] of Object.entries(stepped_board.cam1_pose_levels)) {
+              const fi = Number(k);
+              if (fi >= 1 && fi <= nFrames) parsed[fi] = String(v);
+            }
+            setCam1PoseLevels(parsed);
+          }
+          if (stepped_board.cam2_pose_levels && typeof stepped_board.cam2_pose_levels === 'object') {
+            const parsed: Record<number, string> = {};
+            for (const [k, v] of Object.entries(stepped_board.cam2_pose_levels)) {
+              const fi = Number(k);
+              if (fi >= 1 && fi <= nFrames) parsed[fi] = String(v);
+            }
+            setCam2PoseLevels(parsed);
+          }
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -285,13 +330,15 @@ export function useSteppedBoardCalibration(
                 board_thickness_mm: boardThicknessMm,
                 dt: dt,
                 camera_pair: [cam1, cam2],
-                stereo_config: stereoConfig,
                 datum_camera: datumCamera,
                 datum_frame: datumFrame,
+                num_calibration_frames: numCalibrationFrames,
                 cam1_fiducials: cam1Fiducials,
                 cam2_fiducials: cam2Fiducials,
                 cam1_clicked_level: cam1ClickedLevel,
                 cam2_clicked_level: cam2ClickedLevel,
+                cam1_pose_levels: cam1PoseLevels,
+                cam2_pose_levels: cam2PoseLevels,
               },
             },
           }),
@@ -303,7 +350,7 @@ export function useSteppedBoardCalibration(
       // Validate after save completes so backend has current config
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, cam1, cam2, stereoConfig, datumCamera, datumFrame, cam1Fiducials, cam2Fiducials, cam1ClickedLevel, cam2ClickedLevel, validateImages]);
+  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, cam1, cam2, datumCamera, datumFrame, numCalibrationFrames, cam1Fiducials, cam2Fiducials, cam1ClickedLevel, cam2ClickedLevel, cam1PoseLevels, cam2PoseLevels, validateImages]);
 
   // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
@@ -329,76 +376,282 @@ export function useSteppedBoardCalibration(
     setCam2Fiducials(emptyFiducials);
     setCam1ClickedLevel('peak');
     setCam2ClickedLevel('peak');
+    setCam1PoseLevels({});
+    setCam2PoseLevels({});
     setCam1Detection(null);
     setCam2Detection(null);
     setModelResult(null);
     setHasModel(false);
   }, [sourcePathIdx, cam1, cam2]);
 
-  // Run detection on a single frame (exposed as detectDots for component compat)
-  const runDetection = useCallback(async (frameIdx: number = 1) => {
-    setIsDetecting(true);
+  // -------- Multi-view sequence routes --------
+  // Run detection across `numCalibrationFrames` frames starting at frame 1,
+  // with `datumFrame` anchoring the fiducial clicks.
+  const detect = useCallback(async () => {
+    if (numCalibrationFrames < 1) {
+      setSequenceError('numCalibrationFrames must be >= 1');
+      return;
+    }
+    if (datumFrame < 1 || datumFrame > numCalibrationFrames) {
+      setSequenceError(
+        `Datum frame ${datumFrame} is outside the sequence range [1, ${numCalibrationFrames}]`,
+      );
+      return;
+    }
+    setSequenceStatus('detecting');
+    setSequenceError(null);
+    setSequencePoses([]);
+    setSequenceId(null);
     setDetectionProgress(0);
     try {
-      const res = await fetch('/backend/calibrate/stepped_board/detect', {
+      const res = await fetch('/backend/calibrate/stepped_board/detect_sequence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           cam1: cam1,
           cam2: cam2,
-          frame_idx: frameIdx,
+          num_frames: numCalibrationFrames,
+          start_frame_idx: 1,
+          datum_frame_idx: datumFrame,
         }),
       });
-
       const data = await res.json();
-      if (data.job_id) {
-        const jobId = data.job_id;
+      if (!data.job_id) {
+        setSequenceStatus('error');
+        setSequenceError(data.error || 'Failed to start sequence detection');
+        return;
+      }
+      const jobId = data.job_id;
 
-        const pollDetection = async () => {
-          try {
-            const pollRes = await fetch(`/backend/calibrate/stepped_board/detect/job/${jobId}`);
-            const pollData = await pollRes.json();
-
-            if (pollData.progress !== undefined) {
-              setDetectionProgress(pollData.progress);
-            }
-
-            if (pollData.status === 'completed') {
-              if (detectPollRef.current) {
-                clearInterval(detectPollRef.current);
-                detectPollRef.current = null;
-              }
-              // Detection results are in pollData.detections (keyed by cam number string)
-              const detections = pollData.detections || {};
-              if (detections[String(cam1)]) setCam1Detection(detections[String(cam1)]);
-              if (detections[String(cam2)]) setCam2Detection(detections[String(cam2)]);
-              setDetectionProgress(100);
-              setIsDetecting(false);
-            } else if (pollData.status === 'failed') {
-              if (detectPollRef.current) {
-                clearInterval(detectPollRef.current);
-                detectPollRef.current = null;
-              }
-              console.error('Detection failed:', pollData.error);
-              setIsDetecting(false);
-            }
-          } catch (e) {
-            console.error('Failed to poll detection status:', e);
+      const poll = async () => {
+        try {
+          const pollRes = await fetch(
+            `/backend/calibrate/stepped_board/detect_sequence/job/${jobId}`,
+          );
+          const pollData = await pollRes.json();
+          if (pollData.progress !== undefined) {
+            setDetectionProgress(pollData.progress);
           }
-        };
+          if (pollData.status === 'completed') {
+            if (detectPollRef.current) {
+              clearInterval(detectPollRef.current);
+              detectPollRef.current = null;
+            }
+            setSequenceId(pollData.sequence_id);
+            const poses = (pollData.poses || []) as Array<{ frame_idx: number }>;
+            setSequencePoses(poses as typeof sequencePoses);
 
-        pollDetection();
-        detectPollRef.current = setInterval(pollDetection, 500);
+            // Only seed the DATUM pose's label from the clicked level.
+            // Non-datum poses start empty — the user must explicitly verify
+            // each one via click-to-label. This ensures poseLevels in
+            // config.yaml reflects what has actually been confirmed.
+            setCam1PoseLevels(prev => {
+              const next: Record<number, string> = { ...prev };
+              next[datumFrame] = cam1ClickedLevel;
+              return next;
+            });
+            setCam2PoseLevels(prev => {
+              const next: Record<number, string> = { ...prev };
+              next[datumFrame] = cam2ClickedLevel;
+              return next;
+            });
+            // Populate detection overlay from datum frame data
+            if (pollData.datum_detection?.cam1) {
+              setCam1Detection(pollData.datum_detection.cam1);
+            }
+            if (pollData.datum_detection?.cam2) {
+              setCam2Detection(pollData.datum_detection.cam2);
+            }
+            setDetectionProgress(100);
+            setSequenceStatus('ready');
+          } else if (pollData.status === 'failed') {
+            if (detectPollRef.current) {
+              clearInterval(detectPollRef.current);
+              detectPollRef.current = null;
+            }
+            setSequenceStatus('error');
+            setSequenceError(pollData.error || 'Sequence detection failed');
+          }
+        } catch (e) {
+          console.error('Sequence detection poll failed:', e);
+        }
+      };
+      poll();
+      detectPollRef.current = setInterval(poll, 500);
+    } catch (e) {
+      setSequenceStatus('error');
+      setSequenceError(String(e));
+    }
+  }, [
+    sourcePathIdx, cam1, cam2, numCalibrationFrames, datumFrame,
+  ]);
+
+  // Fetch detection data for a specific pose from the sequence cache.
+  // Used when the user navigates to a different frame in the viewer.
+  const fetchPoseDetection = useCallback(async (frameIdx: number) => {
+    if (!sequenceId) return;
+    try {
+      const res = await fetch(
+        `/backend/calibrate/stepped_board/sequence_pose_detection?sequence_id=${sequenceId}&frame_idx=${frameIdx}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.cam1) setCam1Detection(data.cam1);
+      if (data.cam2) setCam2Detection(data.cam2);
+    } catch (e) {
+      console.error('Failed to fetch pose detection:', e);
+    }
+  }, [sequenceId]);
+
+  // Identify which level (A/B) a clicked dot belongs to for a given pose.
+  // Returns the pose_level string ('peak'|'trough') based on the datum convention.
+  const identifyPoseLevel = useCallback(async (
+    frameIdx: number,
+    camera: number,
+    clickX: number,
+    clickY: number,
+  ): Promise<string | null> => {
+    if (!sequenceId) return null;
+    try {
+      const res = await fetch('/backend/calibrate/stepped_board/identify_pose_level', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sequence_id: sequenceId,
+          frame_idx: frameIdx,
+          camera,
+          click_x: clickX,
+          click_y: clickY,
+        }),
+      });
+      const data = await res.json();
+      if (!data.level) return null;
+      // Determine pose_level: if the clicked dot (which the user says is
+      // the same face as their datum label) is on level_A, then level_A
+      // matches the datum label. Otherwise level_A is the opposite.
+      const datumLabel = camera === cam1 ? cam1ClickedLevel : cam2ClickedLevel;
+      if (data.level === 'A') {
+        // Level A = datum label face
+        return datumLabel;
       } else {
-        console.error('Failed to start detection:', data.error);
-        setIsDetecting(false);
+        // Level A = opposite face
+        return datumLabel === 'peak' ? 'trough' : 'peak';
       }
     } catch (e) {
-      console.error('Failed to start detection:', e);
-      setIsDetecting(false);
+      console.error('Failed to identify pose level:', e);
+      return null;
     }
-  }, [sourcePathIdx, cam1, cam2]);
+  }, [sequenceId, cam1, cam1ClickedLevel, cam2ClickedLevel]);
+
+  // Snap a fiducial click against the datum pose of the current sequence.
+  // Called by the component when the user clicks on the canvas in
+  // sequence mode.
+  const snapFiducialSequence = useCallback(async (
+    camera: number,
+    clickX: number,
+    clickY: number,
+  ): Promise<{ snapped_x: number; snapped_y: number } | null> => {
+    if (!sequenceId) {
+      setSequenceError('No sequence detected. Run detect_sequence first.');
+      return null;
+    }
+    try {
+      const res = await fetch('/backend/calibrate/stepped_board/snap_fiducial_sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sequence_id: sequenceId,
+          camera,
+          click_x: clickX,
+          click_y: clickY,
+        }),
+      });
+      const data = await res.json();
+      if (data.snapped_x !== undefined) {
+        return { snapped_x: data.snapped_x, snapped_y: data.snapped_y };
+      }
+      console.error('snap_fiducial_sequence failed:', data.error);
+      return null;
+    } catch (e) {
+      console.error('snap_fiducial_sequence error:', e);
+      return null;
+    }
+  }, [sequenceId]);
+
+  // Kick off the multi-view model generation for the current sequence.
+  const generateModel = useCallback(async () => {
+    if (!sequenceId) {
+      setSequenceError('No sequence detected. Run detect_sequence first.');
+      return;
+    }
+    setIsGenerating(true);
+    setModelResult(null);
+    setGenerationProgress(0);
+    try {
+      const res = await fetch('/backend/calibrate/stepped_board/generate_model_sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sequence_id: sequenceId,
+          cam1_fiducials: cam1Fiducials,
+          cam2_fiducials: cam2Fiducials,
+          // stereo_config omitted → backend defaults to 'auto' and picks
+          // same_side vs transmission by comparing cam2 fit RMS.
+          cam1_clicked_level: cam1ClickedLevel,
+          cam2_clicked_level: cam2ClickedLevel,
+          cam1_pose_levels: cam1PoseLevels,
+          cam2_pose_levels: cam2PoseLevels,
+        }),
+      });
+      const data = await res.json();
+      if (!data.job_id) {
+        setIsGenerating(false);
+        setModelResult({ status: 'failed', error: data.error || 'Failed to start' });
+        return;
+      }
+      const jobId = data.job_id;
+      const poll = async () => {
+        try {
+          const pollRes = await fetch(
+            `/backend/calibrate/stepped_board/generate_model_sequence/job/${jobId}`,
+          );
+          const pollData = await pollRes.json();
+          if (pollData.progress !== undefined) {
+            setGenerationProgress(pollData.progress);
+          }
+          if (pollData.status === 'completed') {
+            if (generatePollRef.current) {
+              clearInterval(generatePollRef.current);
+              generatePollRef.current = null;
+            }
+            setModelResult({ status: 'completed', ...pollData });
+            setHasModel(true);
+            setIsGenerating(false);
+            setGenerationProgress(100);
+          } else if (pollData.status === 'failed') {
+            if (generatePollRef.current) {
+              clearInterval(generatePollRef.current);
+              generatePollRef.current = null;
+            }
+            setModelResult({ status: 'failed', error: pollData.error });
+            setIsGenerating(false);
+          }
+        } catch (e) {
+          console.error('generate_model_sequence poll failed:', e);
+        }
+      };
+      poll();
+      generatePollRef.current = setInterval(poll, 500);
+    } catch (e) {
+      setIsGenerating(false);
+      setModelResult({ status: 'failed', error: String(e) });
+    }
+  }, [
+    sequenceId, cam1Fiducials, cam2Fiducials,
+    cam1ClickedLevel, cam2ClickedLevel,
+    cam1PoseLevels, cam2PoseLevels,
+  ]);
 
   // Reset fiducials for a given camera or both
   const resetFiducials = useCallback((camera?: number) => {
@@ -416,83 +669,6 @@ export function useSteppedBoardCalibration(
       setCam2ClickedLevel('peak');
     }
   }, [cam1]);
-
-  // Generate stepped board model
-  const generateModel = useCallback(async () => {
-    setIsGenerating(true);
-    setModelResult(null);
-    setGenerationProgress(0);
-    try {
-      const res = await fetch('/backend/calibrate/stepped_board/generate_model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          cam1: cam1,
-          cam2: cam2,
-          frame_idx: 1,
-          dot_spacing_mm: dotSpacingMm,
-          step_height_mm: stepHeightMm,
-          board_thickness_mm: boardThicknessMm,
-          dt: dt,
-          stereo_config: stereoConfig,
-          cam1_fiducials: cam1Fiducials,
-          cam2_fiducials: cam2Fiducials,
-          cam1_clicked_level: cam1ClickedLevel,
-          cam2_clicked_level: cam2ClickedLevel,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.job_id) {
-        const jobId = data.job_id;
-
-        // Poll for model generation result
-        const pollModel = async () => {
-          try {
-            const pollRes = await fetch(`/backend/calibrate/stepped_board/generate_model/job/${jobId}`);
-            const pollData = await pollRes.json();
-
-            if (pollData.progress !== undefined) {
-              setGenerationProgress(pollData.progress);
-            }
-
-            if (pollData.status === 'completed') {
-              if (modelPollRef.current) {
-                clearInterval(modelPollRef.current);
-                modelPollRef.current = null;
-              }
-              setModelResult(pollData);
-              setHasModel(true);
-              setGenerationProgress(100);
-              setIsGenerating(false);
-            } else if (pollData.status === 'failed') {
-              if (modelPollRef.current) {
-                clearInterval(modelPollRef.current);
-                modelPollRef.current = null;
-              }
-              setModelResult(pollData);
-              setIsGenerating(false);
-            }
-          } catch (e) {
-            console.error('Failed to poll model generation status:', e);
-          }
-        };
-
-        // Initial poll
-        pollModel();
-
-        // Start polling interval
-        modelPollRef.current = setInterval(pollModel, 500);
-      } else {
-        setModelResult({ status: 'failed', error: data.error || 'Failed to start model generation' });
-        setIsGenerating(false);
-      }
-    } catch (e: any) {
-      setModelResult({ status: 'failed', error: e.message || 'Failed to start model generation' });
-      setIsGenerating(false);
-    }
-  }, [sourcePathIdx, cam1, cam2, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, stereoConfig, cam1Fiducials, cam2Fiducials, cam1ClickedLevel, cam2ClickedLevel]);
 
   // Load saved model from disk
   const loadModel = useCallback(async () => {
@@ -677,7 +853,7 @@ export function useSteppedBoardCalibration(
       if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
       if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
       if (detectPollRef.current) clearInterval(detectPollRef.current);
-      if (modelPollRef.current) clearInterval(modelPollRef.current);
+      if (generatePollRef.current) clearInterval(generatePollRef.current);
       if (reconstructPollRef.current) clearInterval(reconstructPollRef.current);
     };
   }, []);
@@ -705,26 +881,58 @@ export function useSteppedBoardCalibration(
     [cam2]: cam2ClickedLevel,
   };
 
-  // setClickedLevel(camId, level) for component compat
+  // setClickedLevel(camId, level) for component compat. Changing the
+  // datum face invalidates all non-datum verifications (they were based
+  // on the old convention), so we clear them and only keep the datum.
   const setClickedLevel = useCallback((camId: number, level: string) => {
     if (camId === cam1) {
       setCam1ClickedLevel(level);
+      setCam1PoseLevels({ [datumFrame]: level });
     } else {
       setCam2ClickedLevel(level);
+      setCam2PoseLevels({ [datumFrame]: level });
     }
-  }, [cam1]);
+  }, [cam1, datumFrame]);
 
-  // Computed: detection stats per camera for component compat
+  // Per-pose peak/trough setter, component-compat shape.
+  const poseLevels: Record<number, Record<number, string>> = {
+    [cam1]: cam1PoseLevels,
+    [cam2]: cam2PoseLevels,
+  };
+
+  const setPoseLevel = useCallback(
+    (camId: number, frameIdx: number, level: string) => {
+      if (camId === cam1) {
+        setCam1PoseLevels(prev => ({ ...prev, [frameIdx]: level }));
+      } else {
+        setCam2PoseLevels(prev => ({ ...prev, [frameIdx]: level }));
+      }
+    },
+    [cam1],
+  );
+
+  // Computed: detection stats per camera for component compat.
+  // Falls back to the datum pose summary from sequencePoses when
+  // cam*Detection hasn't been populated yet.
+  const datumPose = sequencePoses.find(p => p.is_datum);
   const detectionStats: Record<number, { nBlobs: number; nLevelA: number; nLevelB: number } | null> = {
     [cam1]: cam1Detection ? {
       nBlobs: cam1Detection.blobs.length,
       nLevelA: cam1Detection.level_A.n_points,
       nLevelB: cam1Detection.level_B.n_points,
+    } : datumPose?.cam1?.ok ? {
+      nBlobs: datumPose.cam1.n_blobs ?? 0,
+      nLevelA: datumPose.cam1.n_level_A ?? 0,
+      nLevelB: datumPose.cam1.n_level_B ?? 0,
     } : null,
     [cam2]: cam2Detection ? {
       nBlobs: cam2Detection.blobs.length,
       nLevelA: cam2Detection.level_A.n_points,
       nLevelB: cam2Detection.level_B.n_points,
+    } : datumPose?.cam2?.ok ? {
+      nBlobs: datumPose.cam2.n_blobs ?? 0,
+      nLevelA: datumPose.cam2.n_level_A ?? 0,
+      nLevelB: datumPose.cam2.n_level_B ?? 0,
     } : null,
   };
 
@@ -769,14 +977,10 @@ export function useSteppedBoardCalibration(
     setBoardThicknessMm,
     dt,
     setDt,
-    stereoConfig,
-    setStereoConfig,
 
-    // Detection (component-compat aliases)
-    detecting: isDetecting,
+    // Detection
     detectionProgress,
     detectionStats,
-    detectDots: () => runDetection(1),
 
     // Fiducials (component-compat shape)
     fiducials,
@@ -784,11 +988,13 @@ export function useSteppedBoardCalibration(
     resetFiducials,
     clickedLevel,
     setClickedLevel,
+    poseLevels,
+    setPoseLevel,
 
-    // Model generation (component-compat aliases)
+    // Model generation
     generating: isGenerating,
     generationProgress,
-    generatePinholeModels: generateModel,
+    generateModel,
     modelResults: modelResult,
     hasModel,
     loadModel,
@@ -805,6 +1011,18 @@ export function useSteppedBoardCalibration(
     setDatumCamera,
     datumFrame,
     setDatumFrame,
+
+    // Multi-view sequence
+    numCalibrationFrames,
+    setNumCalibrationFrames,
+    sequenceId,
+    sequencePoses,
+    sequenceStatus,
+    sequenceError,
+    detect,
+    snapFiducialSequence,
+    fetchPoseDetection,
+    identifyPoseLevel,
 
     // Overlay helpers
     getDetectionOverlayPoints,

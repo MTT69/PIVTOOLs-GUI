@@ -139,6 +139,7 @@ export function useStereoCharucoCalibration(
 ) {
   // Source selection
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
+
   const [cam1, setCam1] = useState(1);
   const [cam2, setCam2] = useState(2);
 

@@ -124,6 +124,7 @@ export function useChArUcoCalibration(
 ) {
   // --- State Initialization ---
   const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
+
   const [camera, setCamera] = useState<number>(1);
   const [squaresH, setSquaresH] = useState<string>("10");
   const [squaresV, setSquaresV] = useState<string>("9");

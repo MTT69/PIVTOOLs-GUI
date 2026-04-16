@@ -66,6 +66,7 @@ export interface JobStatus {
   error?: string;
   rms_error?: number;
   num_images_used?: number;
+  warnings?: string[];
 }
 
 /**
@@ -88,7 +89,7 @@ export interface MultiCameraJobStatus {
   processed_images?: number;
   total_images?: number;
   valid_images?: number;
-  camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string }> & {
+  camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string; warnings?: string[] }> & {
     global_alignment?: GlobalAlignmentResult;
   };
   camera_progress?: Record<number, { current: number; total: number; message?: string }>;

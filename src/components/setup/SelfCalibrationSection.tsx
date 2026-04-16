@@ -28,6 +28,7 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
   sourcePathIdx = 0,
 }) => {
   const selfCal = useSelfCalibration(cam1, cam2, method, sourcePathIdx);
+  const [nImagesInput, setNImagesInput] = useState(String(selfCal.nImages));
 
   // Shared zoom state for side-by-side mode
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -285,11 +286,16 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
             <div>
               <Label className="text-xs">Number of Images</Label>
               <Input
-                type="number"
-                min={5}
-                max={200}
-                value={selfCal.nImages}
-                onChange={(e) => selfCal.setNImages(Math.max(5, parseInt(e.target.value) || 20))}
+                type="text"
+                inputMode="numeric"
+                value={nImagesInput}
+                onChange={(e) => setNImagesInput(e.target.value)}
+                onBlur={() => {
+                  const n = parseInt(nImagesInput);
+                  const clamped = isNaN(n) ? 20 : Math.max(5, Math.min(200, n));
+                  selfCal.setNImages(clamped);
+                  setNImagesInput(String(clamped));
+                }}
                 className="h-8"
               />
             </div>

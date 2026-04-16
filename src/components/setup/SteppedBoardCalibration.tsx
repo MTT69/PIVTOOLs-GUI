@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -104,14 +104,10 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
     setBoardThicknessMm,
     dt,
     setDt,
-    stereoConfig,
-    setStereoConfig,
 
     // Detection
-    detecting,
     detectionProgress,
     detectionStats,
-    detectDots,
 
     // Fiducials
     fiducials,
@@ -128,7 +124,7 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
     // Model generation
     generating,
     generationProgress,
-    generatePinholeModels,
+    generateModel,
     modelResults,
     hasModel,
     loadModel,
@@ -145,6 +141,19 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
     setDatumCamera,
     datumFrame,
     setDatumFrame,
+
+    // Multi-view sequence
+    numCalibrationFrames,
+    setNumCalibrationFrames,
+    sequenceId,
+    sequencePoses,
+    sequenceStatus,
+    sequenceError,
+    detect,
+    poseLevels,
+    setPoseLevel,
+    fetchPoseDetection,
+    identifyPoseLevel,
   } = calibration;
 
   // Self-calibration (Step 4)
@@ -157,12 +166,26 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
   // Reconstruct type selector
   const [reconstructTypeName, setReconstructTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
+  // Click-to-label mode: {frameIdx, camera} when active, null when idle.
+  // Auto-advances cam1 → cam2 within the same pose, then to next unverified pose.
+  const [labelTarget, setLabelTarget] = useState<{ frameIdx: number; camera: number } | null>(null);
+
+  // Verification is derived from poseLevels — a pose/camera is "verified"
+  // if it has an entry. This persists to config.yaml automatically.
+  const isVerified = useCallback((cam: number, frameIdx: number) =>
+    (poseLevels?.[cam] || {})[frameIdx] !== undefined,
+  [poseLevels]);
+
+  // Track which frame is currently displayed in the viewer
+  const [displayedFrame, setDisplayedFrame] = useState<number>(datumFrame);
+
   // Local debounced input state
   const [dotSpacingInput, setDotSpacingInput] = useState(String(dotSpacingMm));
   const [stepHeightInput, setStepHeightInput] = useState(String(stepHeightMm));
   const [boardThicknessInput, setBoardThicknessInput] = useState(String(boardThicknessMm));
   const [dtInput, setDtInput] = useState(String(dt));
   const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
+  const [numFramesInput, setNumFramesInput] = useState(String(numCalibrationFrames));
 
   // Sync local inputs with hook state
   React.useEffect(() => { setDotSpacingInput(String(dotSpacingMm)); }, [dotSpacingMm]);
@@ -170,6 +193,7 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
   React.useEffect(() => { setBoardThicknessInput(String(boardThicknessMm)); }, [boardThicknessMm]);
   React.useEffect(() => { setDtInput(String(dt)); }, [dt]);
   React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
+  React.useEffect(() => { setNumFramesInput(String(numCalibrationFrames)); }, [numCalibrationFrames]);
 
   // Sync piv_type from config
   useEffect(() => {
@@ -249,20 +273,91 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
     }
   };
 
-  // Overlay points for CalibrationImageViewer
+  // Handle click-to-label: identifies the level, sets pose_level (which
+  // persists to config.yaml), then auto-advances:
+  //   cam1 → cam2 on same frame → next unverified frame's cam1 → ...
+  const handleLabelClick = async (pixelX: number, pixelY: number) => {
+    if (!labelTarget) return;
+    const { frameIdx, camera: targetCam } = labelTarget;
+    const level = await identifyPoseLevel(frameIdx, targetCam, pixelX, pixelY);
+    if (!level) { setLabelTarget(null); return; }
+
+    setPoseLevel(targetCam, frameIdx, level);
+
+    // Auto-advance: other camera on same frame first
+    const otherCam = targetCam === cam1 ? cam2 : cam1;
+    const pose = sequencePoses.find(p => p.frame_idx === frameIdx);
+    const otherOk = targetCam === cam1 ? pose?.cam2?.ok : pose?.cam1?.ok;
+    if (otherOk && !isVerified(otherCam, frameIdx)) {
+      setLabelTarget({ frameIdx, camera: otherCam });
+      setActiveCam(otherCam);
+      return;
+    }
+
+    // Both cameras done for this frame — find next unverified pose
+    const nextPose = sequencePoses.find(p =>
+      !p.is_datum && p.cam1?.ok && p.cam2?.ok &&
+      p.frame_idx !== frameIdx &&
+      (!isVerified(cam1, p.frame_idx) || !isVerified(cam2, p.frame_idx))
+    );
+    if (nextPose) {
+      const nextCam = !isVerified(cam1, nextPose.frame_idx) ? cam1 : cam2;
+      setLabelTarget({ frameIdx: nextPose.frame_idx, camera: nextCam });
+      setActiveCam(nextCam);
+      fetchPoseDetection(nextPose.frame_idx);
+      return;
+    }
+
+    // All done
+    setLabelTarget(null);
+  };
+
+  // Handle frame change in the viewer — fetch detection overlay for that frame
+  const handleFrameChange = useCallback((frameIdx: number) => {
+    setDisplayedFrame(frameIdx);
+    if (sequenceId && sequenceStatus === 'ready') {
+      fetchPoseDetection(frameIdx);
+    }
+  }, [sequenceId, sequenceStatus, fetchPoseDetection]);
+
+  // Resolve overlay colors based on the pose_level for the displayed frame.
+  // Before labelling: level_A = grey-blue, level_B = grey-red (neutral).
+  // After labelling: peak = blue (#508cff), trough = red (#ff7878).
   const overlayPoints = useMemo(() => {
-    return getDetectionOverlayPoints(activeCam);
-  }, [getDetectionOverlayPoints, activeCam]);
+    const raw = getDetectionOverlayPoints(activeCam);
+    if (raw.length === 0) return raw;
+    // What does the current pose_level say about level_A for this frame?
+    const poseLevel = (poseLevels?.[activeCam] || {})[displayedFrame];
+    if (!poseLevel) return raw; // not labelled yet — keep default A=blue, B=red
+    // poseLevel = 'peak' means level_A is peak → A should be blue, B red (default)
+    // poseLevel = 'trough' means level_A is trough → A should be red, B blue (swap)
+    if (poseLevel === 'peak') return raw; // already correct
+    // Swap: blue→red, red→blue
+    return raw.map(pt => ({
+      ...pt,
+      color: pt.color === 'blue' ? 'red' : pt.color === 'red' ? 'blue' : pt.color,
+    }));
+  }, [getDetectionOverlayPoints, activeCam, poseLevels, displayedFrame]);
 
-  // Overlay lines (grid network) for CalibrationImageViewer
+  // Overlay lines — same color swap logic
   const overlayLines = useMemo(() => {
-    return getDetectionOverlayLines(activeCam);
-  }, [getDetectionOverlayLines, activeCam]);
+    const raw = getDetectionOverlayLines(activeCam);
+    if (raw.length === 0) return raw;
+    const poseLevel = (poseLevels?.[activeCam] || {})[displayedFrame];
+    if (!poseLevel || poseLevel === 'peak') return raw;
+    return raw.map(ln => ({
+      ...ln,
+      color: ln.color?.includes('80, 140, 255') ? 'rgba(255, 120, 120, 1)'
+           : ln.color?.includes('255, 120, 120') ? 'rgba(80, 140, 255, 1)'
+           : ln.color,
+    }));
+  }, [getDetectionOverlayLines, activeCam, poseLevels, displayedFrame]);
 
-  // Fiducial marker points for CalibrationImageViewer
+  // Fiducial marker points — only shown on the datum frame
   const markerPoints = useMemo((): MarkerPoint[] => {
+    if (displayedFrame !== datumFrame) return [];
     return getFiducialMarkers(activeCam);
-  }, [getFiducialMarkers, activeCam]);
+  }, [getFiducialMarkers, activeCam, displayedFrame, datumFrame]);
 
   // Helper: format fiducial coordinate for display
   const fmtCoord = (coord: [number, number] | null | undefined): string => {
@@ -659,20 +754,9 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>
-              <div>
-                <Label className="text-sm font-medium">Stereo Config</Label>
-                <Select value={stereoConfig} onValueChange={setStereoConfig}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="transmission">Transmission</SelectItem>
-                    <SelectItem value="same_side">Same Side</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground mt-1">Camera arrangement</p>
-              </div>
             </div>
 
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid md:grid-cols-3 lg:grid-cols-4 gap-4">
               <div>
                 <Label className="text-sm font-medium">Reference Camera</Label>
                 <Select value={String(datumCamera)} onValueChange={v => setDatumCamera(Number(v))}>
@@ -695,6 +779,17 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                 />
                 <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
               </div>
+              <div>
+                <Label className="text-sm font-medium">Number of Frames</Label>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={numFramesInput}
+                  onChange={e => setNumFramesInput(e.target.value)}
+                  onBlur={() => setNumCalibrationFrames(parseInt(numFramesInput) || 1)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">&ge; 5 recommended for good fx recovery</p>
+              </div>
             </div>
           </div>
 
@@ -704,30 +799,186 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
           <div className="border-t pt-4 space-y-4">
             <h3 className="text-sm font-semibold">Detection + Fiducials</h3>
 
-            {/* Detect Dots button + progress */}
+            <p className="text-xs text-muted-foreground">
+              Detects dots on {numCalibrationFrames} frames and runs a joint pinhole fit.
+              The datum frame&apos;s fiducial clicks anchor the world frame for stereo composition.
+            </p>
+
+            {/* Detect button */}
             <div className="flex items-center gap-3">
               <Button
-                onClick={detectDots}
-                disabled={detecting}
+                onClick={detect}
+                disabled={sequenceStatus === 'detecting'}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
-                {detecting ? (
+                {sequenceStatus === 'detecting' ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Detecting...
+                    Detecting sequence...
                   </>
                 ) : (
-                  "Detect Dots"
+                  "Detect sequence"
                 )}
               </Button>
+              {sequenceStatus === 'ready' && sequenceId && (
+                <span className="text-xs text-green-600 flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Sequence ready ({sequencePoses.length} poses)
+                </span>
+              )}
             </div>
 
-            {detecting && (
+            {sequenceStatus === 'detecting' && (
               <Progress value={detectionProgress} className="w-full" />
             )}
 
+            {sequenceError && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{sequenceError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Per-pose peak/trough verification */}
+            {sequencePoses.length > 0 && (() => {
+              const nonDatum = sequencePoses.filter(p => !p.is_datum && p.cam1?.ok && p.cam2?.ok);
+              const v1 = nonDatum.filter(p => isVerified(cam1, p.frame_idx)).length;
+              const v2 = nonDatum.filter(p => isVerified(cam2, p.frame_idx)).length;
+              const total = nonDatum.length;
+              const allDone = v1 === total && v2 === total;
+              const firstUnverified = nonDatum.find(p =>
+                !isVerified(cam1, p.frame_idx) || !isVerified(cam2, p.frame_idx)
+              );
+              return (
+              <div className="p-3 border rounded space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium">Peak/trough verification</h4>
+                  {allDone ? (
+                    <span className="text-xs text-green-600 flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" /> All poses verified
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      Cam {cam1}: {v1}/{total} &middot; Cam {cam2}: {v2}/{total}
+                    </span>
+                  )}
+                </div>
+
+                {/* Start / continue button */}
+                {!allDone && !labelTarget && firstUnverified && (
+                  <Button
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    onClick={() => {
+                      const startCam = !isVerified(cam1, firstUnverified.frame_idx) ? cam1 : cam2;
+                      setLabelTarget({ frameIdx: firstUnverified.frame_idx, camera: startCam });
+                      setActiveCam(startCam);
+                      fetchPoseDetection(firstUnverified.frame_idx);
+                    }}
+                  >
+                    {v1 === 0 && v2 === 0
+                      ? `Verify all poses (click ${clickedLevel[cam1] || 'peak'} dots)`
+                      : `Continue verification (${total - Math.min(v1, v2)} remaining)`
+                    }
+                  </Button>
+                )}
+                {labelTarget && (
+                  <div className="flex items-center gap-3">
+                    <Alert className="flex-1">
+                      <Crosshair className="h-4 w-4" />
+                      <AlertDescription className="font-medium">
+                        Frame {labelTarget.frameIdx}, Cam {labelTarget.camera}: click a
+                        <span className="font-bold text-blue-600 mx-1">{clickedLevel[labelTarget.camera] || 'peak'}</span>
+                        dot &mdash; blue = peak, red = trough
+                      </AlertDescription>
+                    </Alert>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLabelTarget(null)}
+                    >
+                      Stop
+                    </Button>
+                  </div>
+                )}
+
+                {/* Per-pose grid — each cam cell is clickable to (re)verify */}
+                <div className="grid grid-cols-[auto_1fr_1fr] gap-x-4 gap-y-1 items-center">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase">Frame</div>
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase">Cam {cam1}</div>
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase">Cam {cam2}</div>
+                  {sequencePoses.map((pose) => {
+                    const c1ok = pose.cam1?.ok;
+                    const c2ok = pose.cam2?.ok;
+                    const c1v = pose.is_datum || isVerified(cam1, pose.frame_idx);
+                    const c2v = pose.is_datum || isVerified(cam2, pose.frame_idx);
+                    const isActive = labelTarget?.frameIdx === pose.frame_idx;
+                    const activeCam1 = isActive && labelTarget?.camera === cam1;
+                    const activeCam2 = isActive && labelTarget?.camera === cam2;
+                    const c1label = (poseLevels?.[cam1] || {})[pose.frame_idx];
+                    const c2label = (poseLevels?.[cam2] || {})[pose.frame_idx];
+
+                    const cellClass = (ok: boolean | undefined, verified: boolean, active: boolean) =>
+                      `flex items-center gap-1.5 px-2 py-0.5 rounded ${
+                        !ok ? '' :
+                        active ? 'bg-blue-50 ring-1 ring-blue-400' :
+                        verified ? 'hover:bg-muted cursor-pointer' :
+                        'hover:bg-amber-50 cursor-pointer'
+                      }`;
+
+                    const dotClass = (ok: boolean | undefined, verified: boolean, active: boolean) =>
+                      `inline-block w-2.5 h-2.5 rounded-full ${
+                        !ok ? 'bg-gray-300' :
+                        active ? 'bg-blue-500 animate-pulse' :
+                        verified ? 'bg-green-500' : 'bg-amber-400'
+                      }`;
+
+                    const startLabel = (camNum: number, frameIdx: number) => {
+                      setLabelTarget({ frameIdx, camera: camNum });
+                      setActiveCam(camNum);
+                      fetchPoseDetection(frameIdx);
+                    };
+
+                    return (
+                      <React.Fragment key={`v_${pose.frame_idx}`}>
+                        <div className={`text-xs tabular-nums ${
+                          pose.is_datum ? 'font-bold text-blue-600' :
+                          isActive ? 'font-bold' : ''
+                        }`}>
+                          {pose.frame_idx}{pose.is_datum ? ' (datum)' : ''}
+                        </div>
+                        <div
+                          className={cellClass(c1ok, c1v, activeCam1)}
+                          onClick={() => { if (c1ok && !pose.is_datum) startLabel(cam1, pose.frame_idx); }}
+                        >
+                          <span className={dotClass(c1ok, c1v, activeCam1)} />
+                          <span className={`text-[11px] ${!c1ok ? 'text-muted-foreground italic' : c1v ? 'text-foreground' : 'text-muted-foreground'}`}>
+                            {!c1ok ? 'no detection' :
+                             pose.is_datum ? clickedLevel[cam1] :
+                             c1label ?? 'click to set'}
+                          </span>
+                        </div>
+                        <div
+                          className={cellClass(c2ok, c2v, activeCam2)}
+                          onClick={() => { if (c2ok && !pose.is_datum) startLabel(cam2, pose.frame_idx); }}
+                        >
+                          <span className={dotClass(c2ok, c2v, activeCam2)} />
+                          <span className={`text-[11px] ${!c2ok ? 'text-muted-foreground italic' : c2v ? 'text-foreground' : 'text-muted-foreground'}`}>
+                            {!c2ok ? 'no detection' :
+                             pose.is_datum ? clickedLevel[cam2] :
+                             c2label ?? 'click to set'}
+                          </span>
+                        </div>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+              );
+            })()}
+
             {/* Detection stats summary per camera */}
-            {detectionStats && (
+            {(detectionStats[cam1] || detectionStats[cam2]) && (
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="p-3 border rounded space-y-2">
                   <h4 className="text-sm font-medium">Camera {cam1} Detection</h4>
@@ -741,7 +992,7 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
             )}
 
             {/* Two-column fiducial panel */}
-            {detectionStats && (
+            {(detectionStats[cam1] || detectionStats[cam2]) && (
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   {!fiducialSelectMode ? (
@@ -782,10 +1033,10 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                     <RotateCcw className="h-4 w-4" />
                     Reset
                   </Button>
-                  {/* Per-camera clicked level selects */}
+                  {/* Datum face label — sets default for all poses */}
                   <div className="flex items-center gap-4 ml-auto">
                     <div className="flex items-center gap-1">
-                      <Label className="text-xs text-muted-foreground">Cam {cam1} level:</Label>
+                      <Label className="text-xs text-muted-foreground">Cam {cam1} datum face:</Label>
                       <Select value={clickedLevel[cam1] || 'peak'} onValueChange={v => setClickedLevel(cam1, v)}>
                         <SelectTrigger className="w-[100px] h-7 text-xs">
                           <SelectValue />
@@ -797,7 +1048,7 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                       </Select>
                     </div>
                     <div className="flex items-center gap-1">
-                      <Label className="text-xs text-muted-foreground">Cam {cam2} level:</Label>
+                      <Label className="text-xs text-muted-foreground">Cam {cam2} datum face:</Label>
                       <Select value={clickedLevel[cam2] || 'peak'} onValueChange={v => setClickedLevel(cam2, v)}>
                         <SelectTrigger className="w-[100px] h-7 text-xs">
                           <SelectValue />
@@ -875,8 +1126,18 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
               calibrationType="stepped_board"
               refreshKey={`${validation?.cam1?.found_count}-${validation?.cam2?.found_count}-${validation?.valid}-${validation?.cam1?.error}-${validation?.cam2?.error}`}
               stereoParams={{ cam1, cam2 }}
-              pointSelectMode={fiducialSelectMode && activeFiducialCamera === activeCam}
-              onPointSelect={handlePointSelect}
+              pointSelectMode={
+                (fiducialSelectMode && activeFiducialCamera === activeCam) ||
+                (labelTarget !== null && labelTarget.camera === activeCam)
+              }
+              onPointSelect={(px, py, cam, frame) => {
+                if (labelTarget && labelTarget.camera === activeCam) {
+                  handleLabelClick(px, py);
+                } else {
+                  handlePointSelect(px, py, cam, frame);
+                }
+              }}
+              onFrameChange={handleFrameChange}
               selectedMarkers={markerPoints}
               externalOverlayPoints={overlayPoints}
               externalOverlayLines={overlayLines}
@@ -892,8 +1153,16 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
 
             <div className="flex items-center gap-3 flex-wrap">
               <Button
-                onClick={generatePinholeModels}
-                disabled={!allFiducialsSet || generating}
+                onClick={generateModel}
+                disabled={
+                  !allFiducialsSet
+                  || generating
+                  || sequenceStatus !== 'ready'
+                  || sequencePoses.some(p =>
+                    !p.is_datum && p.cam1?.ok && p.cam2?.ok &&
+                    (!isVerified(cam1, p.frame_idx) || !isVerified(cam2, p.frame_idx))
+                  )
+                }
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {generating ? (
@@ -902,7 +1171,7 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                     Generating...
                   </>
                 ) : (
-                  "Generate Pinhole Models"
+                  "Generate Model"
                 )}
               </Button>
 
@@ -1093,6 +1362,23 @@ export const SteppedBoardCalibration: React.FC<SteppedBoardCalibrationProps> = (
                       </div>
                     </div>
                   </div>
+
+                  {/* Auto-detected stereo geometry */}
+                  {(modelResults as any).stereo_config_resolved && (
+                    <div className="p-3 bg-muted rounded">
+                      <div className="text-xs text-muted-foreground">Detected Stereo Geometry</div>
+                      <div className="text-lg font-semibold capitalize">
+                        {String((modelResults as any).stereo_config_resolved).replace('_', ' ')}
+                      </div>
+                      {(modelResults as any).stereo_config_rms_same_side != null
+                        && (modelResults as any).stereo_config_rms_transmission != null && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Auto-picked by RMS: same-side = {(modelResults as any).stereo_config_rms_same_side.toFixed(3)} px,
+                          {' '}transmission = {(modelResults as any).stereo_config_rms_transmission.toFixed(3)} px
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}

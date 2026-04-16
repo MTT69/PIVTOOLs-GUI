@@ -231,6 +231,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [cameraOptions.length, cameraOptions[0]]);
 	const [index, setIndex] = useState(1);
+	const [indexInput, setIndexInput] = useState("1");
 	const [frame, setFrame] = useState<"A" | "B">("A");
 
 	// Contrast values as percentages (0-100%)
@@ -339,7 +340,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 						</div>
 						<div>
 							<Label htmlFor="index">Image Index</Label>
-							<Input id="index" type="text" inputMode="numeric" value={index} min={1} onChange={e => setIndex(Math.max(1, Number(e.target.value)))} />
+							<Input id="index" type="text" inputMode="numeric" value={indexInput} onChange={e => setIndexInput(e.target.value)} onBlur={() => { const n = parseInt(indexInput); const v = isNaN(n) ? 1 : Math.max(1, n); setIndex(v); setIndexInput(String(v)); }} />
 						</div>
 						<div>
 							<Label>Frame</Label>

@@ -665,6 +665,16 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               </div>
             )}
 
+            {/* Calibration Warnings (e.g. polynomial datum-only) */}
+            {jobStatus?.status === 'completed' && jobStatus.warnings && jobStatus.warnings.length > 0 && (
+              <div className="mt-2 p-3 border rounded bg-amber-50 text-amber-800 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                {jobStatus.warnings.map((w, i) => (
+                  <div key={i}>{w}</div>
+                ))}
+              </div>
+            )}
+
             {/* Job Failed */}
             {jobStatus?.status === 'failed' && (
               <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
@@ -719,6 +729,23 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 )}
               </div>
             )}
+
+            {/* Multi-Camera Warnings */}
+            {multiCameraJobStatus?.status === 'completed' && multiCameraJobStatus.camera_results && (() => {
+              const allWarnings: { cam: string; msg: string }[] = [];
+              Object.entries(multiCameraJobStatus.camera_results).forEach(([cam, res]: [string, any]) => {
+                if (cam === 'global_alignment') return;
+                (res?.warnings || []).forEach((m: string) => allWarnings.push({ cam, msg: m }));
+              });
+              return allWarnings.length > 0 ? (
+                <div className="mt-2 p-3 border rounded bg-amber-50 text-amber-800 text-sm">
+                  <AlertTriangle className="h-4 w-4 inline mr-2" />
+                  {allWarnings.map((w, i) => (
+                    <div key={i}>{w.cam}: {w.msg}</div>
+                  ))}
+                </div>
+              ) : null;
+            })()}
 
             {/* Vector Calibration Progress */}
             {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (

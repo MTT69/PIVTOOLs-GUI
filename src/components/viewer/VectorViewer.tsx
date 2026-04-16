@@ -505,6 +505,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     dataSource  // Pass dataSource directly to avoid race with config sync
   );
 
+  const [gammaRadiusInput, setGammaRadiusInput] = useState(String(gammaRadius));
+
   // Derived values from job details
   const statisticsProgress = statisticsDetails?.overall_progress || statisticsDetails?.progress || 0;
   const statisticsError = statisticsDetails?.error || null;
@@ -1537,10 +1539,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       <label className="text-xs font-medium text-gray-700">Gamma Radius:</label>
                       <Input
                         type="text" inputMode="numeric"
-                        min={1}
-                        max={20}
-                        value={gammaRadius}
-                        onChange={e => setGammaRadius(Math.max(1, Number(e.target.value)))}
+                        value={gammaRadiusInput}
+                        onChange={e => setGammaRadiusInput(e.target.value)}
+                        onBlur={() => {
+                          const n = parseInt(gammaRadiusInput);
+                          const v = isNaN(n) ? 5 : Math.max(1, Math.min(20, n));
+                          setGammaRadius(v);
+                          setGammaRadiusInput(String(v));
+                        }}
                         className="w-20 h-8 text-sm"
                       />
                       <span className="text-xs text-gray-500">(grid points for vortex detection)</span>

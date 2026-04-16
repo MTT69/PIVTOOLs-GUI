@@ -65,6 +65,9 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     resolutionOptions,
     fps,
     setFps,
+    quality,
+    setQuality,
+    qualityOptions,
     activeTab,
     setActiveTab,
     availableVideos,
@@ -100,11 +103,16 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     fetchAvailableVideos,
     handleCreateVideo,
     handleCancelVideo,
+    handleDeleteVideo,
     basename,
     createVideoUrl,
     handleVideoError,
     handleRetryVideo,
+    availableVideosMeta,
   } = useVideoMaker(backendUrl, config);
+
+  const [runInput, setRunInput] = React.useState(String(run));
+  const [fpsInput, setFpsInput] = React.useState(String(fps));
 
   // Determine if video creation is disabled
   const videoCreationDisabled = !hasAnyData || creating || videoStatus?.processing;
@@ -284,7 +292,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     {runsLoading ? (
                       <span className="text-sm text-gray-500">Loading...</span>
                     ) : availableRuns.length > 1 ? (
-                      <Select value={String(run)} onValueChange={v => setRun(Number(v))}>
+                      <Select value={String(run)} onValueChange={v => { setRun(Number(v)); setRunInput(v); }}>
                         <SelectTrigger id="run"><SelectValue placeholder="Select run" /></SelectTrigger>
                         <SelectContent>
                           {availableRuns.map((r) => (
@@ -297,9 +305,14 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     ) : (
                       <Input
                         type="text" inputMode="numeric"
-                        min={1}
-                        value={run}
-                        onChange={(e) => setRun(Number(e.target.value || 1))}
+                        value={runInput}
+                        onChange={(e) => setRunInput(e.target.value)}
+                        onBlur={() => {
+                          const n = parseInt(runInput);
+                          const v = isNaN(n) ? 1 : Math.max(1, n);
+                          setRun(v);
+                          setRunInput(String(v));
+                        }}
                       />
                     )}
                   </div>
@@ -324,8 +337,8 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                   </div>
                 </div>
 
-                {/* Resolution and FPS settings */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                {/* Resolution, Quality, and FPS settings */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Resolution</label>
                     <Select value={resolution} onValueChange={setResolution}>
@@ -342,12 +355,32 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                     </Select>
                   </div>
                   <div className="space-y-2">
+                    <label className="text-sm font-medium">Quality</label>
+                    <Select value={quality} onValueChange={setQuality}>
+                      <SelectTrigger id="quality">
+                        <SelectValue placeholder="Select quality" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {qualityOptions.map(option => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
                     <label className="text-sm font-medium">FPS</label>
                     <Input
                       type="text" inputMode="numeric"
-                      min={1}
-                      value={fps}
-                      onChange={(e) => setFps(Number(e.target.value || 30))}
+                      value={fpsInput}
+                      onChange={(e) => setFpsInput(e.target.value)}
+                      onBlur={() => {
+                        const n = parseInt(fpsInput);
+                        const v = isNaN(n) ? 30 : Math.max(1, n);
+                        setFps(v);
+                        setFpsInput(String(v));
+                      }}
                     />
                   </div>
                 </div>
@@ -401,6 +434,10 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                             </Button>
                           </div>
                         )}
+                        {/* Copyable file path */}
+                        <div className="mt-1 text-xs text-gray-400 break-all select-all cursor-text">
+                          {videoResult.out_path}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -457,62 +494,98 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
               <TabsContent value="browse" className="pt-4">
                 {loadingVideos ? (
                   <div className="text-center p-4">Loading available videos...</div>
-                ) : availableVideos.length > 0 ? (
+                ) : availableVideosMeta.length > 0 ? (
                   <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Select Video</label>
-                      <Select value={selectedVideo} onValueChange={setSelectedVideo}>
-                        <SelectTrigger id="videoSelect">
-                          <SelectValue placeholder="Select a video" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableVideos.map((video, i) => (
-                            <SelectItem key={i} value={video}>
-                              {basename(video)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    {/* Video list */}
+                    <div className="space-y-2 max-h-64 overflow-y-auto border rounded p-2">
+                      {availableVideosMeta.map((video, i) => {
+                        const isSelected = selectedVideo === video.path;
+                        const dateStr = new Date(video.modified * 1000).toLocaleDateString(undefined, {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                        });
+                        const sourceBadgeColor: Record<string, string> = {
+                          calibrated: 'bg-green-100 text-green-700',
+                          uncalibrated: 'bg-yellow-100 text-yellow-700',
+                          merged: 'bg-blue-100 text-blue-700',
+                          stereo: 'bg-purple-100 text-purple-700',
+                          inst_stats: 'bg-orange-100 text-orange-700',
+                        };
+                        return (
+                          <div
+                            key={i}
+                            className={`flex items-center justify-between p-2 rounded cursor-pointer hover:bg-gray-50 ${
+                              isSelected ? 'bg-blue-50 border border-blue-200' : 'border border-transparent'
+                            }`}
+                            onClick={() => setSelectedVideo(video.path)}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium truncate">{video.filename}</div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${sourceBadgeColor[video.data_source] || 'bg-gray-100 text-gray-600'}`}>
+                                  {video.data_source}
+                                </span>
+                                <span className="text-xs text-gray-500">{video.size_mb} MB</span>
+                                <span className="text-xs text-gray-400">{dateStr}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 ml-2">
+                              <a
+                                href={createVideoUrl(video.path)}
+                                download={video.filename}
+                                className="p-1 text-gray-400 hover:text-blue-600"
+                                title="Download"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                              </a>
+                              <button
+                                className="p-1 text-gray-400 hover:text-red-600"
+                                title="Delete"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (confirm(`Delete ${video.filename}?`)) {
+                                    handleDeleteVideo(video.path);
+                                  }
+                                }}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                    
+
+                    {/* Video player */}
                     {selectedVideo && (
-                      <div className="mt-4">
-                        <div className="mb-2 text-xs text-gray-500 break-all">
-                          Path: {selectedVideo}
-                        </div>
+                      <div>
                         <video
+                          key={selectedVideo}
                           controls
                           className="w-full rounded border"
                           style={{ maxHeight: 512 }}
                           src={createVideoUrl(selectedVideo)}
-                          onError={(e) => {
-                            console.error('Video playback error:', e);
-                            // Show error message when video fails to load
-                            const target = e.target as HTMLVideoElement;
-                            target.insertAdjacentHTML('afterend', 
-                              `<div class="p-2 bg-red-50 text-red-600 text-sm mt-1 rounded">
-                                Error loading video. Please check the file path.
-                              </div>`
-                            );
-                          }}
+                          onError={(e) => console.error('Video playback error:', e)}
                         >
                           Your browser does not support the video tag.
                         </video>
+                        <div className="mt-1 text-xs text-gray-400 break-all select-all cursor-text">
+                          {selectedVideo}
+                        </div>
                       </div>
                     )}
-                    
+
                     <div className="flex justify-end">
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         onClick={fetchAvailableVideos}
-                        className="mt-2"
                       >
-                        Refresh Videos
+                        Refresh
                       </Button>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-center p-4">
+                  <div className="text-center p-4 text-gray-500">
                     No videos found. Create a video first or select a different base path.
                   </div>
                 )}
