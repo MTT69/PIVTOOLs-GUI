@@ -16,6 +16,7 @@ import { PolynomialCalibration } from './PolynomialCalibration';
 import { ChArUcoCalibration } from './ChArUcoCalibration';
 import { SteppedBoardCalibration } from './SteppedBoardCalibration';
 import { SteppedPlanarCalibration } from './SteppedPlanarCalibration';
+import { DavisPinholeCalibration } from './DavisPinholeCalibration';
 
 interface CalibrationProps {
   config: any;
@@ -65,6 +66,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
     { id: 'stereo_charuco', label: 'Stereo ChArUco', component: StereoCharucoCalibration },
     { id: 'stepped_planar', label: 'Stepped (Planar)', component: SteppedPlanarCalibration },
     { id: 'stepped_board', label: 'Stepped (Stereo)', component: SteppedBoardCalibration },
+    { id: 'davis_pinhole', label: 'DaVis Pinhole', component: DavisPinholeCalibration },
   ];
 
   return (
@@ -86,6 +88,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
             <li><strong>Stereo ChArUco:</strong> Calibrate camera pairs for 3D reconstruction using ChArUco board</li>
             <li><strong>Stepped (Planar):</strong> Use one face of a stepped dotboard as a planar calibration target (single-camera)</li>
             <li><strong>Stepped Board:</strong> Stereo calibration using stepped dotboard with two Z-planes</li>
+            <li><strong>DaVis Pinhole:</strong> Import DaVis PinholeOpenCV Calibration.xml (camera matrix + distortion)</li>
           </ul>
 
           {snapshotInfo.exists && (
@@ -124,7 +127,7 @@ export const Calibration: React.FC<CalibrationProps> = ({
           )}
 
           <Tabs key={configVersion} value={currentTab} onValueChange={setCurrentTab}>
-            <TabsList className="grid w-full grid-cols-8">
+            <TabsList className="grid w-full grid-cols-9">
               {calibrationMethods.map((method) => (
                 <TabsTrigger key={method.id} value={method.id}>
                   {method.label}
