@@ -1,16 +1,14 @@
 "use client";
-import React, { useState, useEffect, useMemo } from "react";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
+import React, { useState, useCallback, useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
-import { useChArUcoCalibration, ARUCO_DICTS, FrameDetection } from "@/hooks/useChArUcoCalibration";
-import { isContainerFormat, useIsMacOS } from "@/hooks/useCalibrationValidation";
-import { useToast } from "@/components/ui/use-toast";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
+import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
@@ -20,6 +18,11 @@ import {
   getGlobalCoordViewerTarget,
   handleGlobalCoordPointSelect,
 } from "@/components/setup/GlobalCoordinateSetup";
+import {
+  useWorldFrame,
+  WorldFrameControls,
+  getWorldFrameMarkers,
+} from "@/components/setup/WorldFrameSetup";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -28,33 +31,22 @@ interface ChArUcoCalibrationProps {
   sourcePaths: string[];
 }
 
-// Helper to show just the last segment of a path
-const basename = (p: string) => {
-  if (!p) return "";
-  const parts = p.replace(/\\/g, "/").split("/");
-  return parts.filter(Boolean).pop() || p;
-};
-
 export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
-  const {
-    sourcePathIdx,
-    camera,
-    squaresH,
-    squaresV,
-    squareSize,
-    markerRatio,
-    arucoDict,
-    minCorners,
-    dt,
-    calibrating,
-    jobId,
+  const calibration = useChArUcoCalibration(cameraOptions, sourcePaths);
 
-    // Image config (from hook)
+  const {
+    // Source selection
+    sourcePathIdx,
+    setSourcePathIdx,
+    camera,
+    setCamera,
+
+    // Image config
     imageFormat,
     setImageFormat,
     imageType,
@@ -68,11 +60,41 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     cameraSubfolders,
     setCameraSubfolders,
 
-    // Validation (from hook)
+    // Board params
+    squaresH,
+    setSquaresH,
+    squaresV,
+    setSquaresV,
+    squareSize,
+    setSquareSize,
+    markerRatio,
+    setMarkerRatio,
+    arucoDict,
+    setArucoDict,
+    minCorners,
+    setMinCorners,
+    dt,
+    setDt,
+    datumFrame,
+    setDatumFrame,
+
+    // Validation
     validation,
     validating,
 
-    // Model and detections (like dotboard)
+    // Single camera job tracking
+    jobStatus,
+    isCalibrating,
+
+    // Multi-camera job tracking
+    multiCameraJobStatus,
+    isMultiCameraCalibrating,
+
+    // Vector calibration job tracking
+    vectorJobStatus,
+    isVectorCalibrating,
+
+    // Model and detections
     cameraModel,
     detections,
     modelLoading,
@@ -83,47 +105,59 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     showOverlay,
     setShowOverlay,
 
-    // Vector calibration job tracking
-    vectorJobStatus,
-    isVectorCalibrating,
+    // Model restore
+    loadedWorldFrame,
+    persistWorldFrame,
 
-    setSourcePathIdx,
-    setCamera,
-    setSquaresH,
-    setSquaresV,
-    setSquareSize,
-    setMarkerRatio,
-    setArucoDict,
-    setMinCorners,
-    setDt,
-    modelType,
-    setModelType,
-    jobStatus,
-    jobDetails,
-    startCalibration,
-    calibrateAllCameras,
-    loadModel,
+    // Actions
+    generateCameraModel,
+    generateCameraModelAll,
     calibrateVectors,
-  } = useChArUcoCalibration(
-    cameraOptions,
-    sourcePaths
-  );
+    detectFrame,
+  } = calibration;
 
-  const [showImageViewer, setShowImageViewer] = useState(false);
+  // Track the frame currently shown in the viewer (1-based, matches datumFrame).
+  // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
+  const [currentFrame, setCurrentFrame] = useState<number>(parseInt(datumFrame) || 1);
+  const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
+  const datumNum = parseInt(datumFrame) || 1;
+  const onDatumFrame = currentFrame === datumNum;
 
   // Global coordinate system — pass calibrationSources so stale features reset on source change
   const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
-  const [currentViewerFrame, setCurrentViewerFrame] = useState(1);
 
+  // World-frame (coordinate-system x,y) picker — datum frame only.
+  const wf = useWorldFrame({
+    board: "charuco", camera, sourcePathIdx, datumFrame: parseInt(datumFrame) || 1,
+    boardParams: () => ({
+      squares_h: parseInt(squaresH) || 10,
+      squares_v: parseInt(squaresV) || 9,
+      square_size: parseFloat(squareSize) || 0.03,
+      marker_ratio: parseFloat(markerRatio) || 0.5,
+      aruco_dict: arucoDict,
+      min_corners: parseInt(minCorners) || 6,
+    }),
+    imageFormat, imageType,
+  });
+  const wfIsSelecting = onDatumFrame && wf.mode !== "none";
+
+  // When a saved model loads, restore its world frame + show the detected markers.
+  React.useEffect(() => {
+    if (!hasModel) return;
+    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
+    detectFrame(currentFrame);
+    setShowOverlay(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasModel, loadedWorldFrame]);
+
+  // Local state
+  const [showImageViewer, setShowImageViewer] = useState(false);
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
-  // Toast notifications
-  const { toast } = useToast();
-
   // Load piv_type from config on mount
-  useEffect(() => {
+  React.useEffect(() => {
     const pivType = config.calibration?.piv_type;
     if (pivType === 'instantaneous' || pivType === 'ensemble') {
       setVectorTypeName(pivType);
@@ -143,16 +177,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
       });
       const json = await res.json();
       if (res.ok && json.updated?.calibration) {
-        // Sync parent config state so other tabs see the update
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (e) {
       console.error('Failed to save piv_type:', e);
     }
   };
-
-  const isMacOS = useIsMacOS();
-  const hasUnsupportedFormat = isContainerFormat(imageFormat);
 
   // Convert detections to format expected by CalibrationImageViewer
   const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
@@ -171,48 +201,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     return Object.keys(result).length > 0 ? result : undefined;
   }, [detections]);
 
-  // Show toast notification when model load error occurs
-  useEffect(() => {
-    if (modelLoadError) {
-      toast({
-        title: "Camera Model Error",
-        description: modelLoadError,
-        variant: "destructive",
-      });
-    }
-  }, [modelLoadError, toast]);
-
-  // Show toast notification when vector calibration fails
-  useEffect(() => {
-    if (vectorJobStatus?.status === 'failed') {
-      toast({
-        title: "Vector Calibration Failed",
-        description: vectorJobStatus.error || "Unknown error occurred",
-        variant: "destructive",
-      });
-    }
-  }, [vectorJobStatus?.status, vectorJobStatus?.error, toast]);
-
-  // Show toast notification when camera model calibration fails
-  useEffect(() => {
-    if (jobStatus === 'failed' || jobStatus === 'error') {
-      toast({
-        title: "Camera Model Calibration Failed",
-        description: jobDetails?.error || "Calibration failed",
-        variant: "destructive",
-      });
-    }
-  }, [jobStatus, jobDetails?.error, toast]);
-
-  const setAsActiveMethod = async () => {
+  // Set as active calibration method
+  const setAsActiveMethod = useCallback(async () => {
     try {
       const res = await fetch("/backend/update_config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          calibration: {
-            active: "charuco",
-          },
+          calibration: { active: "charuco" },
         }),
       });
       const json = await res.json();
@@ -223,672 +219,720 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     } catch (err) {
       console.error("Failed to set active calibration method:", err);
     }
-  };
+  }, [config.calibration, updateConfig]);
 
   const isActive = config.calibration?.active === "charuco";
 
+  // Check if container format (unsupported on macOS)
+  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
+  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
+
   return (
     <div className="space-y-6">
-    <Card>
-      <CardHeader>
-        <CardTitle>ChArUco Board Calibration</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Section 1: Calibration Source Path (primary input) */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Calibration Images Location</label>
-          <Input
-            value={calibrationSources[sourcePathIdx] || ""}
-            onChange={e => {
-              const newSources = [...calibrationSources];
-              newSources[sourcePathIdx] = e.target.value;
-              setCalibrationSources(newSources);
-            }}
-            placeholder="/path/to/calibration/images"
-            className="font-mono"
-          />
-          <p className="text-xs text-muted-foreground">
-            Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
-          </p>
-        </div>
-
-        {/* Section 2: Base Path and Cameras */}
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium">Base Path</label>
-            <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
-              <SelectTrigger><SelectValue placeholder="Pick base path" /></SelectTrigger>
-              <SelectContent>
-                {sourcePaths.map((p, i) => (
-                  <SelectItem key={i} value={String(i)}>{p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
-          </div>
-          <div>
-            <label className="text-sm font-medium">Cameras to Process</label>
-            <div className="text-sm text-muted-foreground mt-2 p-2 bg-muted rounded">
-              {cameraOptions.length > 0
-                ? `Cameras ${cameraOptions.join(', ')} (from config.camera_numbers)`
-                : 'No cameras configured'}
-            </div>
-          </div>
-        </div>
-
-        {/* Section 3: Image Configuration */}
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium">Image Type</label>
-            <Select
-              value={imageType}
-              onValueChange={setImageType}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
-                <SelectItem value="cine">Phantom CINE</SelectItem>
-                <SelectItem value="lavision_set">LaVision SET</SelectItem>
-                <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Image Format</label>
-            <Input
-              type="text"
-              value={imageFormat}
-              onChange={e => setImageFormat(e.target.value)}
-              placeholder="calib%05d.tif"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Number of Images</label>
-            <Input
-              type="text" inputMode="numeric"
-              min={1}
-              value={numImages}
-              onChange={e => setNumImages(e.target.value)}
-              onBlur={() => {
-                const finalVal = parseInt(numImages) || 10;
-                setNumImages(String(finalVal));
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Use Camera Subfolders Toggle */}
-        {(imageType === "standard" || imageType === "lavision_im7") && (
+      {/* Main Configuration Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>ChArUco Calibration (Planar)</CardTitle>
+          <CardDescription>
+            Configure and run ChArUco calibration to generate camera model
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Section 1: Calibration Source Path (primary input) */}
           <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Switch
-                id="charuco-use-camera-subfolders"
-                checked={useCameraSubfolders}
-                onCheckedChange={setUseCameraSubfolders}
-              />
-              <Label htmlFor="charuco-use-camera-subfolders" className="text-sm">
-                Use camera subfolders
-              </Label>
-            </div>
-            <p className="text-xs text-muted-foreground ml-10">
-              {useCameraSubfolders
-                ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                : "Images in source directory without camera subfolders."}
-            </p>
-          </div>
-        )}
-
-        {/* Camera Subfolder Names - only show when using camera subfolders */}
-        {useCameraSubfolders && cameraOptions.length > 1 && (
-          <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-            <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
+            <label className="text-sm font-medium">Calibration Images Location</label>
+            <Input
+              value={calibrationSources[sourcePathIdx] || ""}
+              onChange={e => {
+                const newSources = [...calibrationSources];
+                newSources[sourcePathIdx] = e.target.value;
+                setCalibrationSources(newSources);
+              }}
+              placeholder="/path/to/calibration/images"
+              className="font-mono"
+            />
             <p className="text-xs text-muted-foreground">
-              Camera subfolders are relative to the calibration source path.
-              Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/
+              Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
             </p>
-
-            {/* Custom Camera Subfolder Names */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-              <p className="text-xs text-muted-foreground mb-2">
-                Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {cameraOptions.map((cam, idx) => (
-                  <div key={cam}>
-                    <label className="text-xs text-muted-foreground">Camera {cam}</label>
-                    <Input
-                      placeholder={`Cam${cam}`}
-                      value={cameraSubfolders[idx] || ''}
-                      onChange={e => {
-                        const newSubfolders = [...cameraSubfolders];
-                        while (newSubfolders.length < cameraOptions.length) newSubfolders.push('');
-                        newSubfolders[idx] = e.target.value;
-                        setCameraSubfolders(newSubfolders);
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
-        )}
 
-        {/* Board Parameters */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium">Squares (Horizontal)</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={squaresH}
-              onChange={e => setSquaresH(e.target.value)}
-              min="3"
-              placeholder="10"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Squares (Vertical)</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={squaresV}
-              onChange={e => setSquaresV(e.target.value)}
-              min="3"
-              placeholder="9"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium">Square Size (meters)</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={squareSize}
-              onChange={e => setSquareSize(e.target.value)}
-              step="0.001"
-              min="0"
-              placeholder="0.03"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Marker Ratio</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={markerRatio}
-              onChange={e => setMarkerRatio(e.target.value)}
-              step="0.1"
-              min="0.1"
-              max="1.0"
-              placeholder="0.5"
-            />
-          </div>
-        </div>
-
-        {/* ArUco Dictionary */}
-        <div>
-          <label className="block text-xs font-medium">ArUco Dictionary</label>
-          <Select value={arucoDict} onValueChange={setArucoDict}>
-            <SelectTrigger><SelectValue placeholder="Select dictionary" /></SelectTrigger>
-            <SelectContent>
-              {ARUCO_DICTS.map((d) => (
-                <SelectItem key={d} value={d}>{d}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium">Min Corners per Image</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={minCorners}
-              onChange={e => setMinCorners(e.target.value)}
-              min="4"
-              placeholder="6"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Δt (seconds)</label>
-            <Input
-              type="text" inputMode="numeric"
-              value={dt}
-              onChange={e => setDt(e.target.value)}
-              step="any"
-              min="0"
-              placeholder="1.0"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium">Model Type</label>
-            <Select value={modelType} onValueChange={setModelType}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
-                <SelectItem value="polynomial">Polynomial (3rd-order bivariate)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* macOS Warning for Unsupported Formats */}
-        {hasUnsupportedFormat && isMacOS && (
-          <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-            <AlertDescription>
-              .set and .im7 container formats require Windows or Linux.
-              These formats are not supported on macOS.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* Calibration Validation */}
-        {validation && (
-          <ValidationAlert
-            validation={{
-              valid: validation.valid,
-              checked: !validating,
-              error: validation.error || null,
-            }}
-            customSuccessMessage={
-              validation.valid
-                ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`} in ${validation.camera_path?.split('/').pop()}`
-                : undefined
-            }
-          />
-        )}
-
-        {/* Suggested Pattern Button - show when validation fails but a suggestion is available */}
-        {validation && !validation.valid && validation.suggested_pattern && (
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-gray-600">Suggestion:</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setImageFormat(validation.suggested_pattern!)}
-              className="text-blue-600 border-blue-300 hover:bg-blue-50"
-            >
-              Use "{validation.suggested_pattern}"
-            </Button>
-          </div>
-        )}
-
-        {/* Suggested Subfolder Button */}
-        {validation && !validation.valid && validation.suggested_subfolder && (() => {
-          const sub = validation.suggested_subfolder!;
-          const cams: number[] = config?.paths?.camera_numbers || [1, 2];
-          const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
-          const label = [...new Set(perCam)].join('" / "');
-          return (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Subfolder suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setUseCameraSubfolders(true);
-                  setCameraSubfolders(perCam);
-                }}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use "{label}"
-              </Button>
-            </div>
-          );
-        })()}
-
-        {/* Calibration Image Viewer Button */}
-        {validation?.valid && (
-          <div className="flex items-center gap-4">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowImageViewer(!showImageViewer)}
-              className="flex items-center gap-2"
-            >
-              {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
-            </Button>
-
-            {/* Camera Toggle (shown when viewer is visible and multiple cameras) */}
-            {showImageViewer && cameraOptions.length > 1 && (
-              <div className="flex items-center gap-1 bg-muted rounded-md p-1">
-                {cameraOptions.map((cam) => (
-                  <Button
-                    key={cam}
-                    variant={camera === cam ? "default" : "ghost"}
-                    size="sm"
-                    onClick={() => setCamera(cam)}
-                    className="h-7 px-3"
-                  >
-                    <Camera className="h-3 w-3 mr-1" />
-                    Cam {cam}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Calibration Image Viewer */}
-        {showImageViewer && validation?.valid && (
-          <CalibrationImageViewer
-            backendUrl="/backend"
-            sourcePathIdx={sourcePathIdx}
-            camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
-            numImages={parseInt(numImages) || 10}
-            calibrationType="charuco"
-            refreshKey={`${validation?.camera_path}-${validation?.valid}`}
-            calibrationParams={{
-              squares_h: parseInt(squaresH) || 10,
-              squares_v: parseInt(squaresV) || 9,
-              square_length: parseFloat(squareSize) * 1000 || 30,  // Convert to mm
-              marker_length: (parseFloat(squareSize) * parseFloat(markerRatio) * 1000) || 15,
-              aruco_dict: arucoDict,
-            }}
-            onFrameChange={setCurrentViewerFrame}
-            savedDetections={savedDetections}
-            showSavedOverlay={showOverlay}
-            onSavedOverlayChange={setShowOverlay}
-            pointSelectMode={gcIsSelecting}
-            onPointSelect={(px, py, cam, frame) => handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
-            selectedMarkers={getGlobalCoordMarkers(gc, gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera, 1)}
-            externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
-            externalFrame={gcIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
-            settingsBarExtras={
-              <GCInlineControls
-                gc={gc}
-                currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
-                cameraOptions={cameraOptions}
-                onCameraChange={setCamera}
-              />
-            }
-          />
-        )}
-
-        {/* Action Buttons */}
-        <div className="border-t pt-4 space-y-4">
-          {/* Unified Action Row */}
-          <div className="flex gap-2 items-center flex-wrap">
-            <Button
-              onClick={() => calibrateAllCameras()}
-              disabled={calibrating || !validation?.valid}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {calibrating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                'Generate Model'
-              )}
-            </Button>
-
-            <Button
-              onClick={loadModel}
-              disabled={modelLoading}
-              variant="outline"
-            >
-              {modelLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Loading...
-                </>
-              ) : (
-                'Load Saved'
-              )}
-            </Button>
-
-            {/* Calibrate Vectors with type selection */}
-            <div className="flex items-center gap-1">
-              <Button
-                onClick={() => calibrateVectors(true, vectorTypeName)}
-                disabled={!hasModel || isVectorCalibrating}
-                className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-                title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
-              >
-                {isVectorCalibrating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Calibrating...
-                  </>
-                ) : (
-                  'Calibrate Vectors'
-                )}
-              </Button>
-              <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
-                <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
-                  <SelectValue />
-                </SelectTrigger>
+          {/* Section 2: Base Path & Cameras */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium">Base Path</label>
+              <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
+                <SelectTrigger><SelectValue placeholder="Pick base path" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="instantaneous">Instantaneous</SelectItem>
-                  <SelectItem value="ensemble">Ensemble</SelectItem>
+                  {sourcePaths.map((p, i) => (
+                    <SelectItem key={i} value={String(i)}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved. Configured in Settings → Directories.</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Cameras to Process</label>
+              <div className="text-sm text-muted-foreground mt-2 p-2 bg-muted rounded">
+                {cameraOptions.length > 0
+                  ? `Cameras ${cameraOptions.join(', ')} (from config.camera_numbers)`
+                  : 'No cameras configured'}
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Image Configuration */}
+          <div className="grid md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm font-medium">Image Type</label>
+              <Select value={imageType} onValueChange={setImageType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
+                  <SelectItem value="cine">Phantom CINE</SelectItem>
+                  <SelectItem value="lavision_set">LaVision SET</SelectItem>
+                  <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-
-            <Button
-              onClick={setAsActiveMethod}
-              disabled={isActive}
-              variant={isActive ? "default" : "outline"}
-              className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
-            >
-              {isActive ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 mr-1" />
-                  Active
-                </>
-              ) : (
-                'Set as Active'
-              )}
-            </Button>
-          </div>
-
-          {modelLoadError && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
-              <AlertTriangle className="h-4 w-4" />
-              {modelLoadError}
-            </div>
-          )}
-        </div>
-
-        {/* Progress display - shows when job is running */}
-        {jobId && jobDetails && (
-          <div className="mt-4 p-3 border rounded bg-green-50">
-            <div className="flex items-center gap-2 text-sm mb-2">
-              <strong>ChArUco Calibration Progress:</strong>
-              <span className="font-medium capitalize">{jobStatus}</span>
-            </div>
-            {(jobStatus === 'running' || jobStatus === 'starting') && (
-              <div className="flex items-center gap-2 text-green-600 text-sm mb-2">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full"></span>
-                Processing images...
-              </div>
-            )}
-            <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-              <div className="h-2 bg-green-600 transition-all" style={{ width: `${jobDetails.progress || 0}%` }}></div>
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              Progress: {jobDetails.progress || 0}%
-              {jobDetails.valid_images !== undefined && (
-                <span> | Valid images: {jobDetails.valid_images}</span>
-              )}
-            </div>
-            {jobStatus === 'completed' && (
-              <div className="mt-2 text-xs text-green-600">
-                Calibration completed!
-                {jobDetails.rms_error && (
-                  <span> RMS error: {Number(jobDetails.rms_error).toFixed(4)} pixels</span>
-                )}
-              </div>
-            )}
-            {jobStatus === 'completed' && Array.isArray(jobDetails.warnings) && jobDetails.warnings.length > 0 && (
-              <div className="mt-2 p-2 border rounded bg-amber-50 text-amber-800 text-xs">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                {jobDetails.warnings.map((w: string, i: number) => (
-                  <div key={i}>{w}</div>
-                ))}
-              </div>
-            )}
-            {(jobStatus === 'failed' || jobStatus === 'error') && (
-              <div className="mt-2 text-xs text-red-600">
-                Error: {jobDetails.error || 'Calibration failed'}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Vector Calibration Progress */}
-        {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (
-          <div className="mt-4 p-3 border rounded bg-green-50">
-            <div className="flex items-center gap-2 text-sm mb-2">
-              <Loader2 className="h-4 w-4 animate-spin text-green-600" />
-              <strong>Vector Calibration:</strong>
-              <span className="capitalize">{vectorJobStatus.status}</span>
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Processing camera {vectorJobStatus.current_camera}
-              {vectorJobStatus.total_cameras > 0 && (
-                <span> ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)</span>
-              )}
-              {vectorJobStatus.current_camera && vectorJobStatus.camera_progress?.[vectorJobStatus.current_camera] && (
-                <span> | Frames: {vectorJobStatus.camera_progress[vectorJobStatus.current_camera].current}/{vectorJobStatus.camera_progress[vectorJobStatus.current_camera].total}</span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Vector Calibration Completed */}
-        {vectorJobStatus?.status === 'completed' && (
-          <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-            <CheckCircle2 className="h-4 w-4 inline mr-2" />
-            Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
-          </div>
-        )}
-
-        {/* Global Alignment Result */}
-        {vectorJobStatus?.status === 'completed' && vectorJobStatus?.camera_results?.global_alignment && (
-          <>
-            {vectorJobStatus.camera_results.global_alignment.status === 'completed' && (
-              <div className="mt-2 p-3 border rounded bg-blue-50 text-blue-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Global coordinate alignment applied
-                {vectorJobStatus.camera_results.global_alignment.cameras && (
-                  <span> ({Object.keys(vectorJobStatus.camera_results.global_alignment.cameras).length} cameras)</span>
-                )}
-                {vectorJobStatus.camera_results.global_alignment.invert_ux && (
-                  <span> + invert_ux</span>
-                )}
-              </div>
-            )}
-            {vectorJobStatus.camera_results.global_alignment.status === 'failed' && (
-              <div className="mt-2 p-3 border rounded bg-yellow-50 text-yellow-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Global alignment warning: {vectorJobStatus.camera_results.global_alignment.error}
-              </div>
-            )}
-            {vectorJobStatus.camera_results.global_alignment.status === 'skipped' && (
-              <div className="mt-2 p-2 text-xs text-muted-foreground">
-                Global coordinate alignment skipped (disabled in config)
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Vector Calibration Failed */}
-        {vectorJobStatus?.status === 'failed' && (
-          <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
-            <AlertTriangle className="h-4 w-4 inline mr-2" />
-            Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
-          </div>
-        )}
-
-      </CardContent>
-    </Card>
-
-    {/* Camera Model Results Card */}
-    {hasModel && cameraModel && (
-      <Card>
-        <CardHeader>
-          <CardTitle>Camera Model Results</CardTitle>
-          <CardDescription>
-            ChArUco calibration model for Camera {camera}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Camera Matrix */}
             <div>
-              <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
-              <div className="font-mono text-xs bg-muted p-2 rounded">
-                {cameraModel.camera_matrix?.map((row: number[], i: number) => (
-                  <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
-                ))}
-              </div>
+              <label className="text-sm font-medium">Image Format</label>
+              <Input
+                value={imageFormat}
+                onChange={e => setImageFormat(e.target.value)}
+                placeholder="calib%05d.tif"
+              />
             </div>
-
-            {/* Intrinsic Parameters */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-muted-foreground">Focal Length (fx):</span>
-                  <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Focal Length (fy):</span>
-                  <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Principal Point (cx):</span>
-                  <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Principal Point (cy):</span>
-                  <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Distortion Coefficients */}
             <div>
-              <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
-              <div className="font-mono text-xs bg-muted p-2 rounded">
-                [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
-              </div>
-            </div>
-
-            {/* Calibration Quality */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-muted-foreground">RMS Error:</span>
-                  <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Images Used:</span>
-                  <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
-                </div>
-              </div>
+              <label className="text-sm font-medium">Number of Images</label>
+              <Input
+                type="text" inputMode="numeric"
+                min={1}
+                value={numImages}
+                onChange={e => setNumImages(e.target.value)}
+                onBlur={() => {
+                  const finalVal = parseInt(numImages) || 10;
+                  setNumImages(String(finalVal));
+                }}
+              />
             </div>
           </div>
 
-          {/* Detection Summary */}
-          {detections && Object.keys(detections).length > 0 && (
-            <div className="mt-4 pt-4 border-t">
-              <h4 className="text-sm font-semibold mb-2">Detection Summary</h4>
-              <p className="text-sm text-muted-foreground">
-                {Object.keys(detections).length} frames with detected ChArUco corners.
-                {showOverlay ? ' Toggle overlay in image viewer to visualize.' : ' Enable overlay in image viewer to visualize.'}
+          {/* Use Camera Subfolders Toggle - for standard and IM7 formats */}
+          {(imageType === "standard" || imageType === "lavision_im7") && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="charuco-use-camera-subfolders"
+                  checked={useCameraSubfolders}
+                  onCheckedChange={setUseCameraSubfolders}
+                />
+                <Label htmlFor="charuco-use-camera-subfolders" className="text-sm">
+                  Use camera subfolders
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-10">
+                {useCameraSubfolders
+                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+                  : "Images in source directory without camera subfolders."
+                }
               </p>
             </div>
           )}
+
+          {/* Camera Subfolder Names - only show when using camera subfolders */}
+          {useCameraSubfolders && cameraOptions.length > 1 && (
+            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
+              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
+              <p className="text-xs text-muted-foreground">
+                Camera subfolders are relative to the calibration source path.
+                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/
+              </p>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {cameraOptions.map((cam, idx) => (
+                    <div key={cam}>
+                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
+                      <Input
+                        placeholder={`Cam${cam}`}
+                        value={cameraSubfolders[idx] || ''}
+                        onChange={e => {
+                          const newSubfolders = [...cameraSubfolders];
+                          while (newSubfolders.length < cameraOptions.length) {
+                            newSubfolders.push('');
+                          }
+                          newSubfolders[idx] = e.target.value;
+                          setCameraSubfolders(newSubfolders);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* macOS Warning for Unsupported Formats */}
+          {isContainerFormat && isMacOS && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Unsupported File Format on macOS</AlertTitle>
+              <AlertDescription>
+                .set and .im7 container formats require Windows or Linux.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Section 3: Validation Status */}
+          {validation && (
+            <ValidationAlert
+              validation={{
+                valid: validation.valid,
+                checked: !validating,
+                error: validation.error || null,
+              }}
+              customSuccessMessage={
+                validation.valid
+                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  : undefined
+              }
+            />
+          )}
+
+          {/* Suggested Pattern Button */}
+          {validation && !validation.valid && validation.suggested_pattern && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setImageFormat(validation.suggested_pattern!)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.suggested_pattern}"
+              </Button>
+            </div>
+          )}
+
+          {/* Suggested Subfolder Button */}
+          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+            const sub = validation.suggested_subfolder!;
+            const cams: number[] = config?.paths?.camera_numbers || [1, 2];
+            const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
+            const label = [...new Set(perCam)].join('" / "');
+            return (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-600">Subfolder suggestion:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setUseCameraSubfolders(true);
+                    setCameraSubfolders(perCam);
+                  }}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Use "{label}"
+                </Button>
+              </div>
+            );
+          })()}
+
+          {/* Section 4: ChArUco Board Parameters */}
+          <div className="border-t pt-4">
+            <h3 className="text-sm font-semibold mb-3">ChArUco Board Parameters</h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <label className="text-sm font-medium">Squares (Horizontal)</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={squaresH}
+                  onChange={e => setSquaresH(e.target.value)}
+                  min="3"
+                  placeholder="10"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Squares (Vertical)</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={squaresV}
+                  onChange={e => setSquaresV(e.target.value)}
+                  min="3"
+                  placeholder="9"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Square Size (meters)</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={squareSize}
+                  onChange={e => setSquareSize(e.target.value)}
+                  step="0.001"
+                  min="0"
+                  placeholder="0.03"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Marker Ratio</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={markerRatio}
+                  onChange={e => setMarkerRatio(e.target.value)}
+                  step="0.1"
+                  min="0.1"
+                  max="1.0"
+                  placeholder="0.5"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Min Corners per Image</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={minCorners}
+                  onChange={e => setMinCorners(e.target.value)}
+                  min="4"
+                  placeholder="6"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">ArUco Dictionary</label>
+                <Select value={arucoDict} onValueChange={setArucoDict}>
+                  <SelectTrigger><SelectValue placeholder="Select dictionary" /></SelectTrigger>
+                  <SelectContent>
+                    {ARUCO_DICTS.map((d) => (
+                      <SelectItem key={d} value={d}>{d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Δt (seconds)</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  step="any"
+                  min={0.001}
+                  value={dt}
+                  onChange={e => setDt(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Datum Frame</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  min={1}
+                  value={datumFrame}
+                  onChange={e => setDatumFrame(e.target.value)}
+                  onBlur={() => setDatumFrame(String(parseInt(datumFrame) || 1))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 5: Image Viewer Toggle */}
+          {validation?.valid && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowImageViewer(!showImageViewer)}
+                className="flex items-center gap-2"
+              >
+                {showImageViewer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
+              </Button>
+              {showImageViewer && cameraOptions.length > 1 && (
+                <Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
+                  <SelectTrigger className="w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cameraOptions.map((c) => (
+                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
+
+          {/* Section 6: Image Viewer with Overlay + world-frame / global-coords picking */}
+          {showImageViewer && validation?.valid && (
+            <CalibrationImageViewer
+              backendUrl="/backend"
+              sourcePathIdx={sourcePathIdx}
+              camera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+              numImages={parseInt(numImages) || 10}
+              calibrationType="charuco"
+              refreshKey={`${validation?.camera_path}-${validation?.valid}`}
+              onFrameChange={handleFrameChange}
+              savedDetections={savedDetections}
+              showSavedOverlay={showOverlay}
+              onSavedOverlayChange={setShowOverlay}
+              pointSelectMode={wfIsSelecting || gcIsSelecting}
+              onPointSelect={(px, py, cam, frame) =>
+                wfIsSelecting ? wf.handlePoint(px, py) : handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
+              selectedMarkers={[
+                ...(onDatumFrame ? getWorldFrameMarkers(wf) : []),
+                ...(gcIsSelecting ? getGlobalCoordMarkers(gc, gcViewerTarget ? gcViewerTarget.camera : camera, 1) : []),
+              ]}
+              externalCamera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+              externalFrame={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+              detectionLoading={modelLoading}
+              settingsBarExtras={
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    variant="outline" size="sm" disabled={wf.busy}
+                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame); setShowOverlay(true); }}
+                  >
+                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
+                  </Button>
+                  {onDatumFrame ? (
+                    <WorldFrameControls wf={wf} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">World frame is set on the datum frame ({datumNum}).</span>
+                  )}
+                  {cameraOptions.length > 1 && (
+                    <GCInlineControls
+                      gc={gc}
+                      currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+                      cameraOptions={cameraOptions}
+                      onCameraChange={setCamera}
+                    />
+                  )}
+                </div>
+              }
+            />
+          )}
+
+          {/* Section 7: Action Buttons */}
+          <div className="border-t pt-4 space-y-4">
+            <div className="flex gap-2 items-center flex-wrap">
+              <Button
+                onClick={async () => { await generateCameraModelAll(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
+                title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {(isCalibrating || isMultiCameraCalibrating) ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  cameraOptions.length > 1 ? 'Generate Model (All Cameras)' : 'Generate Model'
+                )}
+              </Button>
+
+              {cameraOptions.length > 1 && (
+                <Button
+                  onClick={async () => { await generateCameraModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
+                  title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                  variant="outline"
+                >
+                  This Camera Only
+                </Button>
+              )}
+
+              {/* Calibrate Vectors with type selection */}
+              <div className="flex items-center gap-1">
+                <Button
+                  onClick={() => calibrateVectors(true, vectorTypeName)}
+                  disabled={!hasModel || isVectorCalibrating}
+                  className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
+                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
+                >
+                  {isVectorCalibrating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Calibrating...
+                    </>
+                  ) : (
+                    'Calibrate Vectors'
+                  )}
+                </Button>
+                <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
+                  <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                    <SelectItem value="ensemble">Ensemble</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Button
+                onClick={setAsActiveMethod}
+                disabled={isActive}
+                variant={isActive ? "default" : "outline"}
+                className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
+              >
+                {isActive ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-1" />
+                    Active
+                  </>
+                ) : (
+                  'Set as Active'
+                )}
+              </Button>
+            </div>
+
+            {validation?.valid && !wf.complete && (
+              <p className="text-xs text-muted-foreground">
+                Set the coordinate frame before generating: open the viewer, click <strong>Detect Markers</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+              </p>
+            )}
+
+            {modelLoadError && (
+              <div className="text-sm text-red-600 flex items-center gap-1">
+                <AlertTriangle className="h-4 w-4" />
+                {modelLoadError}
+              </div>
+            )}
+
+            {/* Job Progress */}
+            {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-blue-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <strong>Camera Model Generation:</strong>
+                  <span className="capitalize">{jobStatus.status}</span>
+                </div>
+                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+                  <div
+                    className="h-2 bg-blue-600 transition-all"
+                    style={{ width: `${jobStatus.progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Progress: {jobStatus.progress?.toFixed(0) || 0}%
+                  {jobStatus.processed_images !== undefined && (
+                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images}</span>
+                  )}
+                  {jobStatus.valid_images !== undefined && jobStatus.valid_images > 0 && (
+                    <span> | Valid: {jobStatus.valid_images}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Job Completed */}
+            {jobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Camera model generation completed!
+                {jobStatus.rms_error && (
+                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} px</span>
+                )}
+                {jobStatus.num_images_used && (
+                  <span className="ml-2">({jobStatus.num_images_used} images used)</span>
+                )}
+              </div>
+            )}
+
+            {/* Job Failed */}
+            {jobStatus?.status === 'failed' && (
+              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Error: {jobStatus.error || 'Calibration failed'}
+              </div>
+            )}
+
+            {/* Multi-Camera Job Progress */}
+            {multiCameraJobStatus && (multiCameraJobStatus.status === 'running' || multiCameraJobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-blue-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  <strong>Multi-Camera Model Generation:</strong>
+                  <span>Camera {multiCameraJobStatus.current_camera || '...'}</span>
+                </div>
+                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+                  <div
+                    className="h-2 bg-blue-600 transition-all"
+                    style={{ width: `${multiCameraJobStatus.current_camera_progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {multiCameraJobStatus.total_cameras > 0 && (
+                    <span>Cameras: {multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Multi-Camera Job Completed */}
+            {multiCameraJobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Multi-camera model generation completed! ({multiCameraJobStatus.processed_cameras} cameras)
+                {multiCameraJobStatus.camera_results && (
+                  <div className="mt-1 text-xs">
+                    {Object.entries(multiCameraJobStatus.camera_results).map(([cam, res]: [string, any]) => (
+                      <span key={cam} className="mr-3">
+                        {cam}: {res.status === 'completed' && res.rms_error
+                          ? `RMS ${Number(res.rms_error).toFixed(4)} px (${res.num_images_used} images)`
+                          : res.status}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Vector Calibration Progress */}
+            {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (
+              <div className="mt-4 p-3 border rounded bg-green-50">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+                  <strong>Vector Calibration:</strong>
+                  <span className="capitalize">{vectorJobStatus.status}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {vectorJobStatus.total_cameras > 0 && (
+                    <span>{vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Vector Calibration Completed */}
+            {vectorJobStatus?.status === 'completed' && (
+              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
+                <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
+              </div>
+            )}
+
+            {/* Global Alignment Result */}
+            {vectorJobStatus?.status === 'completed' && vectorJobStatus?.camera_results?.global_alignment && (
+              <>
+                {vectorJobStatus.camera_results.global_alignment.status === 'completed' && (
+                  <div className="mt-2 p-3 border rounded bg-blue-50 text-blue-700 text-sm">
+                    <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                    Global coordinate alignment applied
+                    {vectorJobStatus.camera_results.global_alignment.cameras && (
+                      <span> ({Object.keys(vectorJobStatus.camera_results.global_alignment.cameras).length} cameras)</span>
+                    )}
+                    {vectorJobStatus.camera_results.global_alignment.invert_ux && (
+                      <span> + invert_ux</span>
+                    )}
+                  </div>
+                )}
+                {vectorJobStatus.camera_results.global_alignment.status === 'failed' && (
+                  <div className="mt-2 p-3 border rounded bg-yellow-50 text-yellow-700 text-sm">
+                    <AlertTriangle className="h-4 w-4 inline mr-2" />
+                    Global alignment warning: {vectorJobStatus.camera_results.global_alignment.error}
+                  </div>
+                )}
+                {vectorJobStatus.camera_results.global_alignment.status === 'skipped' && (
+                  <div className="mt-2 p-2 text-xs text-muted-foreground">
+                    Global coordinate alignment skipped (disabled in config)
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Vector Calibration Failed */}
+            {vectorJobStatus?.status === 'failed' && (
+              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
+                <AlertTriangle className="h-4 w-4 inline mr-2" />
+                Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
-    )}
+
+      {/* Section 8: Camera Model Results */}
+      {hasModel && cameraModel && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Camera Model Results</CardTitle>
+            <CardDescription>
+              Calibration model for Camera {camera}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Camera Matrix */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
+                <div className="font-mono text-xs bg-muted p-2 rounded">
+                  {cameraModel.camera_matrix?.map((row: number[], i: number) => (
+                    <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Intrinsic Parameters */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Focal Length (fx):</span>
+                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Focal Length (fy):</span>
+                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Principal Point (cx):</span>
+                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Principal Point (cy):</span>
+                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Distortion Coefficients */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
+                <div className="font-mono text-xs bg-muted p-2 rounded">
+                  [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                </div>
+              </div>
+
+              {/* Calibration Quality */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">RMS Error:</span>
+                    <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Images Used:</span>
+                    <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Detection Summary */}
+            {detections && Object.keys(detections).length > 0 && (
+              <div className="mt-4 pt-4 border-t">
+                <h4 className="text-sm font-semibold mb-2">Detection Summary</h4>
+                <p className="text-sm text-muted-foreground">
+                  {Object.keys(detections).length} frames with detected ChArUco corners.
+                  {showOverlay ? ' Toggle overlay in image viewer to visualize.' : ' Enable overlay in image viewer to visualize.'}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,11 +8,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
-import { useStereoCharucoCalibration, StereoCharucoFrameDetection, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
+import { useStereoCharucoCalibration, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { SelfCalibrationSection, SelfCalibrationWarning } from "@/components/setup/SelfCalibrationSection";
-import { useSelfCalibration } from "@/hooks/useSelfCalibration";
+import {
+  useWorldFrame,
+  WorldFrameControls,
+  getWorldFrameMarkers,
+} from "@/components/setup/WorldFrameSetup";
 
 interface StereoCharucoCalibrationProps {
   config: any;
@@ -21,20 +24,12 @@ interface StereoCharucoCalibrationProps {
   sourcePaths: string[];
 }
 
-// Helper to show just the last segment of a path
-const basename = (p: string) => {
-  if (!p) return "";
-  const parts = p.replace(/\\/g, "/").split("/");
-  return parts.filter(Boolean).pop() || p;
-};
-
 export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
-  // Use the stereo ChArUco calibration hook
   const calibration = useStereoCharucoCalibration(cameraOptions, sourcePaths);
 
   const {
@@ -79,8 +74,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     setMinCorners,
     dt,
     setDt,
-    datumCamera,
-    setDatumCamera,
     datumFrame,
     setDatumFrame,
 
@@ -107,14 +100,49 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     showOverlay,
     setShowOverlay,
 
+    // Model restore
+    loadedWorldFrame,
+    persistWorldFrame,
+
     // Actions
     generateStereoModel,
-    loadModel,
     reconstructVectors,
+    detectFrame,
   } = calibration;
 
-  // Self-calibration hook
-  const selfCal = useSelfCalibration(cam1, cam2, "charuco");
+  // Track the frame currently shown in the viewer (1-based, matches datumFrame).
+  // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
+  const [currentFrame, setCurrentFrame] = useState<number>(Number(datumFrame) || 1);
+  const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
+  const datumNum = Number(datumFrame) || 1;
+  const onDatumFrame = currentFrame === datumNum;
+
+  // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
+  const wf = useWorldFrame({
+    board: "charuco", camera: cam1, sourcePathIdx, datumFrame,
+    boardParams: () => ({
+      squares_h: parseInt(squaresH) || 10,
+      squares_v: parseInt(squaresV) || 9,
+      square_size: parseFloat(squareSize) || 0.03,
+      marker_ratio: parseFloat(markerRatio) || 0.5,
+      aruco_dict: arucoDict,
+      min_corners: parseInt(minCorners) || 6,
+    }),
+    imageFormat, imageType,
+  });
+  const wfActive = activeCam === cam1;
+  const wfOnDatum = wfActive && onDatumFrame;
+  const wfIsSelecting = wfOnDatum && wf.mode !== "none";
+
+  // When a saved stereo model loads, restore its world frame (cam1) + show detected markers.
+  React.useEffect(() => {
+    if (!hasModel) return;
+    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
+    detectFrame(currentFrame, cam1);
+    detectFrame(currentFrame, cam2);
+    setShowOverlay(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasModel, loadedWorldFrame]);
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -141,7 +169,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
       });
       const json = await res.json();
       if (res.ok && json.updated?.calibration) {
-        // Sync parent config state so other tabs see the update
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (e) {
@@ -171,46 +198,13 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
 
   const isActive = config.calibration?.active === "stereo_charuco";
 
-  // Local input state for debouncing
-  const [squaresHInput, setSquaresHInput] = useState(String(squaresH));
-  const [squaresVInput, setSquaresVInput] = useState(String(squaresV));
-  const [squareSizeInput, setSquareSizeInput] = useState(String(squareSize));
-  const [markerRatioInput, setMarkerRatioInput] = useState(String(markerRatio));
-  const [minCornersInput, setMinCornersInput] = useState(String(minCorners));
+  // Local input state for dt / datum frame (numeric hook state).
   const [dtInput, setDtInput] = useState(String(dt));
   const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
+  React.useEffect(() => { setDtInput(String(dt)); }, [dt]);
+  React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
 
-  // Sync local inputs with hook state
-  React.useEffect(() => {
-    setSquaresHInput(String(squaresH));
-  }, [squaresH]);
-
-  React.useEffect(() => {
-    setSquaresVInput(String(squaresV));
-  }, [squaresV]);
-
-  React.useEffect(() => {
-    setSquareSizeInput(String(squareSize));
-  }, [squareSize]);
-
-  React.useEffect(() => {
-    setMarkerRatioInput(String(markerRatio));
-  }, [markerRatio]);
-
-  React.useEffect(() => {
-    setMinCornersInput(String(minCorners));
-  }, [minCorners]);
-
-  React.useEffect(() => {
-    setDtInput(String(dt));
-  }, [dt]);
-
-  React.useEffect(() => {
-    setDatumFrameInput(String(datumFrame));
-  }, [datumFrame]);
-
-  // Convert detections to format expected by CalibrationImageViewer
-  // Use active camera's detections
+  // Convert active camera's detections to viewer format.
   const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
     const detections = activeCam === cam1 ? detectionsCam1 : detectionsCam2;
     if (!detections || Object.keys(detections).length === 0) return undefined;
@@ -275,7 +269,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
             </div>
             <div>
-              <label className="text-sm font-medium">Camera 1</label>
+              <label className="text-sm font-medium">Camera 1 (world-frame reference)</label>
               <Select value={String(cam1)} onValueChange={v => setCam1(Number(v))}>
                 <SelectTrigger><SelectValue placeholder="Select camera 1" /></SelectTrigger>
                 <SelectContent>
@@ -355,7 +349,8 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <p className="text-xs text-muted-foreground ml-10">
                 {useCameraSubfolders
                   ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                  : "Images in source directory without camera subfolders."}
+                  : "Images in source directory without camera subfolders."
+                }
               </p>
             </div>
           )}
@@ -369,7 +364,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cam1}`}/
               </p>
 
-              {/* Custom Camera Subfolder Names */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
                 <p className="text-xs text-muted-foreground mb-2">
@@ -433,7 +427,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                     : undefined
                 }
               />
-              {/* Per-camera details */}
               {validation.cam1 && validation.cam2 && (
                 <div className="flex gap-4 text-xs text-muted-foreground">
                   <span className={validation.cam1.valid ? "text-green-600" : "text-red-500"}>
@@ -446,121 +439,85 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   </span>
                 </div>
               )}
-              {/* Suggested Pattern Button */}
-              {!validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-600">Suggestion:</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
-                    className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                  >
-                    Use "{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}"
-                  </Button>
-                </div>
-              )}
+            </div>
+          )}
 
-              {/* Suggested Subfolder Button */}
-              {!validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-600">Subfolder suggestion:</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setUseCameraSubfolders(true);
-                      setCameraSubfolders([
-                        validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
-                        validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
-                      ]);
-                    }}
-                    className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                  >
-                    Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
-                  </Button>
-                </div>
-              )}
+          {/* Suggested Pattern Button */}
+          {validation && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}"
+              </Button>
+            </div>
+          )}
+
+          {/* Suggested Subfolder Button */}
+          {validation && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Subfolder suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setUseCameraSubfolders(true);
+                  setCameraSubfolders([
+                    validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
+                    validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
+                  ]);
+                }}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
+              </Button>
             </div>
           )}
 
           {/* Section 4: ChArUco Board Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">ChArUco Board Parameters</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <p className="text-xs text-muted-foreground mb-3">
+              The world frame is defined on Camera 1 (optionally refined with the picker below).
+            </p>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
-                <label className="text-sm font-medium">Squares Horizontal</label>
-                <Input
-                  type="text" inputMode="numeric"
-                  min={3}
-                  value={squaresHInput}
-                  onChange={e => setSquaresHInput(e.target.value)}
-                  onBlur={() => setSquaresH(parseInt(squaresHInput) || 10)}
-                />
+                <label className="text-sm font-medium">Squares (Horizontal)</label>
+                <Input type="text" inputMode="numeric" value={squaresH} onChange={e => setSquaresH(e.target.value)} min="3" placeholder="10" />
               </div>
               <div>
-                <label className="text-sm font-medium">Squares Vertical</label>
-                <Input
-                  type="text" inputMode="numeric"
-                  min={3}
-                  value={squaresVInput}
-                  onChange={e => setSquaresVInput(e.target.value)}
-                  onBlur={() => setSquaresV(parseInt(squaresVInput) || 9)}
-                />
+                <label className="text-sm font-medium">Squares (Vertical)</label>
+                <Input type="text" inputMode="numeric" value={squaresV} onChange={e => setSquaresV(e.target.value)} min="3" placeholder="9" />
               </div>
               <div>
-                <label className="text-sm font-medium">Square Size (m)</label>
-                <Input
-                  type="text" inputMode="numeric"
-                  step="any"
-                  min={0.001}
-                  value={squareSizeInput}
-                  onChange={e => setSquareSizeInput(e.target.value)}
-                  onBlur={() => setSquareSize(parseFloat(squareSizeInput) || 0.03)}
-                />
+                <label className="text-sm font-medium">Square Size (meters)</label>
+                <Input type="text" inputMode="numeric" value={squareSize} onChange={e => setSquareSize(e.target.value)} step="0.001" min="0" placeholder="0.03" />
               </div>
               <div>
                 <label className="text-sm font-medium">Marker Ratio</label>
-                <Input
-                  type="text" inputMode="numeric"
-                  step="0.1"
-                  min={0.1}
-                  max={1.0}
-                  value={markerRatioInput}
-                  onChange={e => setMarkerRatioInput(e.target.value)}
-                  onBlur={() => setMarkerRatio(parseFloat(markerRatioInput) || 0.5)}
-                />
+                <Input type="text" inputMode="numeric" value={markerRatio} onChange={e => setMarkerRatio(e.target.value)} step="0.1" min="0.1" max="1.0" placeholder="0.5" />
               </div>
-            </div>
-          </div>
-
-          {/* Section 5: Detection Parameters */}
-          <div className="border-t pt-4">
-            <h3 className="text-sm font-semibold mb-3">Detection Parameters</h3>
-            <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div>
+                <label className="text-sm font-medium">Min Corners per Image</label>
+                <Input type="text" inputMode="numeric" value={minCorners} onChange={e => setMinCorners(e.target.value)} min="4" placeholder="6" />
+              </div>
               <div>
                 <label className="text-sm font-medium">ArUco Dictionary</label>
                 <Select value={arucoDict} onValueChange={setArucoDict}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select dictionary" /></SelectTrigger>
                   <SelectContent>
-                    {ARUCO_DICTS.map(d => (
+                    {ARUCO_DICTS.map((d) => (
                       <SelectItem key={d} value={d}>{d}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <label className="text-sm font-medium">Min Corners</label>
-                <Input
-                  type="text" inputMode="numeric"
-                  min={4}
-                  value={minCornersInput}
-                  onChange={e => setMinCornersInput(e.target.value)}
-                  onBlur={() => setMinCorners(parseInt(minCornersInput) || 6)}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">&Delta;t (seconds)</label>
+                <label className="text-sm font-medium">Δt (seconds)</label>
                 <Input
                   type="text" inputMode="numeric"
                   step="any"
@@ -569,17 +526,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   onChange={e => setDtInput(e.target.value)}
                   onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
                 />
-              </div>
-              <div>
-                <label className="text-sm font-medium">Reference Camera</label>
-                <Select value={String(datumCamera)} onValueChange={v => setDatumCamera(Number(v))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">Camera 1</SelectItem>
-                    <SelectItem value="2">Camera 2</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground mt-1">Coordinate system origin</p>
+                <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>
               <div>
                 <label className="text-sm font-medium">Datum Frame</label>
@@ -595,7 +542,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             </div>
           </div>
 
-          {/* Section 6: Image Viewer Toggle */}
+          {/* Section 5: Image Viewer Toggle */}
           {validation?.valid && (
             <div className="flex items-center gap-4">
               <Button
@@ -608,7 +555,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 {showImageViewer ? 'Hide Image Viewer' : 'Browse Calibration Images'}
               </Button>
 
-              {/* Camera Toggle (shown when viewer is visible) */}
               {showImageViewer && (
                 <div className="flex items-center gap-1 bg-muted rounded-md p-1">
                   <Button
@@ -634,7 +580,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             </div>
           )}
 
-          {/* Section 7: Image Viewer with Overlay Support */}
+          {/* Section 6: Image Viewer with Overlay + world-frame picking (cam1 only) */}
           {showImageViewer && validation?.valid && (
             <CalibrationImageViewer
               backendUrl="/backend"
@@ -643,27 +589,42 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               numImages={parseInt(numImages) || 10}
               calibrationType="stereo_charuco"
               refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
-              calibrationParams={{
-                squares_h: squaresH,
-                squares_v: squaresV,
-                square_size: squareSize,
-                marker_ratio: markerRatio,
-                aruco_dict: arucoDict,
-              }}
               stereoParams={{ cam1, cam2 }}
+              onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
+              pointSelectMode={wfIsSelecting}
+              onPointSelect={(px, py) => { if (wfIsSelecting) wf.handlePoint(px, py); }}
+              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wf) : []}
+              detectionLoading={modelLoading}
+              settingsBarExtras={
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    variant="outline" size="sm" disabled={wf.busy}
+                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                  >
+                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
+                  </Button>
+                  {wfOnDatum ? (
+                    <WorldFrameControls wf={wf} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      World frame is set on Camera {cam1}, datum frame {datumNum}.
+                    </span>
+                  )}
+                </div>
+              }
             />
           )}
 
-          {/* Section 8: Action Buttons */}
+          {/* Section 7: Action Buttons */}
           <div className="border-t pt-4">
             <div className="flex gap-3 items-center flex-wrap">
-              {/* Generate Stereo Model */}
               <Button
-                onClick={generateStereoModel}
-                disabled={isCalibrating || !validation?.valid}
+                onClick={async () => { await generateStereoModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Markers → Origin → +X → +Y` : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isCalibrating ? (
@@ -675,24 +636,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   'Generate Stereo Model'
                 )}
               </Button>
-
-              <Button
-                onClick={loadModel}
-                disabled={modelLoading}
-                variant="outline"
-              >
-                {modelLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  'Load Saved Model'
-                )}
-              </Button>
-
-              {/* Self-calibration warning */}
-              <SelfCalibrationWarning hasModel={hasModel} hasSelfCal={selfCal.hasSelfCal} />
 
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
@@ -741,12 +684,18 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               </Button>
             </div>
 
+            {validation?.valid && !wf.complete && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Set the coordinate frame before generating: open the viewer on Camera {cam1}, click <strong>Detect Markers</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+              </p>
+            )}
+
             {/* Calibration Job Progress */}
             {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'starting') && (
               <div className="mt-4 p-3 border rounded bg-blue-50">
                 <div className="flex items-center gap-2 text-sm mb-2">
                   <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  <strong>Stereo ChArUco Calibration:</strong>
+                  <strong>Stereo Calibration:</strong>
                   <span className="capitalize">{jobStatus.stage || jobStatus.status}</span>
                 </div>
                 <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
@@ -760,9 +709,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   {jobStatus.processed_pairs !== undefined && (
                     <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs}</span>
                   )}
-                  {jobStatus.valid_pairs !== undefined && jobStatus.valid_pairs > 0 && (
-                    <span> | Valid: {jobStatus.valid_pairs}</span>
-                  )}
                 </div>
               </div>
             )}
@@ -771,9 +717,12 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             {jobStatus?.status === 'completed' && (
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Stereo ChArUco calibration completed successfully!
-                {jobStatus.stereo_rms_error && (
-                  <span className="ml-2">RMS: {jobStatus.stereo_rms_error?.toFixed(4)} px</span>
+                Stereo calibration completed successfully!
+                {jobStatus.cam1_rms_error !== undefined && (
+                  <span className="ml-2">RMS Cam {cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
+                )}
+                {jobStatus.cam2_rms_error !== undefined && (
+                  <span className="ml-2">| RMS Cam {cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
                 )}
               </div>
             )}
@@ -782,7 +731,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             {jobStatus?.status === 'failed' && (
               <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
                 <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Error: {jobStatus.error || 'Stereo ChArUco calibration failed'}
+                Error: {jobStatus.error || 'Stereo calibration failed'}
               </div>
             )}
 
@@ -804,9 +753,6 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   Progress: {reconstructJobStatus.progress?.toFixed(0) || 0}%
                   {reconstructJobStatus.processed_frames !== undefined && (
                     <span> | Frames: {reconstructJobStatus.processed_frames}/{reconstructJobStatus.total_frames}</span>
-                  )}
-                  {reconstructJobStatus.successful_frames !== undefined && reconstructJobStatus.successful_frames > 0 && (
-                    <span> | Successful: {reconstructJobStatus.successful_frames}</span>
                   )}
                 </div>
               </div>
@@ -831,21 +777,24 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
         </CardContent>
       </Card>
 
-      {/* Section 9: Stereo Model Results */}
+      {/* Section 8: Stereo Model Results */}
       {hasModel && stereoModel && (
         <Card>
           <CardHeader>
-            <CardTitle>Stereo ChArUco Model Results</CardTitle>
+            <CardTitle>Stereo Model Results</CardTitle>
             <CardDescription>
-              Stereo calibration for Cameras {cam1} and {cam2}
+              Stereo ChArUco calibration for Cameras {cam1} and {cam2}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Quality Metrics */}
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">Stereo RMS Error</div>
-                <div className="text-lg font-semibold">{stereoModel.stereo_rms_error?.toFixed(4)} px</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {cam1}</div>
+                <div className="text-lg font-semibold">{stereoModel.rms_cam1?.toFixed(4)} px</div>
+              </div>
+              <div className="p-3 bg-muted rounded">
+                <div className="text-xs text-muted-foreground">RMS Cam {cam2}</div>
+                <div className="text-lg font-semibold">{stereoModel.rms_cam2?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
                 <div className="text-xs text-muted-foreground">Relative Angle</div>
@@ -855,70 +804,45 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 <div className="text-xs text-muted-foreground">Baseline Distance</div>
                 <div className="text-lg font-semibold">{stereoModel.baseline_distance_mm?.toFixed(2)} mm</div>
               </div>
-              <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">Image Pairs Used</div>
-                <div className="text-lg font-semibold">{stereoModel.num_image_pairs}</div>
-              </div>
             </div>
 
-            {/* Per-Camera Quality */}
-            <div className="grid md:grid-cols-2 gap-6 mb-6">
-              <div className="p-3 border rounded">
-                <h4 className="text-sm font-semibold mb-2">Camera {cam1}</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{stereoModel.cam1_rms_error?.toFixed(4)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length:</span>
-                    <span className="ml-2 font-medium">
-                      {stereoModel.focal_length_1?.[0]?.toFixed(1)} / {stereoModel.focal_length_1?.[1]?.toFixed(1)} px
-                    </span>
-                  </div>
+            <div className="grid md:grid-cols-2 gap-6">
+              {[
+                { num: cam1, intr: stereoModel.intrinsics1 },
+                { num: cam2, intr: stereoModel.intrinsics2 },
+              ].map(({ num, intr }) => (
+                <div key={num} className="p-3 border rounded space-y-2">
+                  <h4 className="text-sm font-semibold">Camera {num}</h4>
+                  {intr ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Focal (fx/fy):</span>
+                          <span className="ml-2 font-medium">{intr.fx?.toFixed(1)} / {intr.fy?.toFixed(1)} px</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Principal (cx/cy):</span>
+                          <span className="ml-2 font-medium">{intr.cx?.toFixed(1)} / {intr.cy?.toFixed(1)} px</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">RMS:</span>
+                          <span className="ml-2 font-medium">{intr.rms?.toFixed(4)} px</span>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-xs text-muted-foreground">Distortion:</span>
+                        <div className="font-mono text-xs bg-muted p-2 rounded mt-1">
+                          [{intr.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No intrinsics available.</p>
+                  )}
                 </div>
-              </div>
-              <div className="p-3 border rounded">
-                <h4 className="text-sm font-semibold mb-2">Camera {cam2}</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{stereoModel.cam2_rms_error?.toFixed(4)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length:</span>
-                    <span className="ml-2 font-medium">
-                      {stereoModel.focal_length_2?.[0]?.toFixed(1)} / {stereoModel.focal_length_2?.[1]?.toFixed(1)} px
-                    </span>
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
 
-            {/* Stereo Geometry (collapsible) */}
-            <details className="border rounded">
-              <summary className="p-3 cursor-pointer text-sm font-semibold">
-                Stereo Geometry Matrices
-              </summary>
-              <div className="p-3 pt-0 grid md:grid-cols-2 gap-4">
-                <div>
-                  <h5 className="text-xs font-medium mb-1 text-muted-foreground">Rotation Matrix (R)</h5>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    {stereoModel.rotation_matrix?.map((row: number[], i: number) => (
-                      <div key={i}>[{row.map(v => v?.toFixed(6) ?? 'null').join(', ')}]</div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <h5 className="text-xs font-medium mb-1 text-muted-foreground">Translation Vector (T)</h5>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    [{stereoModel.translation_vector?.map((v: number) => v?.toFixed(4) ?? 'null').join(', ')}]
-                  </div>
-                </div>
-              </div>
-            </details>
-
-            {/* Detection Summary */}
             {(Object.keys(detectionsCam1).length > 0 || Object.keys(detectionsCam2).length > 0) && (
               <div className="mt-4 pt-4 border-t">
                 <h4 className="text-sm font-semibold mb-2">Detection Summary</h4>
@@ -929,17 +853,13 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 </p>
               </div>
             )}
+
+            {stereoModel.world_frame_mode && (
+              <p className="mt-3 text-xs text-muted-foreground">World frame: {stereoModel.world_frame_mode}</p>
+            )}
           </CardContent>
         </Card>
       )}
-
-      {/* Section 9: Self-Calibration */}
-      <SelfCalibrationSection
-        cam1={cam1}
-        cam2={cam2}
-        method="charuco"
-        hasModel={hasModel}
-      />
     </div>
   );
 };

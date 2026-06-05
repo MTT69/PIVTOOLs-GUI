@@ -69,19 +69,12 @@ export function useCalibrationImageViewer(
     return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${autoLimits}-${calibrationType}-${refreshKey || ''}`;
   }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, refreshKey]);
 
-  // Build frame URL based on calibration type
+  // Build frame URL. calibration2 serves every board/geometry from one JSON frame
+  // endpoint (a stereo "frame" is just camera N's frame), so the URL no longer
+  // branches on calibrationType — only the camera number differs.
   const buildFrameUrl = useCallback((frameIdx: number) => {
-    if (calibrationType === 'stereo_dotboard') {
-      // Stereo dotboard uses different endpoint structure
-      return `${backendUrl}/calibration/stereo/dotboard/frame/${frameIdx}?camera=${camera}&source_path_idx=${sourcePathIdx}`;
-    }
-    if (calibrationType === 'stereo_charuco') {
-      // Stereo ChArUco uses different endpoint structure
-      return `${backendUrl}/calibration/stereo/charuco/frame/${frameIdx}?camera=${camera}&source_path_idx=${sourcePathIdx}`;
-    }
-    // Dotboard and charuco use the shared endpoint
-    return `${backendUrl}/calibration/get_frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
-  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits, calibrationType]);
+    return `${backendUrl}/calibration2/frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits]);
 
   // Cancel all prefetch requests
   const cancelPrefetches = useCallback(() => {
@@ -258,19 +251,12 @@ export function useCalibrationImageViewer(
   // Track previous camera to detect camera switches
   const prevCameraRef = useRef(camera);
 
-  // Clear cache when parameters change
-  // Also clear backend calibration cache on camera switch
+  // Clear the client-side prefetch buffer when parameters change. (calibration2's
+  // frame endpoint holds no server-side cache, so there is nothing to clear there.)
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-
-    // Clear backend calibration image cache on camera switch (non-blocking)
-    if (prevCameraRef.current !== camera) {
-      fetch(`${backendUrl}/calibration/clear_image_cache`, {
-        method: 'POST',
-      }).catch(() => {}); // Silent fail — cache clear is best-effort
-      prevCameraRef.current = camera;
-    }
+    prevCameraRef.current = camera;
   }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, cancelPrefetches, backendUrl, refreshKey]);
 
   return {

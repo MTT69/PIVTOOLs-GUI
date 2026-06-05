@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,11 +8,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
-import { useStereoCalibration, StereoFrameDetection } from "@/hooks/useStereoCalibration";
+import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { SelfCalibrationSection, SelfCalibrationWarning } from "@/components/setup/SelfCalibrationSection";
-import { useSelfCalibration } from "@/hooks/useSelfCalibration";
+import {
+  useWorldFrame,
+  WorldFrameControls,
+  getWorldFrameMarkers,
+} from "@/components/setup/WorldFrameSetup";
 
 interface StereoCalibrationProps {
   config: any;
@@ -21,20 +24,12 @@ interface StereoCalibrationProps {
   sourcePaths: string[];
 }
 
-// Helper to show just the last segment of a path
-const basename = (p: string) => {
-  if (!p) return "";
-  const parts = p.replace(/\\/g, "/").split("/");
-  return parts.filter(Boolean).pop() || p;
-};
-
 export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
-  // Use the stereo calibration hook
   const calibration = useStereoCalibration(cameraOptions, sourcePaths);
 
   const {
@@ -69,8 +64,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setDotSpacingMm,
     dt,
     setDt,
-    datumCamera,
-    setDatumCamera,
     datumFrame,
     setDatumFrame,
 
@@ -97,14 +90,42 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     showOverlay,
     setShowOverlay,
 
+    // Model restore
+    loadedWorldFrame,
+    persistWorldFrame,
+
     // Actions
     generateStereoModel,
-    loadModel,
     reconstructVectors,
+    detectFrame,
   } = calibration;
 
-  // Self-calibration hook
-  const selfCal = useSelfCalibration(cam1, cam2, "dotboard");
+  // Track the frame currently shown in the viewer (1-based, matches datumFrame).
+  // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
+  const [currentFrame, setCurrentFrame] = useState<number>(Number(datumFrame) || 1);
+  const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
+  const datumNum = Number(datumFrame) || 1;
+  const onDatumFrame = currentFrame === datumNum;
+
+  // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
+  const wf = useWorldFrame({
+    board: "dotboard", camera: cam1, sourcePathIdx, datumFrame,
+    boardParams: () => ({ dot_spacing_mm: dotSpacingMm }),
+    imageFormat, imageType,
+  });
+  const wfActive = activeCam === cam1;
+  const wfOnDatum = wfActive && onDatumFrame;
+  const wfIsSelecting = wfOnDatum && wf.mode !== "none";
+
+  // When a saved stereo model loads, restore its world frame (cam1) + show detected dots.
+  React.useEffect(() => {
+    if (!hasModel) return;
+    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
+    detectFrame(currentFrame, cam1);
+    detectFrame(currentFrame, cam2);
+    setShowOverlay(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasModel, loadedWorldFrame]);
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -131,7 +152,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
       });
       const json = await res.json();
       if (res.ok && json.updated?.calibration) {
-        // Sync parent config state so other tabs see the update
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (e) {
@@ -166,21 +186,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   const [dtInput, setDtInput] = useState(String(dt));
   const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
 
-  // Sync local inputs with hook state
-  React.useEffect(() => {
-    setDotSpacingMmInput(String(dotSpacingMm));
-  }, [dotSpacingMm]);
+  React.useEffect(() => { setDotSpacingMmInput(String(dotSpacingMm)); }, [dotSpacingMm]);
+  React.useEffect(() => { setDtInput(String(dt)); }, [dt]);
+  React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
 
-  React.useEffect(() => {
-    setDtInput(String(dt));
-  }, [dt]);
-
-  React.useEffect(() => {
-    setDatumFrameInput(String(datumFrame));
-  }, [datumFrame]);
-
-  // Convert detections to format expected by CalibrationImageViewer
-  // Use active camera's detections
+  // Convert active camera's detections to viewer format.
   const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
     const detections = activeCam === cam1 ? detectionsCam1 : detectionsCam2;
     if (!detections || Object.keys(detections).length === 0) return undefined;
@@ -245,7 +255,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
             </div>
             <div>
-              <label className="text-sm font-medium">Camera 1</label>
+              <label className="text-sm font-medium">Camera 1 (world-frame reference)</label>
               <Select value={String(cam1)} onValueChange={v => setCam1(Number(v))}>
                 <SelectTrigger><SelectValue placeholder="Select camera 1" /></SelectTrigger>
                 <SelectContent>
@@ -340,7 +350,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cam1}`}/
               </p>
 
-              {/* Custom Camera Subfolder Names */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
                 <p className="text-xs text-muted-foreground mb-2">
@@ -460,9 +469,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">Grid Detection Parameters</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Grid dimensions are automatically detected using RANSAC-based analysis.
+              Grid dimensions are automatically detected using RANSAC-based analysis. The world frame is
+              defined on Camera 1 (optionally refined with the picker below).
             </p>
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="text-sm font-medium">Dot Spacing (mm)</label>
                 <Input
@@ -476,7 +486,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
               <div>
-                <label className="text-sm font-medium">&Delta;t (seconds)</label>
+                <label className="text-sm font-medium">Δt (seconds)</label>
                 <Input
                   type="text" inputMode="numeric"
                   step="any"
@@ -486,17 +496,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Reference Camera</label>
-                <Select value={String(datumCamera)} onValueChange={v => setDatumCamera(Number(v))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">Camera 1</SelectItem>
-                    <SelectItem value="2">Camera 2</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground mt-1">Coordinate system origin</p>
               </div>
               <div>
                 <label className="text-sm font-medium">Datum Frame</label>
@@ -551,7 +550,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Section 6: Image Viewer with Overlay Support */}
+          {/* Section 6: Image Viewer with Overlay + world-frame picking (cam1 only) */}
           {showImageViewer && validation?.valid && (
             <CalibrationImageViewer
               backendUrl="/backend"
@@ -560,13 +559,32 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               numImages={parseInt(numImages) || 10}
               calibrationType="stereo_dotboard"
               refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
-              calibrationParams={{
-                // NOTE: pattern_cols/rows removed - auto-detected
-              }}
               stereoParams={{ cam1, cam2 }}
+              onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
+              pointSelectMode={wfIsSelecting}
+              onPointSelect={(px, py) => { if (wfIsSelecting) wf.handlePoint(px, py); }}
+              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wf) : []}
+              detectionLoading={modelLoading}
+              settingsBarExtras={
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    variant="outline" size="sm" disabled={wf.busy}
+                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                  >
+                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
+                  </Button>
+                  {wfOnDatum ? (
+                    <WorldFrameControls wf={wf} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      World frame is set on Camera {cam1}, datum frame {datumNum}.
+                    </span>
+                  )}
+                </div>
+              }
             />
           )}
 
@@ -575,8 +593,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div className="flex gap-3 items-center flex-wrap">
               {/* Generate Stereo Model */}
               <Button
-                onClick={generateStereoModel}
-                disabled={isCalibrating || !validation?.valid}
+                onClick={async () => { await generateStereoModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Dots → Origin → +X → +Y` : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isCalibrating ? (
@@ -588,24 +607,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   'Generate Stereo Model'
                 )}
               </Button>
-
-              <Button
-                onClick={loadModel}
-                disabled={modelLoading}
-                variant="outline"
-              >
-                {modelLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  'Load Saved Model'
-                )}
-              </Button>
-
-              {/* Self-calibration warning */}
-              <SelfCalibrationWarning hasModel={hasModel} hasSelfCal={selfCal.hasSelfCal} />
 
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
@@ -654,6 +655,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </Button>
             </div>
 
+            {validation?.valid && !wf.complete && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Set the coordinate frame before generating: open the viewer on Camera {cam1}, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+              </p>
+            )}
+
             {/* Calibration Job Progress */}
             {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'starting') && (
               <div className="mt-4 p-3 border rounded bg-blue-50">
@@ -673,9 +680,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   {jobStatus.processed_pairs !== undefined && (
                     <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs}</span>
                   )}
-                  {jobStatus.valid_pairs !== undefined && jobStatus.valid_pairs > 0 && (
-                    <span> | Valid: {jobStatus.valid_pairs}</span>
-                  )}
                 </div>
               </div>
             )}
@@ -685,8 +689,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Stereo calibration completed successfully!
-                {jobStatus.stereo_rms_error && (
-                  <span className="ml-2">RMS: {jobStatus.stereo_rms_error?.toFixed(4)} px</span>
+                {jobStatus.cam1_rms_error !== undefined && (
+                  <span className="ml-2">RMS Cam {cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
+                )}
+                {jobStatus.cam2_rms_error !== undefined && (
+                  <span className="ml-2">| RMS Cam {cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
                 )}
               </div>
             )}
@@ -717,9 +724,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   Progress: {reconstructJobStatus.progress?.toFixed(0) || 0}%
                   {reconstructJobStatus.processed_frames !== undefined && (
                     <span> | Frames: {reconstructJobStatus.processed_frames}/{reconstructJobStatus.total_frames}</span>
-                  )}
-                  {reconstructJobStatus.successful_frames !== undefined && reconstructJobStatus.successful_frames > 0 && (
-                    <span> | Successful: {reconstructJobStatus.successful_frames}</span>
                   )}
                 </div>
               </div>
@@ -757,8 +761,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {/* Quality Metrics */}
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">Stereo RMS Error</div>
-                <div className="text-lg font-semibold">{stereoModel.stereo_rms_error?.toFixed(4)} px</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {cam1}</div>
+                <div className="text-lg font-semibold">{stereoModel.rms_cam1?.toFixed(4)} px</div>
+              </div>
+              <div className="p-3 bg-muted rounded">
+                <div className="text-xs text-muted-foreground">RMS Cam {cam2}</div>
+                <div className="text-lg font-semibold">{stereoModel.rms_cam2?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
                 <div className="text-xs text-muted-foreground">Relative Angle</div>
@@ -768,68 +776,45 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground">Baseline Distance</div>
                 <div className="text-lg font-semibold">{stereoModel.baseline_distance_mm?.toFixed(2)} mm</div>
               </div>
-              <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">Image Pairs Used</div>
-                <div className="text-lg font-semibold">{stereoModel.num_image_pairs}</div>
-              </div>
             </div>
 
-            {/* Per-Camera Quality */}
-            <div className="grid md:grid-cols-2 gap-6 mb-6">
-              <div className="p-3 border rounded">
-                <h4 className="text-sm font-semibold mb-2">Camera {cam1}</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{stereoModel.cam1_rms_error?.toFixed(4)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length:</span>
-                    <span className="ml-2 font-medium">
-                      {stereoModel.focal_length_1?.[0]?.toFixed(1)} / {stereoModel.focal_length_1?.[1]?.toFixed(1)} px
-                    </span>
-                  </div>
+            {/* Per-Camera Intrinsics */}
+            <div className="grid md:grid-cols-2 gap-6">
+              {[
+                { num: cam1, intr: stereoModel.intrinsics1 },
+                { num: cam2, intr: stereoModel.intrinsics2 },
+              ].map(({ num, intr }) => (
+                <div key={num} className="p-3 border rounded space-y-2">
+                  <h4 className="text-sm font-semibold">Camera {num}</h4>
+                  {intr ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <span className="text-muted-foreground">Focal (fx/fy):</span>
+                          <span className="ml-2 font-medium">{intr.fx?.toFixed(1)} / {intr.fy?.toFixed(1)} px</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Principal (cx/cy):</span>
+                          <span className="ml-2 font-medium">{intr.cx?.toFixed(1)} / {intr.cy?.toFixed(1)} px</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">RMS:</span>
+                          <span className="ml-2 font-medium">{intr.rms?.toFixed(4)} px</span>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-xs text-muted-foreground">Distortion:</span>
+                        <div className="font-mono text-xs bg-muted p-2 rounded mt-1">
+                          [{intr.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No intrinsics available.</p>
+                  )}
                 </div>
-              </div>
-              <div className="p-3 border rounded">
-                <h4 className="text-sm font-semibold mb-2">Camera {cam2}</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{stereoModel.cam2_rms_error?.toFixed(4)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length:</span>
-                    <span className="ml-2 font-medium">
-                      {stereoModel.focal_length_2?.[0]?.toFixed(1)} / {stereoModel.focal_length_2?.[1]?.toFixed(1)} px
-                    </span>
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
-
-            {/* Stereo Geometry (collapsible) */}
-            <details className="border rounded">
-              <summary className="p-3 cursor-pointer text-sm font-semibold">
-                Stereo Geometry Matrices
-              </summary>
-              <div className="p-3 pt-0 grid md:grid-cols-2 gap-4">
-                <div>
-                  <h5 className="text-xs font-medium mb-1 text-muted-foreground">Rotation Matrix (R)</h5>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    {stereoModel.rotation_matrix?.map((row: number[], i: number) => (
-                      <div key={i}>[{row.map(v => v?.toFixed(6) ?? 'null').join(', ')}]</div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <h5 className="text-xs font-medium mb-1 text-muted-foreground">Translation Vector (T)</h5>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    [{stereoModel.translation_vector?.map((v: number) => v?.toFixed(4) ?? 'null').join(', ')}]
-                  </div>
-                </div>
-              </div>
-            </details>
 
             {/* Detection Summary */}
             {(Object.keys(detectionsCam1).length > 0 || Object.keys(detectionsCam2).length > 0) && (
@@ -842,17 +827,13 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 </p>
               </div>
             )}
+
+            {stereoModel.world_frame_mode && (
+              <p className="mt-3 text-xs text-muted-foreground">World frame: {stereoModel.world_frame_mode}</p>
+            )}
           </CardContent>
         </Card>
       )}
-
-      {/* Section 9: Self-Calibration */}
-      <SelfCalibrationSection
-        cam1={cam1}
-        cam2={cam2}
-        method="dotboard"
-        hasModel={hasModel}
-      />
     </div>
   );
 };

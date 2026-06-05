@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Detection data for a single frame
+ * Detection data for a single frame (on-demand overlay).
  */
 export interface FrameDetection {
   grid_points: [number, number][];
@@ -10,32 +10,31 @@ export interface FrameDetection {
 }
 
 /**
- * Camera model from calibration
+ * Camera model shaped for the v1 results card.
  */
 export interface CameraModel {
-  model_type?: "pinhole" | "polynomial";
-  // Pinhole fields
+  model_type?: "pinhole";
   camera_matrix?: number[][];
   dist_coeffs?: number[];
   focal_length?: [number, number];
   principal_point?: [number, number];
-  // Polynomial fields
-  mm_per_pixel?: number;
-  origin_x?: number;
-  origin_y?: number;
-  normalisation_nx?: number;
-  normalisation_ny?: number;
-  coefficients_x?: number[];
-  coefficients_y?: number[];
   image_width?: number;
   image_height?: number;
-  // Shared fields
   reprojection_error: number;
   num_images_used: number;
 }
 
+/** World-frame clicks (image-down pixels) defining origin/+X/+Y + origin world mm. */
+export interface WorldFrameClicks {
+  origin: [number, number];
+  x_axis: [number, number];
+  y_axis: [number, number];
+  origin_mm: [number, number];
+}
+
 /**
- * Validation result from backend
+ * Validation result (matches the calibration2 /validate shape, which is the same
+ * `validate_calibration_images` result the v1 GUI consumed).
  */
 export interface ValidationResult {
   valid: boolean;
@@ -53,7 +52,8 @@ export interface ValidationResult {
 }
 
 /**
- * Job status from backend
+ * Synchronous-generate status, kept in the v1 `JobStatus` shape so the existing
+ * progress/result JSX renders unchanged.
  */
 export interface JobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
@@ -61,17 +61,12 @@ export interface JobStatus {
   processed_images: number;
   valid_images: number;
   total_images: number;
-  elapsed_time?: number;
-  estimated_remaining?: number;
   error?: string;
   rms_error?: number;
   num_images_used?: number;
   warnings?: string[];
 }
 
-/**
- * Multi-camera job status
- */
 export interface GlobalAlignmentResult {
   status: 'completed' | 'failed' | 'skipped';
   error?: string;
@@ -97,14 +92,16 @@ export interface MultiCameraJobStatus {
   error?: string;
 }
 
+const BOARD = 'dotboard';
+
 /**
- * Hook for managing dotboard calibration state and operations.
+ * Dotboard calibration on the calibration2 (pinhole, no-coordinate-flip) backend.
  *
- * Simplified API:
- * - Parameters are saved to config.yaml via /backend/calibration/config
- * - Validation via /backend/calibration/dotboard/validate
- * - Calibration via /backend/calibration/dotboard/generate_model
- * - Model loading via /backend/calibration/dotboard/model
+ * The return interface is preserved from the v1 hook so the original
+ * DotboardCalibration card UI renders unchanged. calibration2's `generate_model`
+ * is synchronous, so we synthesise the v1 `JobStatus` around the awaited call.
+ * Image-source config persists to `config.calibration`; board params to
+ * `config.calibration2.dotboard`. The optional world frame is passed as `clicks`.
  */
 export function useDotboardCalibration(
   cameraOptions: number[],
@@ -114,7 +111,7 @@ export function useDotboardCalibration(
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(1);
 
-  // Image config (saved to config)
+  // Image config (persists to config.calibration)
   const [imageFormat, setImageFormat] = useState('calib%05d.tif');
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState<string>("10");
@@ -122,537 +119,350 @@ export function useDotboardCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Grid params (saved to config)
-  // NOTE: patternCols and patternRows removed - grid is auto-detected
+  // Board params (persist to config.calibration2)
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [dt, setDt] = useState(1.0);
-  const [datumFrame, setDatumFrame] = useState(1); // Which frame defines world origin
-  const [modelType, setModelType] = useState<string>("pinhole"); // "pinhole" or "polynomial"
+  const [datumFrame, setDatumFrame] = useState(1);
 
-  // Validation state
+  // Validation
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Job tracking
-  const [jobId, setJobId] = useState<string | null>(null);
+  // Synchronous generate status (v1 shape)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);
+  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
+  const [vectorJobId, setVectorJobId] = useState<string | null>(null);
 
-  // Model and detections
+  // Model + on-demand detections (overlay)
   const [cameraModel, setCameraModel] = useState<CameraModel | null>(null);
+  const [loadedWorldFrame, setLoadedWorldFrame] = useState<any>(null);
   const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
-
-  // Overlay toggle
   const [showOverlay, setShowOverlay] = useState(true);
 
-  // Multi-camera job tracking
-  const [multiCameraJobId, setMultiCameraJobId] = useState<string | null>(null);
-  const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);
-
-  // Vector calibration job tracking
-  const [vectorJobId, setVectorJobId] = useState<string | null>(null);
-  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
-
-  // Guard: prevent auto-save/validate from firing before initial config load completes
   const configLoadedRef = useRef(false);
-
-  // Refs for debouncing and polling
+  // State (not just the ref) so effects re-run once config finishes loading on mount.
+  const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const multiCameraPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load config on mount
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        // Load calibration image settings
-        const calRes = await fetch('/backend/calibration/config');
-        if (calRes.ok) {
-          const calData = await calRes.json();
-          if (calData.image_format) setImageFormat(calData.image_format);
-          if (calData.image_type) setImageType(calData.image_type);
-          if (calData.num_images) setNumImages(String(calData.num_images));
-          if (calData.calibration_sources !== undefined) setCalibrationSources(calData.calibration_sources);
-          if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
-          if (calData.camera_subfolders !== undefined) setCameraSubfolders(calData.camera_subfolders);
-        }
+  const boardParams = useCallback(() => ({ dot_spacing_mm: dotSpacingMm }), [dotSpacingMm]);
 
-        // Load dotboard-specific settings
-        const cfgRes = await fetch('/backend/config');
-        if (cfgRes.ok) {
-          const cfgData = await cfgRes.json();
-          const dotboard = cfgData.calibration?.dotboard || {};
-          // NOTE: pattern_cols and pattern_rows no longer needed - auto-detected
-          if (dotboard.dot_spacing_mm) setDotSpacingMm(dotboard.dot_spacing_mm);
-          if (dotboard.dt) setDt(dotboard.dt);
-          if (dotboard.datum_frame) setDatumFrame(dotboard.datum_frame);
-          if (dotboard.model_type) setModelType(dotboard.model_type);
+  const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
+
+  // Validate the image source via calibration2 (all formats).
+  const validateImages = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch('/backend/calibration2/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera, source_path_idx: sourcePathIdx,
+          image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
+        }),
+      });
+      setValidation(await res.json());
+    } catch (e) {
+      setValidation({ valid: false, found_count: 0, error: String(e) });
+    } finally {
+      setValidating(false);
+    }
+  }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal]);
+
+  // Load config on mount, then validate.
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/backend/config');
+        if (res.ok) {
+          const cfg = await res.json();
+          const cal = cfg.calibration || {};
+          if (cal.image_format) setImageFormat(cal.image_format);
+          if (cal.image_type) setImageType(cal.image_type);
+          if (cal.num_images) setNumImages(String(cal.num_images));
+          if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
+          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
+          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
+          const c2 = cfg.calibration2 || {};
+          if (c2.dotboard?.dot_spacing_mm) setDotSpacingMm(c2.dotboard.dot_spacing_mm);
+          if (c2.dt) setDt(c2.dt);
+          if (c2.datum_frame) setDatumFrame(c2.datum_frame);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
       configLoadedRef.current = true;
-
-      // Run initial validation
-      setValidating(true);
-      try {
-        const valRes = await fetch('/backend/calibration/dotboard/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path_idx: sourcePathIdx, camera }),
-        });
-        const valData = await valRes.json();
-        setValidation(valData);
-      } catch (e) {
-        console.error('Initial validation failed:', e);
-      } finally {
-        setValidating(false);
-      }
+      setConfigLoaded(true);
+      validateImages();
     };
-    loadConfig();
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Validate images
-  const validateImages = useCallback(async () => {
-    setValidating(true);
-    try {
-      const res = await fetch('/backend/calibration/dotboard/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-        }),
-      });
-
-      const data = await res.json();
-      setValidation(data);
-    } catch (e) {
-      console.error('Validation failed:', e);
-      setValidation({
-        valid: false,
-        found_count: 0,
-        error: String(e),
-      });
-    } finally {
-      setValidating(false);
-    }
-  }, [sourcePathIdx, camera]);
-
-  // Save config (debounced), then validate after save completes
+  // Persist config (debounced), then validate.
   const saveConfig = useCallback(() => {
-    if (configDebounceRef.current) {
-      clearTimeout(configDebounceRef.current);
-    }
-
+    if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
       try {
-        // Save calibration image settings
-        await fetch('/backend/calibration/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_format: imageFormat,
-            image_type: imageType,
-            num_images: parseInt(numImages) || 10,
-            calibration_sources: calibrationSources,
-            use_camera_subfolders: useCameraSubfolders,
-            camera_subfolders: cameraSubfolders,
-          }),
-        });
-
-        // Save dotboard-specific settings
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
-              dotboard: {
-                dot_spacing_mm: dotSpacingMm,
-                dt: dt,
-                datum_frame: datumFrame,
-                model_type: modelType,
-              },
+              image_format: imageFormat,
+              image_type: imageType,
+              num_images: frameTotal(),
+              calibration_sources: calibrationSources,
+              use_camera_subfolders: useCameraSubfolders,
+              camera_subfolders: cameraSubfolders,
+            },
+            calibration2: {
+              active: BOARD, dt, datum_frame: datumFrame,
+              dotboard: { dot_spacing_mm: dotSpacingMm },
             },
           }),
         });
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-
-      // Validate after save completes so backend has current config
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, dotSpacingMm, dt, datumFrame, modelType, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrame, dotSpacingMm, validateImages]);
 
-  // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
     if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
 
-  // Generate camera model
-  const generateCameraModel = useCallback(async () => {
-    try {
-      const res = await fetch('/backend/calibration/dotboard/generate_model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          model_type: modelType,
-        }),
-      });
+  // Map a calibration2 mono model/generate response to the v1 card shape.
+  const toCameraModel = (d: any): CameraModel => ({
+    model_type: 'pinhole',
+    camera_matrix: d.camera_matrix,
+    dist_coeffs: d.dist_coeffs,
+    focal_length: [d.fx, d.fy],
+    principal_point: [d.cx, d.cy],
+    image_width: d.image_width,
+    image_height: d.image_height,
+    reprojection_error: d.rms,
+    num_images_used: d.num_images_used ?? (d.per_view_rms?.length ?? 0),
+  });
 
-      const data = await res.json();
-      if (data.job_id) {
-        setJobId(data.job_id);
-        setJobStatus({ status: 'starting', progress: 0, processed_images: 0, valid_images: 0, total_images: 0 });
+  // Generate the model for one camera (synchronous); optional world-frame clicks.
+  const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
+    const res = await fetch('/backend/calibration2/generate_model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stereo: false, camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
+        image_format: imageFormat, image_type: imageType,
+        clicks: clicks || undefined,
+      }),
+    });
+    return res.json();
+  }, [sourcePathIdx, boardParams, datumFrame, frameTotal, imageFormat, imageType]);
+
+  // Single-camera generate.
+  const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
+    setJobStatus({ status: 'running', progress: 0, processed_images: 0, valid_images: 0, total_images: frameTotal() });
+    try {
+      const data = await generateOne(camera, clicks);
+      if (data.success) {
+        setCameraModel(toCameraModel(data));
+        setJobStatus({
+          status: 'completed', progress: 100,
+          processed_images: frameTotal(), valid_images: data.per_view_rms?.length ?? 0,
+          total_images: frameTotal(), rms_error: data.rms, num_images_used: data.num_images_used,
+        });
       } else {
-        console.error('Failed to start job:', data.error);
+        setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
       }
     } catch (e) {
-      console.error('Failed to start calibration:', e);
+      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: String(e) });
     }
-  }, [sourcePathIdx, camera, modelType]);
+  }, [camera, frameTotal, generateOne]);
 
-  // Poll job status
-  useEffect(() => {
-    if (!jobId) {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-      return;
-    }
-
-    const pollStatus = async () => {
+  // All-cameras generate (loops camera_numbers; v1 behaviour).
+  const generateCameraModelAll = useCallback(async (clicks?: WorldFrameClicks | null) => {
+    const cams = cameraOptions.length ? cameraOptions : [camera];
+    const results: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string }> = {};
+    setMultiCameraJobStatus({ status: 'running', processed_cameras: 0, total_cameras: cams.length });
+    for (let i = 0; i < cams.length; i++) {
+      const cam = cams[i];
+      setMultiCameraJobStatus({ status: 'running', processed_cameras: i, total_cameras: cams.length, current_camera: cam, camera_results: { ...results } });
       try {
-        const res = await fetch(`/backend/calibration/dotboard/job/${jobId}`);
-        const data = await res.json();
-
-        if (res.ok) {
-          setJobStatus(data);
-
-          // Stop polling if completed or failed
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (pollIntervalRef.current) {
-              clearInterval(pollIntervalRef.current);
-              pollIntervalRef.current = null;
-            }
-
-            // Auto-load model on completion
-            if (data.status === 'completed') {
-              setTimeout(() => loadModel(), 500);
-            }
-          }
-        }
+        // World frame is defined on camera 1's view; pass clicks only there.
+        const data = await generateOne(cam, cam === cams[0] ? clicks : null);
+        results[`Camera ${cam}`] = data.success
+          ? { status: 'completed', rms_error: data.rms, num_images_used: data.num_images_used }
+          : { status: 'failed', error: data.error };
+        if (data.success && cam === camera) setCameraModel(toCameraModel(data));
       } catch (e) {
-        console.error('Failed to poll job status:', e);
+        results[`Camera ${cam}`] = { status: 'failed', error: String(e) };
       }
-    };
+    }
+    setMultiCameraJobStatus({ status: 'completed', processed_cameras: cams.length, total_cameras: cams.length, camera_results: results });
+  }, [cameraOptions, camera, generateOne]);
 
-    // Initial poll
-    pollStatus();
-
-    // Start polling interval
-    pollIntervalRef.current = setInterval(pollStatus, 500);
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-        pollIntervalRef.current = null;
-      }
-    };
-  }, [jobId]);
-
-  // Load saved model (wrapped in useCallback before the auto-reload effect)
+  // Load the saved model for the current camera (auto-called on mount/view change).
+  // Returns the model data (or null) and captures the saved world frame for restore.
   const loadModel = useCallback(async () => {
     setModelLoading(true);
     setModelLoadError(null);
     try {
-      const res = await fetch(
-        `/backend/calibration/dotboard/model?source_path_idx=${sourcePathIdx}&camera=${camera}`
-      );
+      const res = await fetch(`/backend/calibration2/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
       const data = await res.json();
-
       if (res.ok && data.exists) {
-        setCameraModel(data.camera_model);
-        setDetections(data.detections || {});
-        setModelLoadError(null);
-        console.log(`Loaded model with ${Object.keys(data.detections || {}).length} detections`);
-      } else {
-        console.log('No saved model found');
-        setCameraModel(null);
-        setDetections({});
-        setModelLoadError(`No camera model found for Camera ${camera}. Generate a model first.`);
+        setCameraModel(toCameraModel(data));
+        setLoadedWorldFrame(data.world_frame ?? null);
+        return data;
       }
+      // No model yet is the normal first-use state — not an error.
+      setCameraModel(null);
+      setLoadedWorldFrame(null);
+      return null;
     } catch (e) {
-      console.error('Failed to load model:', e);
       setModelLoadError(`Failed to load model: ${e}`);
+      return null;
     } finally {
       setModelLoading(false);
     }
   }, [sourcePathIdx, camera]);
 
-  // Auto-reload detections when camera or sourcePathIdx changes
+  // Persist the picked world frame to config.yaml (calibration2.<board>.world_frame).
+  // recursive_update deep-merges, so this never clobbers the board params.
+  const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
+    if (!p) return;
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration2: { [BOARD]: { world_frame: {
+            origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
+          } } },
+        }),
+      });
+    } catch (e) {
+      // Best-effort: the authoritative copy lives in model.mat.
+    }
+  }, []);
+
+  // Auto-load the saved model on mount (once config is loaded) and on camera/source change.
   useEffect(() => {
-    if (!configLoadedRef.current) return;
-    // Immediately clear stale data so old dots disappear
+    if (!configLoaded) return;
     setCameraModel(null);
     setDetections({});
     setModelLoadError(null);
-    // Auto-load model for the new camera
     loadModel();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadModel changes with camera/sourcePathIdx already
-  }, [camera, sourcePathIdx]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configLoaded, camera, sourcePathIdx]);
 
-  // Generate camera model for all cameras
-  const generateCameraModelAll = useCallback(async () => {
+  // On-demand board detection for the overlay on a given frame.
+  const detectFrame = useCallback(async (frame: number) => {
     try {
-      const res = await fetch('/backend/calibration/dotboard/generate_model_all', {
+      const res = await fetch('/backend/calibration2/detect_frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          model_type: modelType,
+          camera, source_path_idx: sourcePathIdx, frame, board: BOARD,
+          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
         }),
       });
-
       const data = await res.json();
-      if (data.job_id) {
-        setMultiCameraJobId(data.job_id);
-        setMultiCameraJobStatus({
-          status: 'starting',
-          processed_cameras: 0,
-          total_cameras: data.cameras?.length || 0,
-        });
-      } else {
-        console.error('Failed to start multi-camera job:', data.error);
+      if (data.success) {
+        setDetections(prev => ({
+          ...prev,
+          [frame]: { grid_points: data.image_points, grid_indices: data.grid_indices },
+        }));
       }
     } catch (e) {
-      console.error('Failed to start multi-camera calibration:', e);
+      // Overlay is best-effort.
     }
-  }, [sourcePathIdx, modelType]);
+  }, [camera, sourcePathIdx, boardParams, imageFormat, imageType]);
 
-  // Vector calibration for single or all cameras
+  // Apply the calibration to PIV vectors over selected base paths (Phase D backend).
   const calibrateVectors = useCallback(async (
-    forAllCameras: boolean = false,
-    typeName: string = 'instantaneous'
+    _forAllCameras: boolean = true,
+    typeName: string = 'instantaneous',
+    activePaths?: number[],
   ) => {
+    setVectorJobStatus({ status: 'starting', processed_cameras: 0, total_cameras: cameraOptions.length || 1 });
     try {
-      const body: Record<string, unknown> = {
-        source_path_idx: sourcePathIdx,
-        type_name: typeName,
-      };
-
-      if (forAllCameras) {
-        body.cameras = cameraOptions;
-      } else {
-        body.camera = camera;
-      }
-
-      const res = await fetch('/backend/calibration/vectors/calibrate', {
+      const res = await fetch('/backend/calibration2/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
+          type_name: typeName, dt,
+          // Omit active_paths → backend applies to all configured base paths.
+          ...(activePaths ? { active_paths: activePaths } : {}),
+        }),
       });
-
       const data = await res.json();
-      if (data.job_id) {
-        setVectorJobId(data.job_id);
-        setVectorJobStatus({
-          status: 'starting',
-          processed_cameras: 0,
-          total_cameras: data.cameras?.length || 1,
-        });
-      } else {
-        console.error('Failed to start vector calibration:', data.error);
-      }
+      if (data.job_id) setVectorJobId(data.job_id);
+      else setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: data.error });
     } catch (e) {
-      console.error('Vector calibration error:', e);
+      setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: String(e) });
     }
-  }, [sourcePathIdx, camera, cameraOptions]);
+  }, [sourcePathIdx, dt, cameraOptions]);
 
-  // Ensure valid camera selection
+  // Poll apply job.
+  useEffect(() => {
+    if (!vectorJobId) {
+      if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
+      return;
+    }
+    const poll = async () => {
+      try {
+        const res = await fetch(`/backend/calibration2/apply/status/${vectorJobId}`);
+        const data = await res.json();
+        if (res.ok) {
+          setVectorJobStatus({
+            status: data.status, processed_cameras: data.processed ?? 0, total_cameras: data.total ?? 1,
+            error: data.error,
+          });
+          if (data.status === 'completed' || data.status === 'failed') {
+            if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
+          }
+        }
+      } catch (e) {
+        // best-effort polling
+      }
+    };
+    poll();
+    vectorPollRef.current = setInterval(poll, 700);
+    return () => { if (vectorPollRef.current) clearInterval(vectorPollRef.current); };
+  }, [vectorJobId]);
+
+  // Keep the selected camera valid.
   useEffect(() => {
     if (cameraOptions.length > 0 && !cameraOptions.includes(camera)) {
       setCamera(cameraOptions[0]);
     }
   }, [cameraOptions, camera]);
 
-  // Poll multi-camera job status
-  useEffect(() => {
-    if (!multiCameraJobId) {
-      if (multiCameraPollRef.current) {
-        clearInterval(multiCameraPollRef.current);
-        multiCameraPollRef.current = null;
-      }
-      return;
-    }
-
-    const pollStatus = async () => {
-      try {
-        const res = await fetch(`/backend/calibration/dotboard/job/${multiCameraJobId}`);
-        const data = await res.json();
-
-        if (res.ok) {
-          setMultiCameraJobStatus(data);
-
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (multiCameraPollRef.current) {
-              clearInterval(multiCameraPollRef.current);
-              multiCameraPollRef.current = null;
-            }
-            // Reload model after completion
-            if (data.status === 'completed') {
-              setTimeout(() => loadModel(), 500);
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to poll multi-camera job status:', e);
-      }
-    };
-
-    pollStatus();
-    multiCameraPollRef.current = setInterval(pollStatus, 500);
-
-    return () => {
-      if (multiCameraPollRef.current) {
-        clearInterval(multiCameraPollRef.current);
-        multiCameraPollRef.current = null;
-      }
-    };
-  }, [multiCameraJobId, loadModel]);
-
-  // Poll vector job status
-  useEffect(() => {
-    if (!vectorJobId) {
-      if (vectorPollRef.current) {
-        clearInterval(vectorPollRef.current);
-        vectorPollRef.current = null;
-      }
-      return;
-    }
-
-    const pollStatus = async () => {
-      try {
-        const res = await fetch(`/backend/calibration/vectors/status/${vectorJobId}`);
-        const data = await res.json();
-
-        if (res.ok) {
-          setVectorJobStatus(data);
-
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (vectorPollRef.current) {
-              clearInterval(vectorPollRef.current);
-              vectorPollRef.current = null;
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to poll vector job status:', e);
-      }
-    };
-
-    pollStatus();
-    vectorPollRef.current = setInterval(pollStatus, 500);
-
-    return () => {
-      if (vectorPollRef.current) {
-        clearInterval(vectorPollRef.current);
-        vectorPollRef.current = null;
-      }
-    };
-  }, [vectorJobId]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
-      if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-      if (multiCameraPollRef.current) clearInterval(multiCameraPollRef.current);
-      if (vectorPollRef.current) clearInterval(vectorPollRef.current);
-    };
+  useEffect(() => () => {
+    if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+    if (vectorPollRef.current) clearInterval(vectorPollRef.current);
   }, []);
 
   return {
-    // Source selection
-    sourcePathIdx,
-    setSourcePathIdx,
-    camera,
-    setCamera,
-
-    // Image config
-    imageFormat,
-    setImageFormat,
-    imageType,
-    setImageType,
-    numImages,
-    setNumImages,
-    calibrationSources,
-    setCalibrationSources,
-    useCameraSubfolders,
-    setUseCameraSubfolders,
-    cameraSubfolders,
-    setCameraSubfolders,
-
-    // Grid params (pattern cols/rows auto-detected)
-    dotSpacingMm,
-    setDotSpacingMm,
-    dt,
-    setDt,
-    datumFrame,
-    setDatumFrame,
-
-    // Validation
-    validation,
-    validating,
-    validateImages,
-
-    // Single camera job tracking
-    jobId,
-    jobStatus,
-    isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
-
-    // Multi-camera job tracking
-    multiCameraJobId,
-    multiCameraJobStatus,
-    isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
-
-    // Vector calibration job tracking
-    vectorJobId,
-    vectorJobStatus,
-    isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
-
-    // Model and detections
-    cameraModel,
-    detections,
-    modelLoading,
-    modelLoadError,
-    hasModel: cameraModel !== null,
-
-    // Model type
-    modelType,
-    setModelType,
-
-    // Overlay toggle
-    showOverlay,
-    setShowOverlay,
-
-    // Actions
-    generateCameraModel,
-    generateCameraModelAll,
-    loadModel,
-    calibrateVectors,
-
-    // Options (passthrough)
-    cameraOptions,
-    sourcePaths,
+    sourcePathIdx, setSourcePathIdx, camera, setCamera,
+    imageFormat, setImageFormat, imageType, setImageType, numImages, setNumImages,
+    calibrationSources, setCalibrationSources, useCameraSubfolders, setUseCameraSubfolders,
+    cameraSubfolders, setCameraSubfolders,
+    dotSpacingMm, setDotSpacingMm, dt, setDt, datumFrame, setDatumFrame,
+    validation, validating, validateImages,
+    jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
+    multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
+    vectorJobStatus, isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
+    cameraModel, detections, modelLoading, modelLoadError, hasModel: cameraModel !== null,
+    loadedWorldFrame, persistWorldFrame,
+    showOverlay, setShowOverlay,
+    generateCameraModel, generateCameraModelAll, loadModel, calibrateVectors, detectFrame,
+    cameraOptions, sourcePaths,
   };
 }

@@ -18,6 +18,11 @@ import {
   getGlobalCoordViewerTarget,
   handleGlobalCoordPointSelect,
 } from "@/components/setup/GlobalCoordinateSetup";
+import {
+  useWorldFrame,
+  WorldFrameControls,
+  getWorldFrameMarkers,
+} from "@/components/setup/WorldFrameSetup";
 
 interface DotboardCalibrationProps {
   config: any;
@@ -70,8 +75,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     setDt,
     datumFrame,
     setDatumFrame,
-    modelType,
-    setModelType,
 
     // Validation
     validation,
@@ -100,17 +103,46 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     showOverlay,
     setShowOverlay,
 
+    // Model restore
+    loadedWorldFrame,
+    persistWorldFrame,
+
     // Actions
     generateCameraModel,
     generateCameraModelAll,
-    loadModel,
     calibrateVectors,
+    detectFrame,
   } = calibration;
+
+  // Track the frame currently shown in the viewer (1-based, matches datumFrame).
+  // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
+  const [currentFrame, setCurrentFrame] = useState<number>(Number(datumFrame) || 1);
+  const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
+  const datumNum = Number(datumFrame) || 1;
+  const onDatumFrame = currentFrame === datumNum;
 
   // Global coordinate system — pass calibrationSources so stale features reset on source change
   const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
+
+  // World-frame (coordinate-system x,y) picker — datum frame only.
+  const wf = useWorldFrame({
+    board: "dotboard", camera, sourcePathIdx, datumFrame,
+    boardParams: () => ({ dot_spacing_mm: dotSpacingMm }),
+    imageFormat, imageType,
+  });
+  const wfIsSelecting = onDatumFrame && wf.mode !== "none";
+
+  // When a saved model loads, restore its world frame (origin/+X/+Y + origin mm) and
+  // show the detected dots — so an existing model presents fully without re-picking.
+  React.useEffect(() => {
+    if (!hasModel) return;
+    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
+    detectFrame(currentFrame);
+    setShowOverlay(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasModel, loadedWorldFrame]);
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -466,17 +498,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 />
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
-              <div>
-                <label className="text-sm font-medium">Model Type</label>
-                <Select value={modelType} onValueChange={setModelType}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pinhole">Pinhole (OpenCV)</SelectItem>
-                    <SelectItem value="polynomial">Polynomial (3rd-order bivariate)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground mt-1">Pinhole for multi-image 3D setups; polynomial is a single-image 2D fit (datum only)</p>
-              </div>
             </div>
           </div>
 
@@ -507,34 +528,51 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             </div>
           )}
 
-          {/* Section 6: Image Viewer with Overlay Support */}
+          {/* Section 6: Image Viewer with Overlay + world-frame / global-coords picking */}
           {showImageViewer && validation?.valid && (
             <CalibrationImageViewer
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
-              camera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+              camera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
               numImages={parseInt(numImages) || 10}
               calibrationType="dotboard"
               refreshKey={`${validation?.camera_path}-${validation?.valid}`}
-              calibrationParams={{
-                // NOTE: pattern_cols/rows removed - auto-detected
-              }}
+              onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
-              pointSelectMode={gcIsSelecting}
-              onPointSelect={(px, py, cam, frame) => handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
-              selectedMarkers={getGlobalCoordMarkers(gc, gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera, 1)}
-              externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
-              externalFrame={gcIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+              pointSelectMode={wfIsSelecting || gcIsSelecting}
+              onPointSelect={(px, py, cam, frame) =>
+                wfIsSelecting ? wf.handlePoint(px, py) : handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
+              selectedMarkers={[
+                ...(onDatumFrame ? getWorldFrameMarkers(wf) : []),
+                ...(gcIsSelecting ? getGlobalCoordMarkers(gc, gcViewerTarget ? gcViewerTarget.camera : camera, 1) : []),
+              ]}
+              externalCamera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+              externalFrame={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
               detectionLoading={modelLoading}
               settingsBarExtras={
-                <GCInlineControls
-                  gc={gc}
-                  currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
-                  cameraOptions={cameraOptions}
-                  onCameraChange={setCamera}
-                />
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    variant="outline" size="sm" disabled={wf.busy}
+                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame); setShowOverlay(true); }}
+                  >
+                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
+                  </Button>
+                  {onDatumFrame ? (
+                    <WorldFrameControls wf={wf} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">World frame is set on the datum frame ({datumNum}).</span>
+                  )}
+                  {cameraOptions.length > 1 && (
+                    <GCInlineControls
+                      gc={gc}
+                      currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+                      cameraOptions={cameraOptions}
+                      onCameraChange={setCamera}
+                    />
+                  )}
+                </div>
               }
             />
           )}
@@ -544,8 +582,9 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             {/* Unified Action Row */}
             <div className="flex gap-2 items-center flex-wrap">
               <Button
-                onClick={() => generateCameraModelAll()}
-                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid}
+                onClick={async () => { await generateCameraModelAll(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
+                title={!wf.complete ? "Set the world frame first: Detect Dots → Origin → +X → +Y" : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {(isCalibrating || isMultiCameraCalibrating) ? (
@@ -554,24 +593,20 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                     Generating...
                   </>
                 ) : (
-                  'Generate Model'
+                  cameraOptions.length > 1 ? 'Generate Model (All Cameras)' : 'Generate Model'
                 )}
               </Button>
 
-              <Button
-                onClick={loadModel}
-                disabled={modelLoading}
-                variant="outline"
-              >
-                {modelLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  'Load Saved'
-                )}
-              </Button>
+              {cameraOptions.length > 1 && (
+                <Button
+                  onClick={async () => { await generateCameraModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
+                  title={!wf.complete ? "Set the world frame first: Detect Dots → Origin → +X → +Y" : undefined}
+                  variant="outline"
+                >
+                  This Camera Only
+                </Button>
+              )}
 
               {/* Calibrate Vectors with type selection */}
               <div className="flex items-center gap-1">
@@ -617,6 +652,12 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 )}
               </Button>
             </div>
+
+            {validation?.valid && !wf.complete && (
+              <p className="text-xs text-muted-foreground">
+                Set the coordinate frame before generating: open the viewer, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+              </p>
+            )}
 
             {modelLoadError && (
               <div className="text-sm text-red-600 flex items-center gap-1">
@@ -825,61 +866,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {cameraModel.model_type === "polynomial" ? (
-              <div className="grid md:grid-cols-2 gap-6">
-                {/* Polynomial Parameters */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold mb-2">Polynomial Parameters</h4>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Scale:</span>
-                      <span className="ml-2 font-medium">{cameraModel.mm_per_pixel?.toFixed(6)} mm/px</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Image Size:</span>
-                      <span className="ml-2 font-medium">{cameraModel.image_width} × {cameraModel.image_height}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Origin (x):</span>
-                      <span className="ml-2 font-medium">{cameraModel.origin_x?.toFixed(2)} px</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Origin (y):</span>
-                      <span className="ml-2 font-medium">{cameraModel.origin_y?.toFixed(2)} px</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Calibration Quality */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">RMS Error:</span>
-                      <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Images Used:</span>
-                      <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Polynomial Coefficients */}
-                <div>
-                  <h4 className="text-sm font-semibold mb-2">X Coefficients ({cameraModel.coefficients_x?.length ?? 0}-term)</h4>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    [{cameraModel.coefficients_x?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
-                  </div>
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold mb-2">Y Coefficients ({cameraModel.coefficients_y?.length ?? 0}-term)</h4>
-                  <div className="font-mono text-xs bg-muted p-2 rounded">
-                    [{cameraModel.coefficients_y?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
-                  </div>
-                </div>
-              </div>
-            ) : (
+            {(
               <div className="grid md:grid-cols-2 gap-6">
                 {/* Camera Matrix */}
                 <div>

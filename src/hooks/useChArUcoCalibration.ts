@@ -1,21 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-export interface ChArUcoConfig {
-  source_path_idx?: number;
-  camera?: number;
-  // file_pattern removed - uses unified calibration.image_format
-  squares_h?: number;
-  squares_v?: number;
-  square_size?: number;
-  marker_ratio?: number;
-  aruco_dict?: string;
-  min_corners?: number;
-  dt?: number;
-  model_type?: string;
-}
-
 /**
- * Detection data for a single frame
+ * Detection data for a single frame (on-demand overlay).
  */
 export interface FrameDetection {
   grid_points: [number, number][];
@@ -25,37 +11,30 @@ export interface FrameDetection {
 }
 
 /**
- * Camera model from ChArUco calibration
+ * Camera model shaped for the v1 results card.
  */
 export interface CameraModel {
-  camera_matrix: number[][];
-  dist_coeffs: number[];
-  focal_length: [number, number];
-  principal_point: [number, number];
+  model_type?: "pinhole";
+  camera_matrix?: number[][];
+  dist_coeffs?: number[];
+  focal_length?: [number, number];
+  principal_point?: [number, number];
+  image_width?: number;
+  image_height?: number;
   reprojection_error: number;
   num_images_used: number;
-  rvecs?: number[][];
-  tvecs?: number[][];
-  dot_spacing_mm?: number;
 }
 
-export interface ChArUcoCalibrationState {
-  sourcePathIdx: number;
-  camera: number;
-  // filePattern removed - uses unified calibration.image_format
-  squaresH: string;
-  squaresV: string;
-  squareSize: string;
-  markerRatio: string;
-  arucoDict: string;
-  minCorners: string;
-  dt: string;
-  calibrating: boolean;
-  jobId: string | null;
+/** World-frame clicks (image-down pixels) defining origin/+X/+Y. */
+export interface WorldFrameClicks {
+  origin: [number, number];
+  x_axis: [number, number];
+  y_axis: [number, number];
+  origin_mm: [number, number];
 }
 
 /**
- * Validation result for a single camera
+ * Validation result (matches the calibration2 /validate shape).
  */
 export interface CharucoValidationResult {
   valid: boolean;
@@ -73,8 +52,21 @@ export interface CharucoValidationResult {
 }
 
 /**
- * Multi-camera job status
+ * Synchronous-generate status, kept in the v1 `JobStatus` shape so the existing
+ * progress/result JSX renders unchanged.
  */
+export interface JobStatus {
+  status: 'starting' | 'running' | 'completed' | 'failed';
+  progress: number;
+  processed_images: number;
+  valid_images: number;
+  total_images: number;
+  error?: string;
+  rms_error?: number;
+  num_images_used?: number;
+  warnings?: string[];
+}
+
 export interface GlobalAlignmentResult {
   status: 'completed' | 'failed' | 'skipped';
   error?: string;
@@ -88,7 +80,11 @@ export interface MultiCameraJobStatus {
   processed_cameras: number;
   total_cameras: number;
   current_camera?: number;
-  camera_results?: Record<string, { status: string; error?: string }> & {
+  current_camera_progress?: number;
+  processed_images?: number;
+  total_images?: number;
+  valid_images?: number;
+  camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string; warnings?: string[] }> & {
     global_alignment?: GlobalAlignmentResult;
   };
   camera_progress?: Record<number, { current: number; total: number; message?: string }>;
@@ -112,32 +108,25 @@ export const ARUCO_DICTS = [
   "DICT_6X6_1000",
 ];
 
+const BOARD = 'charuco';
+
 /**
- * Hook for managing ChArUco board calibration state and operations.
- * Self-contained: fetches config from backend, manages all state internally.
- * @param cameraOptions Array of available camera numbers.
- * @param sourcePaths Array of available source paths.
+ * ChArUco calibration on the calibration2 (pinhole, no-coordinate-flip) backend.
+ *
+ * Mirrors `useDotboardCalibration`: the calibration2 `generate_model` is synchronous,
+ * so we synthesise the v1 `JobStatus`/`MultiCameraJobStatus` around the awaited call.
+ * Image-source config persists to `config.calibration`; board params to
+ * `config.calibration2.charuco`. The optional world frame is passed as `clicks`.
  */
 export function useChArUcoCalibration(
   cameraOptions: number[],
-  sourcePaths: string[]
+  sourcePaths: string[],
 ) {
-  // --- State Initialization ---
-  const [sourcePathIdx, setSourcePathIdx] = useState<number>(0);
+  // Source selection
+  const [sourcePathIdx, setSourcePathIdx] = useState(0);
+  const [camera, setCamera] = useState(1);
 
-  const [camera, setCamera] = useState<number>(1);
-  const [squaresH, setSquaresH] = useState<string>("10");
-  const [squaresV, setSquaresV] = useState<string>("9");
-  const [squareSize, setSquareSize] = useState<string>("0.03");
-  const [markerRatio, setMarkerRatio] = useState<string>("0.5");
-  const [arucoDict, setArucoDict] = useState<string>("DICT_4X4_1000");
-  const [minCorners, setMinCorners] = useState<string>("6");
-  const [dt, setDt] = useState<string>("1.0");
-  const [modelType, setModelType] = useState<string>("pinhole");
-  const [calibrating, setCalibrating] = useState<boolean>(false);
-  const [jobId, setJobId] = useState<string | null>(null);
-
-  // Image config (saved to config)
+  // Image config (persists to config.calibration)
   const [imageFormat, setImageFormat] = useState('calib%05d.tif');
   const [imageType, setImageType] = useState('standard');
   const [numImages, setNumImages] = useState<string>("10");
@@ -145,555 +134,368 @@ export function useChArUcoCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Validation state
+  // Board params (persist to config.calibration2.charuco) — kept as strings for inputs.
+  const [squaresH, setSquaresH] = useState<string>("10");
+  const [squaresV, setSquaresV] = useState<string>("9");
+  const [squareSize, setSquareSize] = useState<string>("0.03");  // meters
+  const [markerRatio, setMarkerRatio] = useState<string>("0.5");
+  const [arucoDict, setArucoDict] = useState<string>("DICT_4X4_1000");
+  const [minCorners, setMinCorners] = useState<string>("6");
+  const [dt, setDt] = useState<string>("1.0");
+  const [datumFrame, setDatumFrame] = useState<string>("1");
+
+  // Validation
   const [validation, setValidation] = useState<CharucoValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Camera model and detections (like dotboard)
+  // Synchronous generate status (v1 shape)
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
+  const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);
+  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
+  const [vectorJobId, setVectorJobId] = useState<string | null>(null);
+
+  // Model + on-demand detections (overlay)
   const [cameraModel, setCameraModel] = useState<CameraModel | null>(null);
+  const [loadedWorldFrame, setLoadedWorldFrame] = useState<any>(null);
   const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
-
-  // Overlay toggle
   const [showOverlay, setShowOverlay] = useState(true);
 
-  // Load results state (kept for backwards compat)
-  const [loadingResults, setLoadingResults] = useState<boolean>(false);
-  const [calibrationResults, setCalibrationResults] = useState<any>(null);
-
-  // Vector calibration job tracking
-  const [vectorJobId, setVectorJobId] = useState<string | null>(null);
-  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
-
-  // Guard: prevent auto-save/validate from firing before initial config load completes
   const configLoadedRef = useRef(false);
-
-  // --- Refs for Debouncing ---
+  const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load config on mount
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        // Load calibration image settings
-        const calRes = await fetch('/backend/calibration/config');
-        if (calRes.ok) {
-          const calData = await calRes.json();
-          if (calData.image_format) setImageFormat(calData.image_format);
-          if (calData.image_type) setImageType(calData.image_type);
-          if (calData.num_images) setNumImages(String(calData.num_images));
-          if (calData.calibration_sources !== undefined) setCalibrationSources(calData.calibration_sources);
-          if (calData.use_camera_subfolders !== undefined) setUseCameraSubfolders(calData.use_camera_subfolders);
-          if (calData.camera_subfolders !== undefined) setCameraSubfolders(calData.camera_subfolders);
-        }
+  const boardParams = useCallback(() => ({
+    squares_h: parseInt(squaresH) || 10,
+    squares_v: parseInt(squaresV) || 9,
+    square_size: parseFloat(squareSize) || 0.03,
+    marker_ratio: parseFloat(markerRatio) || 0.5,
+    aruco_dict: arucoDict,
+    min_corners: parseInt(minCorners) || 6,
+  }), [squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
 
-        // Load charuco-specific settings
-        const cfgRes = await fetch('/backend/config');
-        if (cfgRes.ok) {
-          const cfgData = await cfgRes.json();
-          const charuco = cfgData.calibration?.charuco || {};
-          if (charuco.source_path_idx !== undefined) setSourcePathIdx(charuco.source_path_idx);
-          if (charuco.camera !== undefined) setCamera(charuco.camera);
-          if (charuco.squares_h !== undefined) setSquaresH(String(charuco.squares_h));
-          if (charuco.squares_v !== undefined) setSquaresV(String(charuco.squares_v));
-          if (charuco.square_size !== undefined) setSquareSize(String(charuco.square_size));
-          if (charuco.marker_ratio !== undefined) setMarkerRatio(String(charuco.marker_ratio));
-          if (charuco.aruco_dict) setArucoDict(charuco.aruco_dict);
-          if (charuco.min_corners !== undefined) setMinCorners(String(charuco.min_corners));
-          if (charuco.dt !== undefined) setDt(String(charuco.dt));
-          if (charuco.model_type) setModelType(charuco.model_type);
+  const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
+  const datumFrameNum = useCallback(() => parseInt(datumFrame) || 1, [datumFrame]);
+
+  // Validate the image source via calibration2 (all formats).
+  const validateImages = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch('/backend/calibration2/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera, source_path_idx: sourcePathIdx,
+          image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
+        }),
+      });
+      setValidation(await res.json());
+    } catch (e) {
+      setValidation({ valid: false, found_count: 0, error: String(e) });
+    } finally {
+      setValidating(false);
+    }
+  }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal]);
+
+  // Load config on mount, then validate.
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/backend/config');
+        if (res.ok) {
+          const cfg = await res.json();
+          const cal = cfg.calibration || {};
+          if (cal.image_format) setImageFormat(cal.image_format);
+          if (cal.image_type) setImageType(cal.image_type);
+          if (cal.num_images) setNumImages(String(cal.num_images));
+          if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
+          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
+          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
+          const c2 = cfg.calibration2 || {};
+          const ch = c2.charuco || {};
+          if (ch.squares_h !== undefined) setSquaresH(String(ch.squares_h));
+          if (ch.squares_v !== undefined) setSquaresV(String(ch.squares_v));
+          if (ch.square_size !== undefined) setSquareSize(String(ch.square_size));
+          if (ch.marker_ratio !== undefined) setMarkerRatio(String(ch.marker_ratio));
+          if (ch.aruco_dict) setArucoDict(ch.aruco_dict);
+          if (ch.min_corners !== undefined) setMinCorners(String(ch.min_corners));
+          if (c2.dt) setDt(String(c2.dt));
+          if (c2.datum_frame) setDatumFrame(String(c2.datum_frame));
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
       configLoadedRef.current = true;
-
-      // Run initial validation
-      setValidating(true);
-      try {
-        const valRes = await fetch('/backend/calibration/validate_images', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path_idx: sourcePathIdx, camera }),
-        });
-        const valData = await valRes.json();
-        setValidation(valData);
-      } catch (e) {
-        console.error('Initial validation failed:', e);
-      } finally {
-        setValidating(false);
-      }
+      setConfigLoaded(true);
+      validateImages();
     };
-    loadConfig();
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Validate images
-  const validateImages = useCallback(async () => {
-    setValidating(true);
-    try {
-      const res = await fetch('/backend/calibration/validate_images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-        }),
-      });
-
-      const data = await res.json();
-      setValidation(data);
-    } catch (e) {
-      console.error('Validation failed:', e);
-      setValidation({
-        valid: false,
-        found_count: 0,
-        error: String(e),
-      });
-    } finally {
-      setValidating(false);
-    }
-  }, [sourcePathIdx, camera]);
-
-  // Save config (debounced), then validate after save completes
+  // Persist config (debounced), then validate.
   const saveConfig = useCallback(() => {
-    if (configDebounceRef.current) {
-      clearTimeout(configDebounceRef.current);
-    }
-
+    if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
-      const squaresHNum = Number(squaresH);
-      const squaresVNum = Number(squaresV);
-      const squareSizeNum = Number(squareSize);
-      const markerRatioNum = Number(markerRatio);
-      const minCornersNum = Number(minCorners);
-      const dtNum = Number(dt);
-
-      const valid =
-        !isNaN(squaresHNum) && squaresH !== "" &&
-        !isNaN(squaresVNum) && squaresV !== "" &&
-        !isNaN(squareSizeNum) && squareSize !== "" &&
-        !isNaN(markerRatioNum) && markerRatio !== "" &&
-        !isNaN(minCornersNum) && minCorners !== "" &&
-        !isNaN(dtNum) && dt !== "";
-
-      if (!valid) return;
-
       try {
-        // Save calibration image settings
-        await fetch('/backend/calibration/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_format: imageFormat,
-            image_type: imageType,
-            num_images: parseInt(numImages) || 10,
-            calibration_sources: calibrationSources,
-            use_camera_subfolders: useCameraSubfolders,
-            camera_subfolders: cameraSubfolders,
-          }),
-        });
-
-        // Save charuco-specific settings
         await fetch('/backend/update_config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             calibration: {
-              charuco: {
-                source_path_idx: sourcePathIdx,
-                camera: camera,
-                squares_h: squaresHNum,
-                squares_v: squaresVNum,
-                square_size: squareSizeNum,
-                marker_ratio: markerRatioNum,
-                aruco_dict: arucoDict,
-                min_corners: minCornersNum,
-                dt: dtNum,
-                model_type: modelType,
-              },
+              image_format: imageFormat,
+              image_type: imageType,
+              num_images: frameTotal(),
+              calibration_sources: calibrationSources,
+              use_camera_subfolders: useCameraSubfolders,
+              camera_subfolders: cameraSubfolders,
+            },
+            calibration2: {
+              active: BOARD, dt: parseFloat(dt) || 1.0, datum_frame: datumFrameNum(),
+              charuco: boardParams(),
             },
           }),
         });
-      } catch (err) {
-        console.error("Failed to save charuco config:", err);
+      } catch (e) {
+        console.error('Failed to save config:', e);
       }
-
-      // Validate after save completes so backend has current config
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders, sourcePathIdx, camera, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners, dt, modelType, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrameNum, boardParams, validateImages]);
 
-  // Auto-save (and validate) when params change (skip until initial config load completes)
   useEffect(() => {
     if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
 
-  // --- Job status hook ---
-  const useJobStatus = (jobId: string | null) => {
-    const [status, setStatus] = useState<string>("not_started");
-    const [details, setDetails] = useState<any>(null);
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
-    const pollStartTimeRef = useRef<number>(0);
-    const MAX_POLL_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+  // Map a calibration2 mono model/generate response to the v1 card shape.
+  const toCameraModel = (d: any): CameraModel => ({
+    model_type: 'pinhole',
+    camera_matrix: d.camera_matrix,
+    dist_coeffs: d.dist_coeffs,
+    focal_length: [d.fx, d.fy],
+    principal_point: [d.cx, d.cy],
+    image_width: d.image_width,
+    image_height: d.image_height,
+    reprojection_error: d.rms,
+    num_images_used: d.num_images_used ?? (d.per_view_rms?.length ?? 0),
+  });
 
-    useEffect(() => {
-      if (!jobId) {
-        setStatus("not_started");
-        setDetails(null);
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-        return;
-      }
-      let active = true;
-      pollStartTimeRef.current = Date.now();
-      const fetchStatus = async () => {
-        try {
-          const res = await fetch(`/backend/calibration/charuco/status/${jobId}`);
-          const data = await res.json();
-          if (active) {
-            setStatus(data.status || "not_started");
-            setDetails(data);
-            // Safety timeout: stop polling if exceeded max duration
-            if (Date.now() - pollStartTimeRef.current > MAX_POLL_DURATION_MS) {
-              if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-              }
-              setStatus("error");
-              return;
-            }
-            // Stop polling only on terminal status (not progress >= 100)
-            if (data.status === "completed" || data.status === "failed") {
-              if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-              }
-            } else if (data.status === "running" || data.status === "starting") {
-              if (!intervalRef.current) {
-                intervalRef.current = setInterval(fetchStatus, 500);
-              }
-            }
-          }
-        } catch {
-          if (active) setStatus("not_started");
-          if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-          }
-        }
-      };
-      fetchStatus();
-      return () => {
-        active = false;
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      };
-    }, [jobId]);
-    return { status, details };
-  };
+  // Generate the model for one camera (synchronous); optional world-frame clicks.
+  const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
+    const res = await fetch('/backend/calibration2/generate_model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stereo: false, camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), datum_frame: datumFrameNum(), frame_total: frameTotal(),
+        image_format: imageFormat, image_type: imageType,
+        clicks: clicks || undefined,
+      }),
+    });
+    return res.json();
+  }, [sourcePathIdx, boardParams, datumFrameNum, frameTotal, imageFormat, imageType]);
 
-  const { status: jobStatus, details: jobDetails } = useJobStatus(jobId);
-
-  // --- Start calibration ---
-  const startCalibration = async () => {
-    setCalibrating(true);
+  // Single-camera generate.
+  const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
+    setJobStatus({ status: 'running', progress: 0, processed_images: 0, valid_images: 0, total_images: frameTotal() });
     try {
-      const response = await fetch('/backend/calibration/charuco/calibrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          camera: camera,
-          model_type: modelType,
-        })
-      });
-      const result = await response.json();
-      if (response.ok) {
-        console.log(`ChArUco calibration started! Job ID: ${result.job_id}`);
-        setJobId(result.job_id);
-      } else {
-        throw new Error(result.error || "Failed to start ChArUco calibration");
-      }
-    } catch (e: any) {
-      console.error(`Error starting ChArUco calibration: ${e.message}`);
-    } finally {
-      setCalibrating(false);
-    }
-  };
-
-  // --- Calibrate all cameras ---
-  const calibrateAllCameras = async () => {
-    setCalibrating(true);
-    try {
-      const response = await fetch('/backend/calibration/charuco/calibrate_all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          model_type: modelType,
-        })
-      });
-      const result = await response.json();
-      if (response.ok) {
-        console.log(`ChArUco calibration started for all cameras! Job ID: ${result.job_id}`);
-        setJobId(result.job_id);
-      } else {
-        throw new Error(result.error || "Failed to start ChArUco calibration");
-      }
-    } catch (e: any) {
-      console.error(`Error starting ChArUco calibration: ${e.message}`);
-    } finally {
-      setCalibrating(false);
-    }
-  };
-
-  // --- Vector calibration for single or all cameras ---
-  const calibrateVectors = useCallback(async (
-    forAllCameras: boolean = false,
-    typeName: string = 'instantaneous'
-  ) => {
-    try {
-      const body: Record<string, unknown> = {
-        source_path_idx: sourcePathIdx,
-        type_name: typeName,
-      };
-
-      if (forAllCameras) {
-        body.cameras = cameraOptions;
-      } else {
-        body.camera = camera;
-      }
-
-      const res = await fetch('/backend/calibration/vectors/calibrate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-      if (data.job_id) {
-        setVectorJobId(data.job_id);
-        setVectorJobStatus({
-          status: 'starting',
-          processed_cameras: 0,
-          total_cameras: data.cameras?.length || 1,
+      const data = await generateOne(camera, clicks);
+      if (data.success) {
+        setCameraModel(toCameraModel(data));
+        setJobStatus({
+          status: 'completed', progress: 100,
+          processed_images: frameTotal(), valid_images: data.per_view_rms?.length ?? 0,
+          total_images: frameTotal(), rms_error: data.rms, num_images_used: data.num_images_used,
         });
       } else {
-        console.error('Failed to start vector calibration:', data.error);
+        setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
       }
     } catch (e) {
-      console.error('Vector calibration error:', e);
+      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: String(e) });
     }
-  }, [sourcePathIdx, camera, cameraOptions]);
+  }, [camera, frameTotal, generateOne]);
 
-  // --- Load saved camera model and detections ---
+  // All-cameras generate (loops camera_numbers; v1 behaviour).
+  const generateCameraModelAll = useCallback(async (clicks?: WorldFrameClicks | null) => {
+    const cams = cameraOptions.length ? cameraOptions : [camera];
+    const results: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string }> = {};
+    setMultiCameraJobStatus({ status: 'running', processed_cameras: 0, total_cameras: cams.length });
+    for (let i = 0; i < cams.length; i++) {
+      const cam = cams[i];
+      setMultiCameraJobStatus({ status: 'running', processed_cameras: i, total_cameras: cams.length, current_camera: cam, camera_results: { ...results } });
+      try {
+        // World frame is defined on camera 1's view; pass clicks only there.
+        const data = await generateOne(cam, cam === cams[0] ? clicks : null);
+        results[`Camera ${cam}`] = data.success
+          ? { status: 'completed', rms_error: data.rms, num_images_used: data.num_images_used }
+          : { status: 'failed', error: data.error };
+        if (data.success && cam === camera) setCameraModel(toCameraModel(data));
+      } catch (e) {
+        results[`Camera ${cam}`] = { status: 'failed', error: String(e) };
+      }
+    }
+    setMultiCameraJobStatus({ status: 'completed', processed_cameras: cams.length, total_cameras: cams.length, camera_results: results });
+  }, [cameraOptions, camera, generateOne]);
+
+  // Load the saved model for the current camera (auto-called on mount/view change).
   const loadModel = useCallback(async () => {
     setModelLoading(true);
-    setLoadingResults(true);
     setModelLoadError(null);
     try {
-      const res = await fetch(
-        `/backend/calibration/charuco/load_results?source_path_idx=${sourcePathIdx}&camera=${camera}`
-      );
+      const res = await fetch(`/backend/calibration2/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
       const data = await res.json();
-
       if (res.ok && data.exists) {
-        // Set camera model
-        setCameraModel(data.camera_model);
-
-        // Convert frames array to detections record
-        // Backend returns: frames: [{ frame_index, corners, corner_ids }, ...]
-        // Also returns: board: { squares_h, squares_v, ... }
-        const board = data.board;
-        const innerCols = (board?.squares_h ?? 1) - 1;
-        const detectionsMap: Record<string, FrameDetection> = {};
-        if (data.frames) {
-          for (const frame of data.frames) {
-            // Derive grid_indices from corner_ids for grid line rendering
-            // ChArUco corner IDs are linearized: id = row * innerCols + col
-            const grid_indices = (frame.corner_ids && innerCols > 0)
-              ? frame.corner_ids.map((id: number) => {
-                  const col = id % innerCols;
-                  const row = Math.floor(id / innerCols);
-                  return [col, row] as [number, number];
-                })
-              : undefined;
-
-            detectionsMap[String(frame.frame_index)] = {
-              // Map corners to grid_points for CalibrationImageViewer compatibility
-              grid_points: frame.corners || [],
-              grid_indices,
-              corner_ids: frame.corner_ids,
-            };
-          }
-        }
-        setDetections(detectionsMap);
-
-        // Also set calibrationResults for backwards compatibility
-        setCalibrationResults(data);
-        setModelLoadError(null);
-
-        console.log(`Loaded ChArUco model with ${Object.keys(detectionsMap).length} detections`);
-        return true;
-      } else {
-        console.log('No saved ChArUco calibration results found');
-        setCameraModel(null);
-        setDetections({});
-        setModelLoadError(`No camera model found for Camera ${camera}. Generate a model first.`);
-        return false;
+        setCameraModel(toCameraModel(data));
+        setLoadedWorldFrame(data.world_frame ?? null);
+        return data;
       }
-    } catch (e: any) {
-      console.error(`Error loading ChArUco calibration: ${e.message}`);
-      setModelLoadError(`Failed to load model: ${e.message}`);
-      return false;
+      // No model yet is the normal first-use state — not an error.
+      setCameraModel(null);
+      setLoadedWorldFrame(null);
+      return null;
+    } catch (e) {
+      setModelLoadError(`Failed to load model: ${e}`);
+      return null;
     } finally {
       setModelLoading(false);
-      setLoadingResults(false);
     }
   }, [sourcePathIdx, camera]);
 
-  // Auto-load model after calibration completes
-  useEffect(() => {
-    if (jobStatus === 'completed') {
-      // Small delay to ensure backend has finished writing files
-      const timer = setTimeout(() => {
-        loadModel();
-      }, 500);
-      return () => clearTimeout(timer);
+  // Persist the picked world frame to config.yaml (calibration2.<board>.world_frame).
+  const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
+    if (!p) return;
+    try {
+      await fetch('/backend/update_config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calibration2: { [BOARD]: { world_frame: {
+            origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
+          } } },
+        }),
+      });
+    } catch (e) {
+      // Best-effort: the authoritative copy lives in model.mat.
     }
-  }, [jobStatus, loadModel]);
+  }, []);
 
-  // Poll vector job status
+  // Auto-load the saved model on mount (once config is loaded) and on camera/source change.
+  useEffect(() => {
+    if (!configLoaded) return;
+    setCameraModel(null);
+    setDetections({});
+    setModelLoadError(null);
+    loadModel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configLoaded, camera, sourcePathIdx]);
+
+  // On-demand board detection for the overlay on a given frame.
+  const detectFrame = useCallback(async (frame: number) => {
+    try {
+      const res = await fetch('/backend/calibration2/detect_frame', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera, source_path_idx: sourcePathIdx, frame, board: BOARD,
+          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDetections(prev => ({
+          ...prev,
+          [frame]: { grid_points: data.image_points, grid_indices: data.grid_indices },
+        }));
+      }
+    } catch (e) {
+      // Overlay is best-effort.
+    }
+  }, [camera, sourcePathIdx, boardParams, imageFormat, imageType]);
+
+  // Apply the calibration to PIV vectors over selected base paths (Phase D backend).
+  const calibrateVectors = useCallback(async (
+    _forAllCameras: boolean = true,
+    typeName: string = 'instantaneous',
+    activePaths?: number[],
+  ) => {
+    setVectorJobStatus({ status: 'starting', processed_cameras: 0, total_cameras: cameraOptions.length || 1 });
+    try {
+      const res = await fetch('/backend/calibration2/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
+          type_name: typeName, dt: parseFloat(dt) || 1.0,
+          // Omit active_paths → backend applies to all configured base paths.
+          ...(activePaths ? { active_paths: activePaths } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (data.job_id) setVectorJobId(data.job_id);
+      else setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: data.error });
+    } catch (e) {
+      setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: String(e) });
+    }
+  }, [sourcePathIdx, dt, cameraOptions]);
+
+  // Poll apply job.
   useEffect(() => {
     if (!vectorJobId) {
-      if (vectorPollRef.current) {
-        clearInterval(vectorPollRef.current);
-        vectorPollRef.current = null;
-      }
+      if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
       return;
     }
-
-    const pollStatus = async () => {
+    const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration/vectors/status/${vectorJobId}`);
+        const res = await fetch(`/backend/calibration2/apply/status/${vectorJobId}`);
         const data = await res.json();
-
         if (res.ok) {
-          setVectorJobStatus(data);
-
+          setVectorJobStatus({
+            status: data.status, processed_cameras: data.processed ?? 0, total_cameras: data.total ?? 1,
+            error: data.error,
+          });
           if (data.status === 'completed' || data.status === 'failed') {
-            if (vectorPollRef.current) {
-              clearInterval(vectorPollRef.current);
-              vectorPollRef.current = null;
-            }
+            if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
           }
         }
       } catch (e) {
-        console.error('Failed to poll vector job status:', e);
+        // best-effort polling
       }
     };
-
-    pollStatus();
-    vectorPollRef.current = setInterval(pollStatus, 500);
-
-    return () => {
-      if (vectorPollRef.current) {
-        clearInterval(vectorPollRef.current);
-        vectorPollRef.current = null;
-      }
-    };
+    poll();
+    vectorPollRef.current = setInterval(poll, 700);
+    return () => { if (vectorPollRef.current) clearInterval(vectorPollRef.current); };
   }, [vectorJobId]);
 
-  // Cleanup on unmount
+  // Keep the selected camera valid.
   useEffect(() => {
-    return () => {
-      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
-      if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
-      if (vectorPollRef.current) clearInterval(vectorPollRef.current);
-    };
+    if (cameraOptions.length > 0 && !cameraOptions.includes(camera)) {
+      setCamera(cameraOptions[0]);
+    }
+  }, [cameraOptions, camera]);
+
+  useEffect(() => () => {
+    if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+    if (vectorPollRef.current) clearInterval(vectorPollRef.current);
   }, []);
 
   return {
-    // State
-    sourcePathIdx,
-    camera,
-    squaresH,
-    squaresV,
-    squareSize,
-    markerRatio,
-    arucoDict,
-    minCorners,
-    dt,
-    calibrating,
-    jobId,
-    loadingResults,
-    calibrationResults,
-
-    // Image config
-    imageFormat,
-    setImageFormat,
-    imageType,
-    setImageType,
-    numImages,
-    setNumImages,
-    calibrationSources,
-    setCalibrationSources,
-    useCameraSubfolders,
-    setUseCameraSubfolders,
-    cameraSubfolders,
-    setCameraSubfolders,
-
-    // Validation
-    validation,
-    validating,
-
-    // Model and detections (like dotboard)
-    cameraModel,
-    detections,
-    modelLoading,
-    modelLoadError,
-    hasModel: cameraModel !== null,
-
-    // Overlay toggle
-    showOverlay,
-    setShowOverlay,
-
-    // Vector calibration job tracking
-    vectorJobId,
-    vectorJobStatus,
-    isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
-
-    // Setters
-    setSourcePathIdx,
-    setCamera,
-    setSquaresH,
-    setSquaresV,
-    setSquareSize,
-    setMarkerRatio,
-    setArucoDict,
-    setMinCorners,
-    setDt,
-    modelType,
-    setModelType,
-
-    // Computed
-    jobStatus,
-    jobDetails,
-    cameraOptions,
-    sourcePaths,
-
-    // Actions
-    startCalibration,
-    calibrateAllCameras,
-    loadModel,
-    calibrateVectors,
+    sourcePathIdx, setSourcePathIdx, camera, setCamera,
+    imageFormat, setImageFormat, imageType, setImageType, numImages, setNumImages,
+    calibrationSources, setCalibrationSources, useCameraSubfolders, setUseCameraSubfolders,
+    cameraSubfolders, setCameraSubfolders,
+    squaresH, setSquaresH, squaresV, setSquaresV, squareSize, setSquareSize,
+    markerRatio, setMarkerRatio, arucoDict, setArucoDict, minCorners, setMinCorners,
+    dt, setDt, datumFrame, setDatumFrame,
+    validation, validating, validateImages,
+    jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
+    multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
+    vectorJobStatus, isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
+    cameraModel, detections, modelLoading, modelLoadError, hasModel: cameraModel !== null,
+    loadedWorldFrame, persistWorldFrame,
+    showOverlay, setShowOverlay,
+    generateCameraModel, generateCameraModelAll, loadModel, calibrateVectors, detectFrame,
+    cameraOptions, sourcePaths,
   };
 }
