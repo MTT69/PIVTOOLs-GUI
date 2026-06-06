@@ -227,11 +227,11 @@ export function useStereoCharucoCalibration(
           const cal = cfg.calibration || {};
           if (cal.image_format) setImageFormat(cal.image_format);
           if (cal.image_type) setImageType(cal.image_type);
-          if (cal.num_images) setNumImages(String(cal.num_images));
+          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
           if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
           if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-          const c2 = cfg.calibration2 || {};
+          const c2 = cfg.calibration || {};
           const ch = c2.charuco || {};
           if (ch.squares_h !== undefined) setSquaresH(String(ch.squares_h));
           if (ch.squares_v !== undefined) setSquaresV(String(ch.squares_v));
@@ -268,12 +268,10 @@ export function useStereoCharucoCalibration(
             calibration: {
               image_format: imageFormat,
               image_type: imageType,
-              num_images: frameTotal(),
+              n_views: frameTotal(),
               calibration_sources: calibrationSources,
               use_camera_subfolders: useCameraSubfolders,
               camera_subfolders: cameraSubfolders,
-            },
-            calibration2: {
               active: 'stereo_charuco', dt, datum_frame: datumFrame,
               camera_pair: [cam1, cam2],
               charuco: boardParams(),
@@ -363,7 +361,7 @@ export function useStereoCharucoCalibration(
       await fetch('/backend/update_config', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          calibration2: { [BOARD]: { world_frame: {
+          calibration: { [BOARD]: { world_frame: {
             origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
           } } },
         }),

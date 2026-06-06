@@ -339,12 +339,12 @@ export function useStereoSteppedCalibration(
           const cal = cfg.calibration || {};
           if (cal.image_format) setImageFormat(cal.image_format);
           if (cal.image_type) setImageType(cal.image_type);
-          if (cal.num_images) setNumImages(String(cal.num_images));
+          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
           if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
           if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
 
-          const c2 = cfg.calibration2 || {};
+          const c2 = cfg.calibration || {};
           const sp = c2.stepped || {};
           if (sp.dot_spacing_mm) setDotSpacingMm(sp.dot_spacing_mm);
           if (sp.step_height_mm) setStepHeightMm(sp.step_height_mm);
@@ -415,12 +415,10 @@ export function useStereoSteppedCalibration(
             calibration: {
               image_format: imageFormat,
               image_type: imageType,
-              num_images: frameTotal(),
+              n_views: frameTotal(),
               calibration_sources: calibrationSources,
               use_camera_subfolders: useCameraSubfolders,
               camera_subfolders: cameraSubfolders,
-            },
-            calibration2: {
               active: 'stereo_stepped', dt, datum_frame: datumFrame,
               camera_pair: [cam1, cam2],
               // Shared physical board geometry (read by both stepped tabs).

@@ -193,11 +193,11 @@ export function useDotboardCalibration(
           const cal = cfg.calibration || {};
           if (cal.image_format) setImageFormat(cal.image_format);
           if (cal.image_type) setImageType(cal.image_type);
-          if (cal.num_images) setNumImages(String(cal.num_images));
+          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
           if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
           if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-          const c2 = cfg.calibration2 || {};
+          const c2 = cfg.calibration || {};
           if (c2.dotboard?.dot_spacing_mm) setDotSpacingMm(c2.dotboard.dot_spacing_mm);
           if (c2.dotboard?.model_type === 'polynomial' || c2.dotboard?.model_type === 'pinhole') setModelType(c2.dotboard.model_type);
           if (c2.dt) setDt(c2.dt);
@@ -226,12 +226,10 @@ export function useDotboardCalibration(
             calibration: {
               image_format: imageFormat,
               image_type: imageType,
-              num_images: frameTotal(),
+              n_views: frameTotal(),
               calibration_sources: calibrationSources,
               use_camera_subfolders: useCameraSubfolders,
               camera_subfolders: cameraSubfolders,
-            },
-            calibration2: {
               active: BOARD, dt, datum_frame: datumFrame,
               dotboard: { dot_spacing_mm: dotSpacingMm, model_type: modelType },
             },
@@ -371,7 +369,7 @@ export function useDotboardCalibration(
       await fetch('/backend/update_config', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          calibration2: { [BOARD]: { world_frame: {
+          calibration: { [BOARD]: { world_frame: {
             origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
           } } },
         }),
