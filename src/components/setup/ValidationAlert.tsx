@@ -5,8 +5,8 @@ import { PatternValidation } from "@/hooks/useConfigUpdate";
 
 /**
  * Base validation state that ValidationAlert accepts.
- * This is compatible with both ValidationState from useConfigUpdate
- * and PinholeValidationResult from useCalibrationValidation.
+ * This is compatible with ValidationState from useConfigUpdate and the
+ * per-board validation shapes returned by the calibration hooks.
  */
 interface BaseValidationState {
   valid: boolean;
