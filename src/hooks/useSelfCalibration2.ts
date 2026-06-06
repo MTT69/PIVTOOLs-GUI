@@ -50,7 +50,7 @@ export interface SC2Status {
  * base_path dataset, recovers the laser sheet (z_offset, tilt_x, tilt_y), writes it
  * into the stereo record (so apply uses it automatically), and saves six diagnostic
  * figures into the calibration source folder. The calibration2 counterpart of the v1
- * `useSelfCalibration`, repointed to `/calibration2/self_cal/*` with a base-path
+ * `useSelfCalibration`, repointed to `/calibration/self_cal/*` with a base-path
  * selector + filter toggle.
  */
 export function useSelfCalibration2(
@@ -101,7 +101,7 @@ export function useSelfCalibration2(
   // A served self-cal figure URL (cache-busted on result change via the figure list).
   const figureUrl = useCallback(
     (name: string) =>
-      `/backend/calibration2/self_cal/figure?name=${encodeURIComponent(name)}` +
+      `/backend/calibration/self_cal/figure?name=${encodeURIComponent(name)}` +
       `&board=${board}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
     [board, cam1, cam2, sourcePathIdx],
   );
@@ -125,7 +125,7 @@ export function useSelfCalibration2(
   const checkStatus = useCallback(async () => {
     try {
       const q = `stereo=1&board=${board}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`;
-      const res = await fetch(`/backend/calibration2/self_cal/result?${q}`);
+      const res = await fetch(`/backend/calibration/self_cal/result?${q}`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.has_self_calibration) {
@@ -167,7 +167,7 @@ export function useSelfCalibration2(
             body.tilt_y = src.tilt_y;
           }
         }
-        const res = await fetch('/backend/calibration2/self_cal/preview', {
+        const res = await fetch('/backend/calibration/self_cal/preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -202,7 +202,7 @@ export function useSelfCalibration2(
   const pollJob = useCallback(
     async (id: string) => {
       try {
-        const res = await fetch(`/backend/calibration2/self_cal/status/${id}`);
+        const res = await fetch(`/backend/calibration/self_cal/status/${id}`);
         if (!res.ok) return;
         const data = await res.json();
         setJobStatus(data.status);
@@ -249,7 +249,7 @@ export function useSelfCalibration2(
     setJobProgress(0);
     setJobStatus('starting');
     try {
-      const res = await fetch('/backend/calibration2/self_cal/run', {
+      const res = await fetch('/backend/calibration/self_cal/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -285,7 +285,7 @@ export function useSelfCalibration2(
   const saveManual = useCallback(
     async (zOffset: number, tiltXDeg: number, tiltYDeg: number) => {
       try {
-        const res = await fetch('/backend/calibration2/self_cal/save_manual', {
+        const res = await fetch('/backend/calibration/self_cal/save_manual', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -307,7 +307,7 @@ export function useSelfCalibration2(
 
   const clearSelfCal = useCallback(async () => {
     try {
-      const res = await fetch('/backend/calibration2/self_cal/clear', {
+      const res = await fetch('/backend/calibration/self_cal/clear', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(locator()),

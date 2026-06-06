@@ -31,7 +31,7 @@ type AxisDirX = "right" | "left";
 type AxisDirY = "up" | "down";
 type PickMode = "none" | "origin" | "measure";
 
-const BASE = "/backend/calibration2";
+const BASE = "/backend/calibration";
 
 export const ScaleFactorCalibration2: React.FC<ScaleFactorCalibration2Props> = ({
   config,

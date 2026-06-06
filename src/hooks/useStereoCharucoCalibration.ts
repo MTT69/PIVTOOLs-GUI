@@ -183,7 +183,7 @@ export function useStereoCharucoCalibration(
 
   // Validate one camera via calibration2 (all formats).
   const validateOne = useCallback(async (cam: number): Promise<CameraValidationResult> => {
-    const res = await fetch('/backend/calibration2/validate', {
+    const res = await fetch('/backend/calibration/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -305,7 +305,7 @@ export function useStereoCharucoCalibration(
   const generateStereoModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
     setJobStatus({ status: 'running', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: frameTotal(), stage: 'calibrating' });
     try {
-      const res = await fetch('/backend/calibration2/generate_model', {
+      const res = await fetch('/backend/calibration/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -336,7 +336,7 @@ export function useStereoCharucoCalibration(
   const loadModel = useCallback(async () => {
     setModelLoading(true);
     try {
-      const res = await fetch(`/backend/calibration2/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`);
+      const res = await fetch(`/backend/calibration/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`);
       const data = await res.json();
       if (res.ok && data.exists) {
         setStereoModel(toStereoModel(data));
@@ -385,7 +385,7 @@ export function useStereoCharucoCalibration(
   // On-demand board detection for the overlay on a given frame of a camera.
   const detectFrame = useCallback(async (frame: number, cam: number) => {
     try {
-      const res = await fetch('/backend/calibration2/detect_frame', {
+      const res = await fetch('/backend/calibration/detect_frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -414,7 +414,7 @@ export function useStereoCharucoCalibration(
   ) => {
     setReconstructJobStatus({ status: 'starting', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0 });
     try {
-      const res = await fetch('/backend/calibration2/apply', {
+      const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -440,7 +440,7 @@ export function useStereoCharucoCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration2/apply/status/${reconstructJobId}`);
+        const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
         const data = await res.json();
         if (res.ok) {
           setReconstructJobStatus({

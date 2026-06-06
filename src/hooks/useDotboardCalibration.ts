@@ -167,7 +167,7 @@ export function useDotboardCalibration(
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
-      const res = await fetch('/backend/calibration2/validate', {
+      const res = await fetch('/backend/calibration/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -280,7 +280,7 @@ export function useDotboardCalibration(
 
   // Generate the model for one camera (synchronous); optional world-frame clicks.
   const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
-    const res = await fetch('/backend/calibration2/generate_model', {
+    const res = await fetch('/backend/calibration/generate_model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -342,7 +342,7 @@ export function useDotboardCalibration(
     setModelLoading(true);
     setModelLoadError(null);
     try {
-      const res = await fetch(`/backend/calibration2/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
+      const res = await fetch(`/backend/calibration/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
       const data = await res.json();
       if (res.ok && data.exists) {
         setCameraModel(toCameraModel(data));
@@ -393,7 +393,7 @@ export function useDotboardCalibration(
   // On-demand board detection for the overlay on a given frame.
   const detectFrame = useCallback(async (frame: number) => {
     try {
-      const res = await fetch('/backend/calibration2/detect_frame', {
+      const res = await fetch('/backend/calibration/detect_frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -424,7 +424,7 @@ export function useDotboardCalibration(
   ) => {
     setVectorJobStatus({ status: 'starting', processed_cameras: 0, total_cameras: cameraOptions.length || 1 });
     try {
-      const res = await fetch('/backend/calibration2/apply', {
+      const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -450,7 +450,7 @@ export function useDotboardCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration2/apply/status/${vectorJobId}`);
+        const res = await fetch(`/backend/calibration/apply/status/${vectorJobId}`);
         const data = await res.json();
         if (res.ok) {
           setVectorJobStatus({

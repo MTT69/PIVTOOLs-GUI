@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const BASE = "/backend/calibration2";
+const BASE = "/backend/calibration";
 
 function qs(o: Record<string, unknown>): string {
   const p = new URLSearchParams();

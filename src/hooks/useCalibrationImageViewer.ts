@@ -73,7 +73,7 @@ export function useCalibrationImageViewer(
   // endpoint (a stereo "frame" is just camera N's frame), so the URL no longer
   // branches on calibrationType — only the camera number differs.
   const buildFrameUrl = useCallback((frameIdx: number) => {
-    return `${backendUrl}/calibration2/frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+    return `${backendUrl}/calibration/frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
   }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits]);
 
   // Cancel all prefetch requests

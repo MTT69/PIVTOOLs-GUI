@@ -10,7 +10,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * ('auto'|'same_side'|'transmission') — the backend derives same-side vs
  * transmission from the two clicked frames' relative handedness + per-camera
  * levels (S3 rule). Everything board-agnostic — validate, saved-model load,
- * figures, 3C reconstruct — uses the SAME generic `/calibration2/*` routes the
+ * figures, 3C reconstruct — uses the SAME generic `/calibration/*` routes the
  * stereo-dotboard tab uses (the stereo model dir is board-agnostic, so
  * `board="stepped"` is inert on those routes but kept for consistency).
  *
@@ -21,12 +21,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * clobber each other's per-camera maps (`update_config` deep-merges).
  *
  * Flow:
- *  1. POST /calibration2/stepped/detect_sequence       (cameras:[cam1,cam2]) -> sequence_id + job
- *  2. POST /calibration2/stepped/snap_fiducial          (origin/+X/+Y per camera = 6 steps)
- *  3. POST /calibration2/stepped/identify_pose_level    (label each non-datum pose, both cameras)
- *  4. POST /calibration2/stepped/generate_model         (stereo:true, cameras:{cam1,cam2}) -> job
- *  5. GET  /calibration2/model?stereo=1&board=stepped   (load saved stereo model)
- *  6. POST /calibration2/apply (stereo:true)            (reconstruct 3C vectors)
+ *  1. POST /calibration/stepped/detect_sequence       (cameras:[cam1,cam2]) -> sequence_id + job
+ *  2. POST /calibration/stepped/snap_fiducial          (origin/+X/+Y per camera = 6 steps)
+ *  3. POST /calibration/stepped/identify_pose_level    (label each non-datum pose, both cameras)
+ *  4. POST /calibration/stepped/generate_model         (stereo:true, cameras:{cam1,cam2}) -> job
+ *  5. GET  /calibration/model?stereo=1&board=stepped   (load saved stereo model)
+ *  6. POST /calibration/apply (stereo:true)            (reconstruct 3C vectors)
  */
 
 export interface FiducialSet {
@@ -304,7 +304,7 @@ export function useStereoSteppedCalibration(
   // ---------- Validate one camera (calibration2, all formats) ----------
   const validateOne = useCallback(async (cam: number): Promise<ValidationResult> => {
     try {
-      const res = await fetch('/backend/calibration2/validate', {
+      const res = await fetch('/backend/calibration/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -500,7 +500,7 @@ export function useStereoSteppedCalibration(
     setDetectionProgress(0);
 
     try {
-      const res = await fetch('/backend/calibration2/stepped/detect_sequence', {
+      const res = await fetch('/backend/calibration/stepped/detect_sequence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -521,7 +521,7 @@ export function useStereoSteppedCalibration(
         return;
       }
       const done = await pollJob(
-        `/backend/calibration2/stepped/detect_sequence/status/${data.job_id}`,
+        `/backend/calibration/stepped/detect_sequence/status/${data.job_id}`,
         (d) => { if (d.progress !== undefined) setDetectionProgress(d.progress); },
       );
       if (done.status === 'failed') {
@@ -566,7 +566,7 @@ export function useStereoSteppedCalibration(
         return null;
       }
       try {
-        const res = await fetch('/backend/calibration2/stepped/snap_fiducial', {
+        const res = await fetch('/backend/calibration/stepped/snap_fiducial', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sequence_id: sequenceId, camera: cam, click_x: clickX, click_y: clickY }),
@@ -626,7 +626,7 @@ export function useStereoSteppedCalibration(
 
     setFitJobStatus({ status: 'starting', progress: 0 });
     try {
-      const res = await fetch('/backend/calibration2/stepped/generate_model', {
+      const res = await fetch('/backend/calibration/stepped/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -654,7 +654,7 @@ export function useStereoSteppedCalibration(
         return;
       }
       const done = await pollJob(
-        `/backend/calibration2/stepped/generate_model/status/${data.job_id}`,
+        `/backend/calibration/stepped/generate_model/status/${data.job_id}`,
         (d) => setFitJobStatus(d),
       );
       setFitJobStatus(done);
@@ -692,7 +692,7 @@ export function useStereoSteppedCalibration(
     setModelLoadError(null);
     try {
       const res = await fetch(
-        `/backend/calibration2/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
+        `/backend/calibration/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
       );
       const data = await res.json();
       if (res.ok && data.exists) {
@@ -741,7 +741,7 @@ export function useStereoSteppedCalibration(
   ) => {
     setReconstructJobStatus({ status: 'starting', progress: 0 });
     try {
-      const res = await fetch('/backend/calibration2/apply', {
+      const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -766,7 +766,7 @@ export function useStereoSteppedCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration2/apply/status/${reconstructJobId}`);
+        const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
         const data = await res.json();
         if (res.ok) {
           setReconstructJobStatus({
@@ -791,7 +791,7 @@ export function useStereoSteppedCalibration(
     if (!sequenceId) return;
     try {
       const res = await fetch(
-        `/backend/calibration2/stepped/sequence_pose_detection?sequence_id=${sequenceId}&camera=${cam}&frame_idx=${frameIdx}`,
+        `/backend/calibration/stepped/sequence_pose_detection?sequence_id=${sequenceId}&camera=${cam}&frame_idx=${frameIdx}`,
       );
       if (!res.ok) return;
       const data = (await res.json()) as SteppedDetection;
@@ -810,7 +810,7 @@ export function useStereoSteppedCalibration(
   ): Promise<string | null> => {
     if (!sequenceId) return null;
     try {
-      const res = await fetch('/backend/calibration2/stepped/identify_pose_level', {
+      const res = await fetch('/backend/calibration/stepped/identify_pose_level', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequence_id: sequenceId, camera: cam, frame_idx: frameIdx, click_x: clickX, click_y: clickY }),

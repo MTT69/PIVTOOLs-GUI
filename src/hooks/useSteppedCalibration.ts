@@ -5,18 +5,18 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  *
  * This is the v2 port of the legacy `useSteppedPlanarCalibration` hook. The
  * stateful per-pose sequence flow lives on the dedicated stepped blueprint
- * (`/calibration2/stepped/*`); everything board-agnostic — validate, saved-model
- * load, figures, apply — uses the SAME generic `/calibration2/*` routes the
+ * (`/calibration/stepped/*`); everything board-agnostic — validate, saved-model
+ * load, figures, apply — uses the SAME generic `/calibration/*` routes the
  * dotboard/charuco tabs use, driven with `board="stepped"`. Board params and the
  * per-camera operator state (clicked level, pose labels, fiducials) persist under
  * `config.calibration2.stepped` so a headless CLI run can reproduce the fit.
  *
  * Per-camera flow:
- *  1. POST /calibration2/stepped/detect_sequence            (cameras:[cam])  -> sequence_id + job
- *  2. POST /calibration2/stepped/snap_fiducial              (origin / x_axis / y_axis)
- *  3. POST /calibration2/stepped/identify_pose_level        (label each non-datum pose)
- *  4. POST /calibration2/stepped/generate_model             (per-camera spec) -> job
- *  5. GET  /calibration2/model?board=stepped                (load saved, generic route)
+ *  1. POST /calibration/stepped/detect_sequence            (cameras:[cam])  -> sequence_id + job
+ *  2. POST /calibration/stepped/snap_fiducial              (origin / x_axis / y_axis)
+ *  3. POST /calibration/stepped/identify_pose_level        (label each non-datum pose)
+ *  4. POST /calibration/stepped/generate_model             (per-camera spec) -> job
+ *  5. GET  /calibration/model?board=stepped                (load saved, generic route)
  */
 
 export interface FiducialSet {
@@ -306,7 +306,7 @@ export function useSteppedCalibration(
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
-      const res = await fetch('/backend/calibration2/validate', {
+      const res = await fetch('/backend/calibration/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -464,7 +464,7 @@ export function useSteppedCalibration(
     setDetectionProgressFor(cam, 0);
 
     try {
-      const res = await fetch('/backend/calibration2/stepped/detect_sequence', {
+      const res = await fetch('/backend/calibration/stepped/detect_sequence', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -485,7 +485,7 @@ export function useSteppedCalibration(
         return;
       }
       const done = await pollJob(
-        `/backend/calibration2/stepped/detect_sequence/status/${data.job_id}`,
+        `/backend/calibration/stepped/detect_sequence/status/${data.job_id}`,
         (d) => { if (d.progress !== undefined) setDetectionProgressFor(cam, d.progress); },
       );
       if (done.status === 'failed') {
@@ -526,7 +526,7 @@ export function useSteppedCalibration(
         return null;
       }
       try {
-        const res = await fetch('/backend/calibration2/stepped/snap_fiducial', {
+        const res = await fetch('/backend/calibration/stepped/snap_fiducial', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sequence_id: sid, camera: cam, click_x: clickX, click_y: clickY }),
@@ -578,7 +578,7 @@ export function useSteppedCalibration(
       if (level !== 'peak' && level !== 'trough') {
         return { status: 'failed', error: "Select the clicked level ('peak' or 'trough') first." };
       }
-      const res = await fetch('/backend/calibration2/stepped/generate_model', {
+      const res = await fetch('/backend/calibration/stepped/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -598,7 +598,7 @@ export function useSteppedCalibration(
       if (!res.ok || !data.job_id) {
         return { status: 'failed', error: data.error || 'Failed to start model generation.' };
       }
-      return pollJob(`/backend/calibration2/stepped/generate_model/status/${data.job_id}`, onUpdate);
+      return pollJob(`/backend/calibration/stepped/generate_model/status/${data.job_id}`, onUpdate);
     },
     [sequenceId, fiducials, clickedLevel, buildPoseLevels, pollJob, modelType],
   );
@@ -650,7 +650,7 @@ export function useSteppedCalibration(
     setModelLoadErrorFor(cam, null);
     try {
       const res = await fetch(
-        `/backend/calibration2/model?stereo=0&board=${BOARD}&camera=${cam}&source_path_idx=${sourcePathIdx}`,
+        `/backend/calibration/model?stereo=0&board=${BOARD}&camera=${cam}&source_path_idx=${sourcePathIdx}`,
       );
       const data = await res.json();
       if (res.ok && data.exists) {
@@ -683,7 +683,7 @@ export function useSteppedCalibration(
   ) => {
     setVectorJobStatus({ status: 'starting', processed_cameras: 0, total_cameras: cameraOptions.length || 1 });
     try {
-      const res = await fetch('/backend/calibration2/apply', {
+      const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -707,7 +707,7 @@ export function useSteppedCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration2/apply/status/${vectorJobId}`);
+        const res = await fetch(`/backend/calibration/apply/status/${vectorJobId}`);
         const data = await res.json();
         if (res.ok) {
           setVectorJobStatus({
@@ -733,7 +733,7 @@ export function useSteppedCalibration(
     if (!sid) return;
     try {
       const res = await fetch(
-        `/backend/calibration2/stepped/sequence_pose_detection?sequence_id=${sid}&camera=${cam}&frame_idx=${frameIdx}`,
+        `/backend/calibration/stepped/sequence_pose_detection?sequence_id=${sid}&camera=${cam}&frame_idx=${frameIdx}`,
       );
       if (!res.ok) return;
       const data = (await res.json()) as SteppedDetection;
@@ -753,7 +753,7 @@ export function useSteppedCalibration(
     const sid = sequenceId[cam];
     if (!sid) return null;
     try {
-      const res = await fetch('/backend/calibration2/stepped/identify_pose_level', {
+      const res = await fetch('/backend/calibration/stepped/identify_pose_level', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequence_id: sid, camera: cam, frame_idx: frameIdx, click_x: clickX, click_y: clickY }),

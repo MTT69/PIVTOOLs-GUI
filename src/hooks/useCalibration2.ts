@@ -26,7 +26,7 @@ export interface V2Measure {
   world_p2: Pt;
 }
 
-const BASE = "/backend/calibration2";
+const BASE = "/backend/calibration";
 
 function qs(o: Record<string, any>): string {
   const p = new URLSearchParams();

@@ -51,7 +51,7 @@ function generatePairs(cameras: number[]): OverlapPair[] {
  *
  * This hook owns the datum + overlap state and persists it to
  * config.calibration.global_coordinates. The shared frame is BAKED INTO each camera's
- * model.mat (world_offset_mm) by saveGlobalFrame() -> POST /calibration2/global/save;
+ * model.mat (world_offset_mm) by saveGlobalFrame() -> POST /calibration/global/save;
  * the calibrate step then reads it. The mirror (a camera whose image x runs opposite
  * the global +x) is handled by that camera's calibration axis choice, not a flag here.
  */
@@ -287,7 +287,7 @@ export function useGlobalCoordinates(
       setSavingGlobal(true);
       setGlobalError(null);
       try {
-        const res = await fetch('/backend/calibration2/global/save', {
+        const res = await fetch('/backend/calibration/global/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

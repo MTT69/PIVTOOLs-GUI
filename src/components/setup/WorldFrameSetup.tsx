@@ -4,8 +4,8 @@
  * World-frame (coordinate-system) picker for calibration2.
  *
  * The user clicks origin / +X / +Y on the datum view; each click snaps to the
- * nearest DETECTED feature (`/calibration2/snap_fiducial`, which needs the datum
- * detection cached first via `/calibration2/detect_datum`). The three snapped
+ * nearest DETECTED feature (`/calibration/snap_fiducial`, which needs the datum
+ * detection cached first via `/calibration/detect_datum`). The three snapped
  * pixels become the `clicks` payload passed to `generate_model`. With no clicks,
  * the backend falls back to the board's grid-corner default — so picking is an
  * optional refinement, not a required step.
@@ -61,7 +61,7 @@ export function useWorldFrame({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/backend/calibration2/detect_datum", {
+      const res = await fetch("/backend/calibration/detect_datum", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -92,7 +92,7 @@ export function useWorldFrame({
     const role = mode;
     setMode("none");
     try {
-      const res = await fetch("/backend/calibration2/snap_fiducial", {
+      const res = await fetch("/backend/calibration/snap_fiducial", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ camera, click_x: px, click_y: py }),
