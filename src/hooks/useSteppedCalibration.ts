@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Stepped (dual-level) board MONO calibration on the calibration2 backend.
+ * Stepped (dual-level) board MONO calibration on the calibration backend.
  *
  * This is the v2 port of the legacy `useSteppedPlanarCalibration` hook. The
  * stateful per-pose sequence flow lives on the dedicated stepped blueprint
@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * load, figures, apply — uses the SAME generic `/calibration/*` routes the
  * dotboard/charuco tabs use, driven with `board="stepped"`. Board params and the
  * per-camera operator state (clicked level, pose labels, fiducials) persist under
- * `config.calibration2.stepped` so a headless CLI run can reproduce the fit.
+ * `config.calibration.stepped` so a headless CLI run can reproduce the fit.
  *
  * Per-camera flow:
  *  1. POST /calibration/stepped/detect_sequence            (cameras:[cam])  -> sequence_id + job
@@ -89,7 +89,7 @@ export interface ValidationResult {
   suggested_subfolder?: string;
 }
 
-/** Job status for the detect + fit jobs (calibration2 job_manager shape). */
+/** Job status for the detect + fit jobs (calibration job_manager shape). */
 export interface JobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   progress?: number;
@@ -149,7 +149,7 @@ export function useSteppedCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // ---------- Board geometry + dt (persists to config.calibration2.stepped) ----------
+  // ---------- Board geometry + dt (persists to config.calibration.stepped) ----------
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [stepHeightMm, setStepHeightMm] = useState(3.0);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
@@ -286,7 +286,7 @@ export function useSteppedCalibration(
     [],
   );
 
-  // ---------- Map a calibration2 model/generate response to the card shape ----------
+  // ---------- Map a calibration model/generate response to the card shape ----------
   const toCameraModel = (d: JobStatus & Record<string, any>): CameraModel => ({
     model_type: d.model_type === 'polynomial3d' ? 'polynomial3d' : 'pinhole',
     camera_matrix: d.camera_matrix,
@@ -302,7 +302,7 @@ export function useSteppedCalibration(
     model_path: d.model_path,
   });
 
-  // ---------- Validate the image source (calibration2, all formats) ----------
+  // ---------- Validate the image source (calibration, all formats) ----------
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
@@ -644,7 +644,7 @@ export function useSteppedCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOptions, camera, runGenerateJob]);
 
-  // ---------- Load the saved model for one camera (generic calibration2 route) ----------
+  // ---------- Load the saved model for one camera (generic calibration route) ----------
   const loadModel = useCallback(async (cam: number) => {
     setModelLoadingFor(cam, true);
     setModelLoadErrorFor(cam, null);
@@ -675,7 +675,7 @@ export function useSteppedCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, camera, sourcePathIdx]);
 
-  // ---------- Apply the model to PIV vectors (generic calibration2 route) ----------
+  // ---------- Apply the model to PIV vectors (generic calibration route) ----------
   const calibrateVectors = useCallback(async (
     _forAllCameras: boolean = true,
     typeName: string = 'instantaneous',

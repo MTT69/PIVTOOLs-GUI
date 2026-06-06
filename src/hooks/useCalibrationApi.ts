@@ -59,11 +59,11 @@ async function fetchPngBase64(url: string): Promise<string | null> {
 }
 
 /**
- * Unified API hook for the calibration2 backend — ONE hook for every tab
+ * Unified API hook for the calibration backend — ONE hook for every tab
  * (planar/stereo × dotboard/charuco). This replaces the v1 per-method hooks;
  * view state (which camera, current frame, fiducials) lives in the component.
  */
-export function useCalibration2() {
+export function useCalibrationApi() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

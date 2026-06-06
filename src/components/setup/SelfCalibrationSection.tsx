@@ -8,11 +8,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { AlertTriangle, CheckCircle2, Loader2, Eye } from "lucide-react";
-import { useSelfCalibration2 } from "@/hooks/useSelfCalibration2";
+import { useSelfCalibration } from "@/hooks/useSelfCalibration";
 import ZoomableCanvas from "@/components/viewer/zoomableCanvas";
 import { cn } from "@/lib/utils";
 
-interface SelfCalibration2SectionProps {
+interface SelfCalibrationSectionProps {
   cam1: number;
   cam2: number;
   board: string;          // "dotboard" | "charuco"
@@ -21,16 +21,16 @@ interface SelfCalibration2SectionProps {
 }
 
 /**
- * Stereo self-calibration (Wieneke 2005) on the calibration2 backend. Slots into the
+ * Stereo self-calibration (Wieneke 2005) on the calibration backend. Slots into the
  * stereo tabs below the model results, gated on a saved stereo model. Mirrors the v1
  * SelfCalibrationSection UX (preview, run, history, manual, clear) and adds a
  * base_path (PIV dataset) selector, a filter toggle, and a gallery of the six saved
  * diagnostic figures from the calibration source folder.
  */
-export const SelfCalibration2Section: React.FC<SelfCalibration2SectionProps> = ({
+export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
   cam1, cam2, board, hasModel, sourcePathIdx = 0,
 }) => {
-  const sc = useSelfCalibration2(cam1, cam2, board, sourcePathIdx);
+  const sc = useSelfCalibration(cam1, cam2, board, sourcePathIdx);
   const [nImagesInput, setNImagesInput] = useState(String(sc.nImages));
   const [frameInputValue, setFrameInputValue] = useState(String(sc.previewFrameIdx));
 
@@ -405,4 +405,4 @@ const ManualSelfCalInput: React.FC<{
   );
 };
 
-export default SelfCalibration2Section;
+export default SelfCalibrationSection;

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * World-frame (coordinate-system) picker for calibration2.
+ * World-frame (coordinate-system) picker for calibration.
  *
  * The user clicks origin / +X / +Y on the datum view; each click snaps to the
  * nearest DETECTED feature (`/calibration/snap_fiducial`, which needs the datum

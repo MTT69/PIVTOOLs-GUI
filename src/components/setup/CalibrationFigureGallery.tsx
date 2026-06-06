@@ -13,7 +13,7 @@ function qs(o: Record<string, unknown>): string {
 }
 
 /**
- * Diagnostic-figure gallery for a saved calibration2 model. Lists the proof figures the
+ * Diagnostic-figure gallery for a saved calibration model. Lists the proof figures the
  * backend writes beside the model (reprojection scatter, coverage, residuals, ...) and
  * renders each one. Shared by every calibration tab so a fit is always verified by its
  * figure, not just a reported RMS.

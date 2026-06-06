@@ -9,7 +9,7 @@ export interface StereoCharucoFrameDetection {
   corner_ids?: number[];
 }
 
-/** Per-camera pinhole intrinsics (from calibration2 stereo enrichment). */
+/** Per-camera pinhole intrinsics (from calibration stereo enrichment). */
 export interface CamIntrinsics {
   fx: number;
   fy: number;
@@ -23,7 +23,7 @@ export interface CamIntrinsics {
 }
 
 /**
- * Stereo ChArUco model shaped for the results card. calibration2 fits each camera
+ * Stereo ChArUco model shaped for the results card. calibration fits each camera
  * as DaVis pinhole and derives the pose (no rectification/essential matrices).
  */
 export interface StereoCharucoModel {
@@ -112,10 +112,10 @@ export const ARUCO_DICTS = [
 const BOARD = 'charuco';
 
 /**
- * Stereo ChArUco calibration on the calibration2 (pinhole, no-coordinate-flip)
+ * Stereo ChArUco calibration on the calibration (pinhole, no-coordinate-flip)
  * backend. Mirrors `useStereoCalibration`: synchronous generate, two-camera
  * validate, on-demand overlay, world frame on camera 1. Board params persist to
- * `config.calibration2.charuco`.
+ * `config.calibration.charuco`.
  */
 export function useStereoCharucoCalibration(
   cameraOptions: number[],
@@ -135,7 +135,7 @@ export function useStereoCharucoCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration2.charuco) — kept as strings for inputs.
+  // Board params (persist to config.calibration.charuco) — kept as strings for inputs.
   const [squaresH, setSquaresH] = useState<string>("10");
   const [squaresV, setSquaresV] = useState<string>("9");
   const [squareSize, setSquareSize] = useState<string>("0.03");  // meters
@@ -181,7 +181,7 @@ export function useStereoCharucoCalibration(
 
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
-  // Validate one camera via calibration2 (all formats).
+  // Validate one camera via calibration (all formats).
   const validateOne = useCallback(async (cam: number): Promise<CameraValidationResult> => {
     const res = await fetch('/backend/calibration/validate', {
       method: 'POST',
@@ -354,7 +354,7 @@ export function useStereoCharucoCalibration(
     }
   }, [sourcePathIdx, cam1, cam2]);
 
-  // Persist the picked world frame (cam1) to config.yaml (calibration2.<board>.world_frame).
+  // Persist the picked world frame (cam1) to config.yaml (calibration.<board>.world_frame).
   const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
     if (!p) return;
     try {

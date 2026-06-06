@@ -8,7 +8,7 @@ export interface StereoFrameDetection {
   grid_indices?: [number, number][];
 }
 
-/** Per-camera pinhole intrinsics (from calibration2 stereo enrichment). */
+/** Per-camera pinhole intrinsics (from calibration stereo enrichment). */
 export interface CamIntrinsics {
   fx: number;
   fy: number;
@@ -22,7 +22,7 @@ export interface CamIntrinsics {
 }
 
 /**
- * Stereo camera model shaped for the results card. calibration2 stereo fits each
+ * Stereo camera model shaped for the results card. calibration stereo fits each
  * camera as DaVis-matching pinhole and derives the pose; it does NOT emit
  * rectification/essential/fundamental matrices, so the card shows the two
  * pinhole models + relative pose (angle / baseline).
@@ -47,7 +47,7 @@ export interface WorldFrameClicks {
 }
 
 /**
- * Single-camera validation result (calibration2 /validate shape).
+ * Single-camera validation result (calibration /validate shape).
  */
 export interface CameraValidationResult {
   valid: boolean;
@@ -96,7 +96,7 @@ export interface StereoJobStatus {
 }
 
 /**
- * Apply/reconstruct job status (calibration2 apply job).
+ * Apply/reconstruct job status (calibration apply job).
  */
 export interface StereoReconstructJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
@@ -110,7 +110,7 @@ export interface StereoReconstructJobStatus {
 const BOARD = 'dotboard';
 
 /**
- * Stereo dotboard calibration on the calibration2 (pinhole, no-coordinate-flip)
+ * Stereo dotboard calibration on the calibration (pinhole, no-coordinate-flip)
  * backend. Mirrors `useDotboardCalibration` (synchronous generate, on-demand
  * overlay, config split) for two cameras: each is fitted as DaVis pinhole and the
  * relative pose derived. The world frame is defined on camera 1 only (clicks).
@@ -133,7 +133,7 @@ export function useStereoCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration2.dotboard)
+  // Board params (persist to config.calibration.dotboard)
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1);
@@ -166,7 +166,7 @@ export function useStereoCalibration(
   const boardParams = useCallback(() => ({ dot_spacing_mm: dotSpacingMm }), [dotSpacingMm]);
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
-  // Validate one camera via calibration2 (all formats).
+  // Validate one camera via calibration (all formats).
   const validateOne = useCallback(async (cam: number): Promise<CameraValidationResult> => {
     const res = await fetch('/backend/calibration/validate', {
       method: 'POST',
@@ -270,7 +270,7 @@ export function useStereoCalibration(
     saveConfig();
   }, [saveConfig]);
 
-  // Map a calibration2 stereo model/generate response to the card shape.
+  // Map a calibration stereo model/generate response to the card shape.
   const toStereoModel = (d: any): StereoModel => ({
     intrinsics1: d.intrinsics1,
     intrinsics2: d.intrinsics2,
@@ -335,7 +335,7 @@ export function useStereoCalibration(
     }
   }, [sourcePathIdx, cam1, cam2]);
 
-  // Persist the picked world frame (cam1) to config.yaml (calibration2.<board>.world_frame).
+  // Persist the picked world frame (cam1) to config.yaml (calibration.<board>.world_frame).
   const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
     if (!p) return;
     try {

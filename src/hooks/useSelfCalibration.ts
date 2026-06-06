@@ -45,15 +45,15 @@ export interface SC2Status {
 }
 
 /**
- * Stereo self-calibration (Wieneke disparity minimisation) on the calibration2
+ * Stereo self-calibration (Wieneke disparity minimisation) on the calibration
  * backend. Loads the saved stereo model + recorded PIV particle frames from a
  * base_path dataset, recovers the laser sheet (z_offset, tilt_x, tilt_y), writes it
  * into the stereo record (so apply uses it automatically), and saves six diagnostic
- * figures into the calibration source folder. The calibration2 counterpart of the v1
+ * figures into the calibration source folder. The calibration counterpart of the v1
  * `useSelfCalibration`, repointed to `/calibration/self_cal/*` with a base-path
  * selector + filter toggle.
  */
-export function useSelfCalibration2(
+export function useSelfCalibration(
   cam1: number,
   cam2: number,
   board: string,

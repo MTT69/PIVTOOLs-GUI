@@ -41,7 +41,7 @@ export interface WorldFrameClicks {
 }
 
 /**
- * Validation result (matches the calibration2 /validate shape, which is the same
+ * Validation result (matches the calibration /validate shape, which is the same
  * `validate_calibration_images` result the v1 GUI consumed).
  */
 export interface ValidationResult {
@@ -103,13 +103,13 @@ export interface MultiCameraJobStatus {
 const BOARD = 'dotboard';
 
 /**
- * Dotboard calibration on the calibration2 (pinhole, no-coordinate-flip) backend.
+ * Dotboard calibration on the calibration (pinhole, no-coordinate-flip) backend.
  *
  * The return interface is preserved from the v1 hook so the original
- * DotboardCalibration card UI renders unchanged. calibration2's `generate_model`
+ * DotboardCalibration card UI renders unchanged. calibration's `generate_model`
  * is synchronous, so we synthesise the v1 `JobStatus` around the awaited call.
  * Image-source config persists to `config.calibration`; board params to
- * `config.calibration2.dotboard`. The optional world frame is passed as `clicks`.
+ * `config.calibration.dotboard`. The optional world frame is passed as `clicks`.
  */
 export function useDotboardCalibration(
   cameraOptions: number[],
@@ -127,7 +127,7 @@ export function useDotboardCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration2)
+  // Board params (persist to config.calibration)
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1);
@@ -163,7 +163,7 @@ export function useDotboardCalibration(
 
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
-  // Validate the image source via calibration2 (all formats).
+  // Validate the image source via calibration (all formats).
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
@@ -247,7 +247,7 @@ export function useDotboardCalibration(
     saveConfig();
   }, [saveConfig]);
 
-  // Map a calibration2 mono model/generate response to the v1 card shape. The
+  // Map a calibration mono model/generate response to the v1 card shape. The
   // response's `model_type` selects the pinhole or polynomial mapping.
   const toCameraModel = (d: any): CameraModel => {
     if (d.model_type === 'polynomial') {
@@ -361,7 +361,7 @@ export function useDotboardCalibration(
     }
   }, [sourcePathIdx, camera]);
 
-  // Persist the picked world frame to config.yaml (calibration2.<board>.world_frame).
+  // Persist the picked world frame to config.yaml (calibration.<board>.world_frame).
   // recursive_update deep-merges, so this never clobbers the board params.
   const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
     if (!p) return;

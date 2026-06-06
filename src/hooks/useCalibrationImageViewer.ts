@@ -69,7 +69,7 @@ export function useCalibrationImageViewer(
     return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${autoLimits}-${calibrationType}-${refreshKey || ''}`;
   }, [sourcePathIdx, camera, imageFormat, autoLimits, calibrationType, refreshKey]);
 
-  // Build frame URL. calibration2 serves every board/geometry from one JSON frame
+  // Build frame URL. calibration serves every board/geometry from one JSON frame
   // endpoint (a stereo "frame" is just camera N's frame), so the URL no longer
   // branches on calibrationType — only the camera number differs.
   const buildFrameUrl = useCallback((frameIdx: number) => {
@@ -251,7 +251,7 @@ export function useCalibrationImageViewer(
   // Track previous camera to detect camera switches
   const prevCameraRef = useRef(camera);
 
-  // Clear the client-side prefetch buffer when parameters change. (calibration2's
+  // Clear the client-side prefetch buffer when parameters change. (calibration's
   // frame endpoint holds no server-side cache, so there is nothing to clear there.)
   useEffect(() => {
     cancelPrefetches();

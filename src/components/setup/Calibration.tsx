@@ -10,7 +10,7 @@ import { StereoCalibration } from './StereoCalibration';
 import { StereoCharucoCalibration } from './StereoCharucoCalibration';
 import { SteppedCalibration } from './SteppedCalibration';
 import { StereoSteppedCalibration } from './StereoSteppedCalibration';
-import { ScaleFactorCalibration2 } from './ScaleFactorCalibration2';
+import { ScaleFactorCalibration } from './ScaleFactorCalibration';
 
 interface CalibrationProps {
   config: any;
@@ -18,7 +18,7 @@ interface CalibrationProps {
   refetchConfig?: () => Promise<void>;
 }
 
-// Supported methods on the calibration2 backend. Scale-factor is the board-free
+// Supported methods on the calibration backend. Scale-factor is the board-free
 // uniform pixel->mm map (pick origin/axes on the image). Stepped is the dual-level
 // dot board (both Z planes feed one pinhole fit).
 const TABS = [
@@ -77,7 +77,7 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
               <StereoSteppedCalibration {...common} />
             </TabsContent>
             <TabsContent value="scale_factor" className="mt-6">
-              <ScaleFactorCalibration2 {...common} />
+              <ScaleFactorCalibration {...common} />
             </TabsContent>
           </Tabs>
         </CardContent>

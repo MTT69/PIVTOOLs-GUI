@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
- * Stepped (dual-level) board STEREO calibration on the calibration2 backend.
+ * Stepped (dual-level) board STEREO calibration on the calibration backend.
  *
  * The v2 port of the legacy `useSteppedBoardCalibration` hook. ONE detected pose
  * sequence covers BOTH cameras (`detect_sequence` with `cameras:[cam1, cam2]`),
@@ -14,10 +14,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * stereo-dotboard tab uses (the stereo model dir is board-agnostic, so
  * `board="stepped"` is inert on those routes but kept for consistency).
  *
- * Shared physical board geometry persists under `config.calibration2.stepped`
+ * Shared physical board geometry persists under `config.calibration.stepped`
  * (read by both stepped tabs). Stereo-only operator state (per-camera fiducials,
  * clicked level, pose labels, stereo_config) persists under a SEPARATE
- * `config.calibration2.stepped_stereo` block so the mono and stereo tabs never
+ * `config.calibration.stepped_stereo` block so the mono and stereo tabs never
  * clobber each other's per-camera maps (`update_config` deep-merges).
  *
  * Flow:
@@ -123,7 +123,7 @@ export interface StereoValidation {
   valid: boolean;
 }
 
-/** Job status for the detect + fit jobs (calibration2 job_manager shape). */
+/** Job status for the detect + fit jobs (calibration job_manager shape). */
 export interface JobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   progress?: number;
@@ -184,7 +184,7 @@ export function useStereoSteppedCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // ---------- Board geometry + dt (persists to config.calibration2.stepped) ----------
+  // ---------- Board geometry + dt (persists to config.calibration.stepped) ----------
   const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
   const [stepHeightMm, setStepHeightMm] = useState(3.0);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
@@ -301,7 +301,7 @@ export function useStereoSteppedCalibration(
     [],
   );
 
-  // ---------- Validate one camera (calibration2, all formats) ----------
+  // ---------- Validate one camera (calibration, all formats) ----------
   const validateOne = useCallback(async (cam: number): Promise<ValidationResult> => {
     try {
       const res = await fetch('/backend/calibration/validate', {
@@ -684,7 +684,7 @@ export function useStereoSteppedCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sequenceId, cam1, cam2, fiducials, clickedLevel, stereoConfig, modelType, buildPoseLevels, pollJob]);
 
-  // ---------- Load the saved stereo model (generic calibration2 route) ----------
+  // ---------- Load the saved stereo model (generic calibration route) ----------
   // `resolvedConfig` (if given) carries the resolved same-side/transmission from a
   // just-completed generate — the load route does not return it.
   const loadModel = useCallback(async (resolvedConfig?: string) => {
@@ -734,7 +734,7 @@ export function useStereoSteppedCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, cam1, cam2, sourcePathIdx]);
 
-  // ---------- Reconstruct 3C vectors (generic calibration2 apply) ----------
+  // ---------- Reconstruct 3C vectors (generic calibration apply) ----------
   const reconstructVectors = useCallback(async (
     typeName: string = 'instantaneous',
     activePaths?: number[],

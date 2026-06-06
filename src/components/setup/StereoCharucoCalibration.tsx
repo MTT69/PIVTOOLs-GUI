@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
 import { useStereoCharucoCalibration, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
-import { SelfCalibration2Section } from "@/components/setup/SelfCalibration2Section";
+import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
@@ -877,7 +877,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
       )}
 
       {/* Stereo self-calibration (Wieneke) — recovers the laser-sheet offset/tilt */}
-      <SelfCalibration2Section
+      <SelfCalibrationSection
         cam1={cam1} cam2={cam2} board="charuco"
         hasModel={hasModel} sourcePathIdx={sourcePathIdx} />
     </div>

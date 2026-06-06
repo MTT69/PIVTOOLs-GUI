@@ -42,7 +42,7 @@ export interface WorldFrameClicks {
 }
 
 /**
- * Validation result (matches the calibration2 /validate shape).
+ * Validation result (matches the calibration /validate shape).
  */
 export interface CharucoValidationResult {
   valid: boolean;
@@ -119,12 +119,12 @@ export const ARUCO_DICTS = [
 const BOARD = 'charuco';
 
 /**
- * ChArUco calibration on the calibration2 (pinhole, no-coordinate-flip) backend.
+ * ChArUco calibration on the calibration (pinhole, no-coordinate-flip) backend.
  *
- * Mirrors `useDotboardCalibration`: the calibration2 `generate_model` is synchronous,
+ * Mirrors `useDotboardCalibration`: the calibration `generate_model` is synchronous,
  * so we synthesise the v1 `JobStatus`/`MultiCameraJobStatus` around the awaited call.
  * Image-source config persists to `config.calibration`; board params to
- * `config.calibration2.charuco`. The optional world frame is passed as `clicks`.
+ * `config.calibration.charuco`. The optional world frame is passed as `clicks`.
  */
 export function useChArUcoCalibration(
   cameraOptions: number[],
@@ -142,7 +142,7 @@ export function useChArUcoCalibration(
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration2.charuco) — kept as strings for inputs.
+  // Board params (persist to config.calibration.charuco) — kept as strings for inputs.
   const [squaresH, setSquaresH] = useState<string>("10");
   const [squaresV, setSquaresV] = useState<string>("9");
   const [squareSize, setSquareSize] = useState<string>("0.03");  // meters
@@ -190,7 +190,7 @@ export function useChArUcoCalibration(
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
   const datumFrameNum = useCallback(() => parseInt(datumFrame) || 1, [datumFrame]);
 
-  // Validate the image source via calibration2 (all formats).
+  // Validate the image source via calibration (all formats).
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
@@ -280,7 +280,7 @@ export function useChArUcoCalibration(
     saveConfig();
   }, [saveConfig]);
 
-  // Map a calibration2 mono model/generate response to the v1 card shape. The
+  // Map a calibration mono model/generate response to the v1 card shape. The
   // response's `model_type` selects the pinhole or polynomial mapping.
   const toCameraModel = (d: any): CameraModel => {
     if (d.model_type === 'polynomial') {
@@ -393,7 +393,7 @@ export function useChArUcoCalibration(
     }
   }, [sourcePathIdx, camera]);
 
-  // Persist the picked world frame to config.yaml (calibration2.<board>.world_frame).
+  // Persist the picked world frame to config.yaml (calibration.<board>.world_frame).
   const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
     if (!p) return;
     try {

@@ -10,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler, ChevronLeft, ChevronRight } from "lucide-react";
 import ZoomableCanvas, { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
-import { useCalibration2 } from "@/hooks/useCalibration2";
+import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
   GCInlineControls,
   GlobalFrameSummary,
@@ -20,7 +20,7 @@ import {
   handleGlobalCoordPointSelect,
 } from "@/components/setup/GlobalCoordinateSetup";
 
-interface ScaleFactorCalibration2Props {
+interface ScaleFactorCalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
@@ -33,13 +33,13 @@ type PickMode = "none" | "origin" | "measure";
 
 const BASE = "/backend/calibration";
 
-export const ScaleFactorCalibration2: React.FC<ScaleFactorCalibration2Props> = ({
+export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   config,
   updateConfig,
   cameraOptions,
   sourcePaths,
 }) => {
-  const c2 = useCalibration2();
+  const c2 = useCalibrationApi();
 
   // --- Source + image selection -------------------------------------------------
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
