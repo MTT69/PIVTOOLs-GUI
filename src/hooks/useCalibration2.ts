@@ -144,6 +144,24 @@ export function useCalibration2() {
     }
   }, []);
 
+  const generateScaleFactor = useCallback(async (body: any): Promise<any> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await postJSON("/scale_factor/generate", body);
+      if (!data.success) {
+        setError(data.error || "scale-factor generation failed");
+        return null;
+      }
+      return data;
+    } catch (e: any) {
+      setError(String(e));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const loadModel = useCallback(async (query: Record<string, any>): Promise<any> => {
     try {
       const res = await fetch(`${BASE}/model?${qs(query)}`);
@@ -227,13 +245,19 @@ export function useCalibration2() {
   }, []);
 
   const applyStatus = useCallback(async (jobId: string): Promise<any> => {
-    const res = await fetch(`${BASE}/apply/status/${jobId}`);
-    return res.json();
+    // Never throw out of a poll loop: a transient network blip returns a failed status
+    // so callers stop polling instead of leaving a spinner stuck forever.
+    try {
+      const res = await fetch(`${BASE}/apply/status/${jobId}`);
+      return await res.json();
+    } catch (e: any) {
+      return { status: "failed", error: String(e) };
+    }
   }, []);
 
   return {
     busy, error, setError,
-    detect, loadFrameImage, snap, generate, loadModel, measure, listFigures, figureUrl,
-    validateSource, globalCompute, startApply, applyStatus,
+    detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel, measure,
+    listFigures, figureUrl, validateSource, globalCompute, startApply, applyStatus,
   };
 }

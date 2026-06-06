@@ -10,9 +10,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
 import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
   GCInlineControls,
+  GlobalFrameSummary,
   useGlobalCoordinates,
   getGlobalCoordMarkers,
   getGlobalCoordViewerTarget,
@@ -77,6 +79,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setDt,
     datumFrame,
     setDatumFrame,
+    modelType,
+    setModelType,
 
     // Validation
     validation,
@@ -99,6 +103,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     detections,
     modelLoading,
     modelLoadError,
+    detectError,
     hasModel,
 
     // Overlay toggle
@@ -445,6 +450,21 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           {/* Section 4: ChArUco Board Parameters */}
           <div className="border-t pt-4">
             <h3 className="text-sm font-semibold mb-3">ChArUco Board Parameters</h3>
+            <div className="mb-4 max-w-xs">
+              <label className="text-sm font-medium">Camera Model</label>
+              <Select value={modelType} onValueChange={(v) => setModelType(v as 'pinhole' | 'polynomial')}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pinhole">Pinhole (DaVis PinholeOpenCV)</SelectItem>
+                  <SelectItem value="polynomial">Polynomial (3rd order, single plane)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {modelType === 'polynomial'
+                  ? 'Single-plane image→world map fitted from the datum frame only.'
+                  : '3D pinhole intrinsics + pose across all detected views.'}
+              </p>
+            </div>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="text-sm font-medium">Squares (Horizontal)</label>
@@ -604,6 +624,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                       currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
                       cameraOptions={cameraOptions}
                       onCameraChange={setCamera}
+                      board="charuco"
+                      sourcePathIdx={sourcePathIdx}
                     />
                   )}
                 </div>
@@ -696,6 +718,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <div className="text-sm text-red-600 flex items-center gap-1">
                 <AlertTriangle className="h-4 w-4" />
                 {modelLoadError}
+              </div>
+            )}
+
+            {detectError && (
+              <div className="text-sm text-amber-600 flex items-center gap-1">
+                <AlertTriangle className="h-4 w-4" />
+                {detectError}
               </div>
             )}
 
@@ -848,6 +877,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
               </div>
             )}
+
+            <GlobalFrameSummary
+              gc={gc} cameraOptions={cameraOptions} board="charuco" sourcePathIdx={sourcePathIdx} />
           </div>
         </CardContent>
       </Card>
@@ -862,63 +894,104 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Camera Matrix */}
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
-                <div className="font-mono text-xs bg-muted p-2 rounded">
-                  {cameraModel.camera_matrix?.map((row: number[], i: number) => (
-                    <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
-                  ))}
+            {cameraModel.model_type === 'polynomial' ? (
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Polynomial coefficients (X) */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Coefficients X (mm)</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded break-all">
+                    [{cameraModel.coeffs_x?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
+                  </div>
                 </div>
-              </div>
 
-              {/* Intrinsic Parameters */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Focal Length (fx):</span>
-                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Focal Length (fy):</span>
-                    <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Principal Point (cx):</span>
-                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Principal Point (cy):</span>
-                    <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                {/* Polynomial coefficients (Y) */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Coefficients Y (mm)</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded break-all">
+                    [{cameraModel.coeffs_y?.map((c: number) => c?.toFixed(6) ?? 'null').join(', ')}]
                   </div>
                 </div>
-              </div>
 
-              {/* Distortion Coefficients */}
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
-                <div className="font-mono text-xs bg-muted p-2 rounded">
-                  [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                {/* Normalisation */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Normalisation (s,t)</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div><span className="text-muted-foreground">x0:</span><span className="ml-2 font-medium">{cameraModel.norm?.x0?.toFixed(1)} px</span></div>
+                    <div><span className="text-muted-foreground">sx:</span><span className="ml-2 font-medium">{cameraModel.norm?.sx?.toFixed(1)} px</span></div>
+                    <div><span className="text-muted-foreground">y0:</span><span className="ml-2 font-medium">{cameraModel.norm?.y0?.toFixed(1)} px</span></div>
+                    <div><span className="text-muted-foreground">sy:</span><span className="ml-2 font-medium">{cameraModel.norm?.sy?.toFixed(1)} px</span></div>
+                  </div>
                 </div>
-              </div>
 
-              {/* Calibration Quality */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">RMS Error:</span>
-                    <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Images Used:</span>
-                    <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                {/* Fit quality */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Fit Quality</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div><span className="text-muted-foreground">RMS X:</span><span className="ml-2 font-medium">{cameraModel.rms_x_mm?.toFixed(4)} mm</span></div>
+                    <div><span className="text-muted-foreground">RMS Y:</span><span className="ml-2 font-medium">{cameraModel.rms_y_mm?.toFixed(4)} mm</span></div>
+                    <div><span className="text-muted-foreground">Plane:</span><span className="ml-2 font-medium">datum frame only</span></div>
                   </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Camera Matrix */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Camera Matrix</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    {cameraModel.camera_matrix?.map((row: number[], i: number) => (
+                      <div key={i}>[{row.map(v => v?.toFixed(2) ?? 'null').join(', ')}]</div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Intrinsic Parameters */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Intrinsic Parameters</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Focal Length (fx):</span>
+                      <span className="ml-2 font-medium">{cameraModel.focal_length?.[0]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Focal Length (fy):</span>
+                      <span className="ml-2 font-medium">{cameraModel.focal_length?.[1]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Principal Point (cx):</span>
+                      <span className="ml-2 font-medium">{cameraModel.principal_point?.[0]?.toFixed(1)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Principal Point (cy):</span>
+                      <span className="ml-2 font-medium">{cameraModel.principal_point?.[1]?.toFixed(1)} px</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Distortion Coefficients */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Distortion Coefficients</h4>
+                  <div className="font-mono text-xs bg-muted p-2 rounded">
+                    [{cameraModel.dist_coeffs?.map((d: number) => d?.toFixed(6) ?? 'null').join(', ')}]
+                  </div>
+                </div>
+
+                {/* Calibration Quality */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold mb-2">Calibration Quality</h4>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">RMS Error:</span>
+                      <span className="ml-2 font-medium">{cameraModel.reprojection_error?.toFixed(4)} px</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Images Used:</span>
+                      <span className="ml-2 font-medium">{cameraModel.num_images_used}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Detection Summary */}
             {detections && Object.keys(detections).length > 0 && (
@@ -930,6 +1003,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 </p>
               </div>
             )}
+
+            <CalibrationFigureGallery
+              query={{ board: "charuco", camera, source_path_idx: sourcePathIdx }}
+              trigger={cameraModel}
+            />
           </CardContent>
         </Card>
       )}

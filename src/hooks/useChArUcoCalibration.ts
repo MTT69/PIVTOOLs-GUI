@@ -11,14 +11,22 @@ export interface FrameDetection {
 }
 
 /**
- * Camera model shaped for the v1 results card.
+ * Camera model shaped for the v1 results card. `model_type` discriminates the
+ * pinhole intrinsics block from the single-plane polynomial coefficient block.
  */
 export interface CameraModel {
-  model_type?: "pinhole";
+  model_type?: "pinhole" | "polynomial";
+  // Pinhole
   camera_matrix?: number[][];
   dist_coeffs?: number[];
   focal_length?: [number, number];
   principal_point?: [number, number];
+  // Polynomial (single-plane image-px -> world-mm map)
+  coeffs_x?: number[];
+  coeffs_y?: number[];
+  rms_x_mm?: number;
+  rms_y_mm?: number;
+  norm?: { x0: number; sx: number; y0: number; sy: number };
   image_width?: number;
   image_height?: number;
   reprojection_error: number;
@@ -143,6 +151,8 @@ export function useChArUcoCalibration(
   const [minCorners, setMinCorners] = useState<string>("6");
   const [dt, setDt] = useState<string>("1.0");
   const [datumFrame, setDatumFrame] = useState<string>("1");
+  // Camera-model type: pinhole (3D) or polynomial (single-plane). Planar tabs only.
+  const [modelType, setModelType] = useState<'pinhole' | 'polynomial'>('pinhole');
 
   // Validation
   const [validation, setValidation] = useState<CharucoValidationResult | null>(null);
@@ -160,6 +170,7 @@ export function useChArUcoCalibration(
   const [detections, setDetections] = useState<Record<string, FrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+  const [detectError, setDetectError] = useState<string | null>(null);
   const [showOverlay, setShowOverlay] = useState(true);
 
   const configLoadedRef = useRef(false);
@@ -221,6 +232,7 @@ export function useChArUcoCalibration(
           if (ch.marker_ratio !== undefined) setMarkerRatio(String(ch.marker_ratio));
           if (ch.aruco_dict) setArucoDict(ch.aruco_dict);
           if (ch.min_corners !== undefined) setMinCorners(String(ch.min_corners));
+          if (ch.model_type === 'polynomial' || ch.model_type === 'pinhole') setModelType(ch.model_type);
           if (c2.dt) setDt(String(c2.dt));
           if (c2.datum_frame) setDatumFrame(String(c2.datum_frame));
         }
@@ -254,7 +266,7 @@ export function useChArUcoCalibration(
             },
             calibration2: {
               active: BOARD, dt: parseFloat(dt) || 1.0, datum_frame: datumFrameNum(),
-              charuco: boardParams(),
+              charuco: { ...boardParams(), model_type: modelType },
             },
           }),
         });
@@ -263,25 +275,43 @@ export function useChArUcoCalibration(
       }
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrameNum, boardParams, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrameNum, boardParams, modelType, validateImages]);
 
   useEffect(() => {
     if (!configLoadedRef.current) return;
     saveConfig();
   }, [saveConfig]);
 
-  // Map a calibration2 mono model/generate response to the v1 card shape.
-  const toCameraModel = (d: any): CameraModel => ({
-    model_type: 'pinhole',
-    camera_matrix: d.camera_matrix,
-    dist_coeffs: d.dist_coeffs,
-    focal_length: [d.fx, d.fy],
-    principal_point: [d.cx, d.cy],
-    image_width: d.image_width,
-    image_height: d.image_height,
-    reprojection_error: d.rms,
-    num_images_used: d.num_images_used ?? (d.per_view_rms?.length ?? 0),
-  });
+  // Map a calibration2 mono model/generate response to the v1 card shape. The
+  // response's `model_type` selects the pinhole or polynomial mapping.
+  const toCameraModel = (d: any): CameraModel => {
+    if (d.model_type === 'polynomial') {
+      return {
+        model_type: 'polynomial',
+        coeffs_x: d.coeffs_x, coeffs_y: d.coeffs_y,
+        rms_x_mm: d.rms_x_mm, rms_y_mm: d.rms_y_mm,
+        norm: { x0: d.x0, sx: d.sx, y0: d.y0, sy: d.sy },
+        image_width: d.image_width, image_height: d.image_height,
+        reprojection_error: Math.hypot(d.rms_x_mm ?? 0, d.rms_y_mm ?? 0),
+        num_images_used: d.num_images_used ?? (d.per_view_rms?.length ?? 1),
+      };
+    }
+    return {
+      model_type: 'pinhole',
+      camera_matrix: d.camera_matrix,
+      dist_coeffs: d.dist_coeffs,
+      focal_length: [d.fx, d.fy],
+      principal_point: [d.cx, d.cy],
+      image_width: d.image_width,
+      image_height: d.image_height,
+      reprojection_error: d.rms,
+      num_images_used: d.num_images_used ?? (d.per_view_rms?.length ?? 0),
+    };
+  };
+
+  // RMS for the v1 JobStatus (pinhole: px; polynomial: combined mm).
+  const respRms = (d: any): number | undefined =>
+    d.model_type === 'polynomial' ? Math.hypot(d.rms_x_mm ?? 0, d.rms_y_mm ?? 0) : d.rms;
 
   // Generate the model for one camera (synchronous); optional world-frame clicks.
   const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
@@ -290,13 +320,14 @@ export function useChArUcoCalibration(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         stereo: false, camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+        model_type: modelType,
         board_params: boardParams(), datum_frame: datumFrameNum(), frame_total: frameTotal(),
         image_format: imageFormat, image_type: imageType,
         clicks: clicks || undefined,
       }),
     });
     return res.json();
-  }, [sourcePathIdx, boardParams, datumFrameNum, frameTotal, imageFormat, imageType]);
+  }, [sourcePathIdx, modelType, boardParams, datumFrameNum, frameTotal, imageFormat, imageType]);
 
   // Single-camera generate.
   const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
@@ -308,7 +339,7 @@ export function useChArUcoCalibration(
         setJobStatus({
           status: 'completed', progress: 100,
           processed_images: frameTotal(), valid_images: data.per_view_rms?.length ?? 0,
-          total_images: frameTotal(), rms_error: data.rms, num_images_used: data.num_images_used,
+          total_images: frameTotal(), rms_error: respRms(data), num_images_used: data.num_images_used,
         });
       } else {
         setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
@@ -330,7 +361,7 @@ export function useChArUcoCalibration(
         // World frame is defined on camera 1's view; pass clicks only there.
         const data = await generateOne(cam, cam === cams[0] ? clicks : null);
         results[`Camera ${cam}`] = data.success
-          ? { status: 'completed', rms_error: data.rms, num_images_used: data.num_images_used }
+          ? { status: 'completed', rms_error: respRms(data), num_images_used: data.num_images_used }
           : { status: 'failed', error: data.error };
         if (data.success && cam === camera) setCameraModel(toCameraModel(data));
       } catch (e) {
@@ -377,7 +408,8 @@ export function useChArUcoCalibration(
         }),
       });
     } catch (e) {
-      // Best-effort: the authoritative copy lives in model.mat.
+      // Non-authoritative (model.mat holds the world frame), but don't fail silently.
+      console.warn('persistWorldFrame failed:', e);
     }
   }, []);
 
@@ -408,9 +440,12 @@ export function useChArUcoCalibration(
           ...prev,
           [frame]: { grid_points: data.image_points, grid_indices: data.grid_indices },
         }));
+        setDetectError(null);
+      } else {
+        setDetectError(data.error || `No board detected on frame ${frame}`);
       }
     } catch (e) {
-      // Overlay is best-effort.
+      setDetectError(`Detection failed on frame ${frame}: ${String(e)}`);
     }
   }, [camera, sourcePathIdx, boardParams, imageFormat, imageType]);
 
@@ -488,11 +523,12 @@ export function useChArUcoCalibration(
     squaresH, setSquaresH, squaresV, setSquaresV, squareSize, setSquareSize,
     markerRatio, setMarkerRatio, arucoDict, setArucoDict, minCorners, setMinCorners,
     dt, setDt, datumFrame, setDatumFrame,
+    modelType, setModelType,
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
     vectorJobStatus, isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
-    cameraModel, detections, modelLoading, modelLoadError, hasModel: cameraModel !== null,
+    cameraModel, detections, modelLoading, modelLoadError, detectError, hasModel: cameraModel !== null,
     loadedWorldFrame, persistWorldFrame,
     showOverlay, setShowOverlay,
     generateCameraModel, generateCameraModelAll, loadModel, calibrateVectors, detectFrame,

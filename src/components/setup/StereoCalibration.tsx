@@ -9,7 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucide-react";
 import { useStereoCalibration } from "@/hooks/useStereoCalibration";
+import { SelfCalibration2Section } from "@/components/setup/SelfCalibration2Section";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
   useWorldFrame,
@@ -84,6 +86,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     detectionsCam1,
     detectionsCam2,
     modelLoading,
+    detectError,
     hasModel,
 
     // Overlay toggle
@@ -661,6 +664,13 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </p>
             )}
 
+            {detectError && (
+              <div className="text-sm text-amber-600 flex items-center gap-1 mt-2">
+                <AlertTriangle className="h-4 w-4" />
+                {detectError}
+              </div>
+            )}
+
             {/* Calibration Job Progress */}
             {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'starting') && (
               <div className="mt-4 p-3 border rounded bg-blue-50">
@@ -831,9 +841,19 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {stereoModel.world_frame_mode && (
               <p className="mt-3 text-xs text-muted-foreground">World frame: {stereoModel.world_frame_mode}</p>
             )}
+
+            <CalibrationFigureGallery
+              query={{ stereo: 1, board: "dotboard", camera_pair: `${cam1},${cam2}`, source_path_idx: sourcePathIdx }}
+              trigger={stereoModel}
+            />
           </CardContent>
         </Card>
       )}
+
+      {/* Stereo self-calibration (Wieneke) — recovers the laser-sheet offset/tilt */}
+      <SelfCalibration2Section
+        cam1={cam1} cam2={cam2} board="dotboard"
+        hasModel={hasModel} sourcePathIdx={sourcePathIdx} />
     </div>
   );
 };

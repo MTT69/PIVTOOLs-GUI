@@ -162,6 +162,7 @@ export function useStereoCharucoCalibration(
   const [detectionsCam1, setDetectionsCam1] = useState<Record<string, StereoCharucoFrameDetection>>({});
   const [detectionsCam2, setDetectionsCam2] = useState<Record<string, StereoCharucoFrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
   const [showOverlay, setShowOverlay] = useState(true);
 
   const configLoadedRef = useRef(false);
@@ -368,7 +369,8 @@ export function useStereoCharucoCalibration(
         }),
       });
     } catch (e) {
-      // Best-effort: the authoritative copy lives in the stereo model.
+      // Non-authoritative (the stereo model holds the world frame), but don't fail silently.
+      console.warn('persistWorldFrame failed:', e);
     }
   }, []);
 
@@ -398,9 +400,12 @@ export function useStereoCharucoCalibration(
         const entry = { grid_points: data.image_points, grid_indices: data.grid_indices };
         const setter = cam === cam1 ? setDetectionsCam1 : setDetectionsCam2;
         setter(prev => ({ ...prev, [frame]: entry }));
+        setDetectError(null);
+      } else {
+        setDetectError(data.error || `No board detected on Cam${cam} frame ${frame}`);
       }
     } catch (e) {
-      // Overlay is best-effort.
+      setDetectError(`Detection failed on Cam${cam} frame ${frame}: ${String(e)}`);
     }
   }, [cam1, sourcePathIdx, boardParams, imageFormat, imageType]);
 
@@ -491,7 +496,7 @@ export function useStereoCharucoCalibration(
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     reconstructJobStatus, isReconstructing: reconstructJobStatus?.status === 'running' || reconstructJobStatus?.status === 'starting',
-    stereoModel, detectionsCam1, detectionsCam2, modelLoading, hasModel: stereoModel !== null,
+    stereoModel, detectionsCam1, detectionsCam2, modelLoading, detectError, hasModel: stereoModel !== null,
     loadedWorldFrame, persistWorldFrame,
     showOverlay, setShowOverlay,
     generateStereoModel, loadModel, reconstructVectors, detectFrame,

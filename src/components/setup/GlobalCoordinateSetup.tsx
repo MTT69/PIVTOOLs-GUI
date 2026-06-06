@@ -13,6 +13,66 @@ import {
 /** Return type of useGlobalCoordinates hook */
 export type GlobalCoordinatesState = ReturnType<typeof useGlobalCoordinates>;
 
+// ── Discoverable summary + action for the tab body (multi-camera only) ──
+//
+// The datum/overlap PICKING lives in GCInlineControls (in the viewer settings bar); this
+// block surfaces the step on the main card so a multi-camera user discovers it, explains
+// what it does, and exposes the Compute+Save action with the saved per-camera offsets (mm).
+
+interface GlobalFrameSummaryProps {
+  gc: GlobalCoordinatesState;
+  cameraOptions: number[];
+  board?: string;
+  sourcePathIdx?: number;
+}
+
+export function GlobalFrameSummary({
+  gc,
+  cameraOptions,
+  board = 'dotboard',
+  sourcePathIdx = 0,
+}: GlobalFrameSummaryProps) {
+  if (cameraOptions.length <= 1) return null;   // single camera = its own frame, nothing to stitch
+  const ready = !!gc.datumPixel;
+  return (
+    <div className="border-t pt-4 space-y-2">
+      <h4 className="text-sm font-semibold">Multi-camera global frame</h4>
+      <p className="text-xs text-muted-foreground">
+        Stitch every camera into one shared coordinate frame. In the image viewer&apos;s{' '}
+        <strong>Global Coords</strong> controls, pick the datum origin and an overlap point for each
+        camera pair, then compute + save to bake each camera&apos;s offset into its model. Velocities
+        and stresses are unaffected (the offset shifts coordinates only).
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button
+          size="sm"
+          disabled={!ready || gc.savingGlobal}
+          onClick={() => gc.saveGlobalFrame(board, sourcePathIdx)}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+          title={ready
+            ? "Compute the datum-chain shifts and bake them into each camera's model"
+            : "Pick the datum origin in the viewer's Global Coords controls first"}
+        >
+          {gc.savingGlobal ? 'Saving…' : 'Compute + Save Global Frame'}
+        </Button>
+        {!ready && (
+          <span className="text-xs text-muted-foreground">datum origin not set yet</span>
+        )}
+        {gc.savedShifts && (
+          <span className="text-xs text-green-700">
+            Saved:{' '}
+            {Object.entries(gc.savedShifts.camera_shifts)
+              .map(([c, s]: [string, number[]]) =>
+                `Cam${c} (${s[0].toFixed(1)}, ${s[1].toFixed(1)}) mm`)
+              .join('   ')}
+          </span>
+        )}
+        {gc.globalError && <span className="text-xs text-red-600">{gc.globalError}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── Inline controls for the CalibrationImageViewer settings bar ──
 
 interface GCInlineControlsProps {
@@ -20,6 +80,8 @@ interface GCInlineControlsProps {
   currentCamera: number;
   cameraOptions: number[];
   onCameraChange: (cam: number) => void;
+  board?: string;          // which model family to bake the offset into
+  sourcePathIdx?: number;  // which calibration source
 }
 
 /** Info about a pair that involves the current camera */
@@ -52,6 +114,8 @@ export function GCInlineControls({
   currentCamera,
   cameraOptions,
   onCameraChange,
+  board = 'dotboard',
+  sourcePathIdx = 0,
 }: GCInlineControlsProps) {
   const isCam1 = currentCamera === 1;
   const hasMultipleCameras = cameraOptions.length > 1;
@@ -63,9 +127,6 @@ export function GCInlineControls({
   const camIdx = cameraOptions.indexOf(currentCamera);
   const canPrev = camIdx > 0;
   const canNext = camIdx < cameraOptions.length - 1;
-
-  // Check if origin and first feature are set (for flip toggle visibility)
-  const canShowFlip = isCam1 && gc.datumPixel && pairsForCamera.length > 0;
 
   return (
     <>
@@ -212,19 +273,31 @@ export function GCInlineControls({
             );
           })}
 
-          {/* Flip X toggle (cam 1 only, after origin + first feature) */}
-          {canShowFlip && (
+          {/* Compute + Save Global Frame — bakes per-camera world_offset_mm into each
+              model, so the calibrate step emits coordinates in the shared rig frame.
+              The mirror is the per-camera calibration axis choice, not a flag here. */}
+          {gc.datumPixel && (
             <>
               <div className="border-l h-6 mx-1" />
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground whitespace-nowrap">Flip X:</span>
-                <Switch
-                  checked={gc.invertUx}
-                  onCheckedChange={gc.setInvertUx}
-                  className="scale-75"
-                />
-                {gc.autoInvertUx !== null && !gc.invertUxManual && (
-                  <span className="text-[10px] text-muted-foreground italic">auto</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Button
+                  size="sm"
+                  className="h-7 bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={gc.savingGlobal}
+                  onClick={() => gc.saveGlobalFrame(board, sourcePathIdx)}
+                  title="Compute the datum-chain shifts and bake them into each camera's model"
+                >
+                  {gc.savingGlobal ? 'Saving…' : 'Compute + Save Global Frame'}
+                </Button>
+                {gc.savedShifts && (
+                  <span className="text-[11px] text-blue-700 whitespace-nowrap">
+                    {Object.entries(gc.savedShifts.camera_shifts)
+                      .map(([c, s]) => `C${c}(${s[0].toFixed(1)},${s[1].toFixed(1)})`)
+                      .join('  ')}
+                  </span>
+                )}
+                {gc.globalError && (
+                  <span className="text-[11px] text-red-600 whitespace-nowrap">{gc.globalError}</span>
                 )}
               </div>
             </>

@@ -23,6 +23,12 @@ export type SelectionMode =
   | `pair_${number}_${number}_a`
   | `pair_${number}_${number}_b`;
 
+export interface GlobalShiftResult {
+  camera_shifts: Record<string, [number, number]>;
+  datum_physical: [number, number];
+  cameras_saved: number[];
+}
+
 function generatePairs(cameras: number[]): OverlapPair[] {
   const sorted = [...cameras].sort((a, b) => a - b);
   const pairs: OverlapPair[] = [];
@@ -39,6 +45,16 @@ function generatePairs(cameras: number[]): OverlapPair[] {
   return pairs;
 }
 
+/**
+ * Multi-camera global coordinates: a datum (one camera's pixel -> physical mm) plus
+ * an overlap-pair chain that places every camera in one shared rig frame.
+ *
+ * This hook owns the datum + overlap state and persists it to
+ * config.calibration.global_coordinates. The shared frame is BAKED INTO each camera's
+ * model.mat (world_offset_mm) by saveGlobalFrame() -> POST /calibration2/global/save;
+ * the calibrate step then reads it. The mirror (a camera whose image x runs opposite
+ * the global +x) is handled by that camera's calibration axis choice, not a flag here.
+ */
 export function useGlobalCoordinates(
   config: any,
   updateConfig: (path: string[], value: any) => void,
@@ -51,16 +67,19 @@ export function useGlobalCoordinates(
   const [datumPhysicalY, setDatumPhysicalY] = useState('0');
   const [datumFrame, setDatumFrame] = useState(1);
   const [overlapPairs, setOverlapPairs] = useState<OverlapPair[]>([]);
-  const [invertUx, setInvertUxState] = useState(false);
-  const [invertUxManual, setInvertUxManual] = useState(false); // true if user manually set
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('none');
+
+  // Result of the last "Compute + Save Global Frame" action (per-camera mm shifts).
+  const [savedShifts, setSavedShifts] = useState<GlobalShiftResult | null>(null);
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   // Debounce timer ref
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Track calibration sources to clear stale feature data on source change.
-  // Pixel-dependent data (datum_pixel, overlap pairs, invert_ux) becomes invalid
-  // when the calibration images change.
+  // Pixel-dependent data (datum_pixel, overlap pairs) becomes invalid when the
+  // calibration images change.
   const prevCalibSourcesRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -80,8 +99,7 @@ export function useGlobalCoordinates(
       // Source changed — clear pixel-dependent feature data
       setDatumPixel(null);
       setOverlapPairs(generatePairs(cameraOptions));
-      setInvertUxState(false);
-      setInvertUxManual(false);
+      setSavedShifts(null);
 
       // Persist reset to backend (direct fetch to avoid saveToConfig dependency issues)
       const gc = config?.calibration?.global_coordinates;
@@ -91,7 +109,6 @@ export function useGlobalCoordinates(
         datum_pixel: null,
         datum_physical: gc?.datum_physical ?? [0, 0],
         datum_frame: gc?.datum_frame ?? 1,
-        invert_ux: false,
         overlap_pairs: [],
       };
 
@@ -151,7 +168,6 @@ export function useGlobalCoordinates(
     setDatumPhysicalX(String(gc.datum_physical?.[0] ?? 0));
     setDatumPhysicalY(String(gc.datum_physical?.[1] ?? 0));
     setDatumFrame(gc.datum_frame ?? 1);
-    setInvertUxState(gc.invert_ux ?? false);
   }, [config?.calibration?.global_coordinates, cameraOptions]);
 
   // Save to config (debounced)
@@ -162,7 +178,6 @@ export function useGlobalCoordinates(
       datum_physical: [number, number];
       datum_frame: number;
       overlap_pairs: OverlapPair[];
-      invert_ux: boolean;
     }>) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
 
@@ -176,7 +191,6 @@ export function useGlobalCoordinates(
           datum_pixel: overrides?.datum_pixel !== undefined ? overrides.datum_pixel : datumPixel,
           datum_physical: [physX, physY],
           datum_frame: overrides?.datum_frame ?? datumFrame,
-          invert_ux: overrides?.invert_ux ?? invertUx,
           overlap_pairs: (overrides?.overlap_pairs ?? overlapPairs).filter(
             p => p.pixel_on_a !== null || p.pixel_on_b !== null
           ),
@@ -197,23 +211,8 @@ export function useGlobalCoordinates(
         updateConfig(["calibration", "global_coordinates"], payload);
       }, 300);
     },
-    [enabled, datumPixel, datumPhysicalX, datumPhysicalY, datumFrame, overlapPairs, invertUx, updateConfig]
+    [enabled, datumPixel, datumPhysicalX, datumPhysicalY, datumFrame, overlapPairs, updateConfig]
   );
-
-  // Auto-detect invert_ux when datum + first pair's pixel_on_a are both set
-  useEffect(() => {
-    if (invertUxManual) return;
-    const firstPair = overlapPairs[0];
-    if (datumPixel && firstPair?.pixel_on_a) {
-      const autoInvert = firstPair.pixel_on_a[0] < datumPixel[0];
-      // Only save if the value actually changed — prevents infinite loop:
-      // setInvertUxState → invertUx changes → saveToConfig rebuilds → effect re-triggers
-      if (autoInvert !== invertUx) {
-        setInvertUxState(autoInvert);
-        saveToConfig({ invert_ux: autoInvert });
-      }
-    }
-  }, [datumPixel, overlapPairs, invertUxManual, invertUx, saveToConfig]);
 
   // Toggle enabled
   const handleSetEnabled = useCallback(
@@ -255,16 +254,6 @@ export function useGlobalCoordinates(
     [saveToConfig]
   );
 
-  // Set invert_ux manually
-  const setInvertUx = useCallback(
-    (val: boolean) => {
-      setInvertUxState(val);
-      setInvertUxManual(true);
-      saveToConfig({ invert_ux: val });
-    },
-    [saveToConfig]
-  );
-
   // Clear datum point
   const clearDatum = useCallback(() => {
     setDatumPixel(null);
@@ -287,14 +276,45 @@ export function useGlobalCoordinates(
     [saveToConfig]
   );
 
-  // Compute auto-invert value for display purposes
-  const autoInvertUx = (() => {
-    const firstPair = overlapPairs[0];
-    if (datumPixel && firstPair?.pixel_on_a) {
-      return firstPair.pixel_on_a[0] < datumPixel[0];
-    }
-    return null; // Can't auto-detect yet
-  })();
+  // Compute the datum-chain shifts AND bake them into each camera's model.mat, so the
+  // calibrate step reads them. The board + source identify which models to update.
+  const saveGlobalFrame = useCallback(
+    async (board: string, sourcePathIdx: number): Promise<GlobalShiftResult | null> => {
+      if (!datumPixel) {
+        setGlobalError('Set the datum point on the datum camera first.');
+        return null;
+      }
+      setSavingGlobal(true);
+      setGlobalError(null);
+      try {
+        const res = await fetch('/backend/calibration2/global/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            board,
+            source_path_idx: sourcePathIdx,
+            datum_camera: 1,
+            datum_pixel: datumPixel,
+            datum_physical: [parseFloat(datumPhysicalX) || 0, parseFloat(datumPhysicalY) || 0],
+            overlap_pairs: overlapPairs.filter(p => p.pixel_on_a && p.pixel_on_b),
+          }),
+        });
+        const data = await res.json();
+        if (data.error || !data.success) {
+          setGlobalError(data.error || 'Failed to save global frame');
+          return null;
+        }
+        setSavedShifts(data as GlobalShiftResult);
+        return data as GlobalShiftResult;
+      } catch (e: any) {
+        setGlobalError(String(e));
+        return null;
+      } finally {
+        setSavingGlobal(false);
+      }
+    },
+    [datumPixel, datumPhysicalX, datumPhysicalY, overlapPairs]
+  );
 
   return {
     enabled,
@@ -308,14 +328,14 @@ export function useGlobalCoordinates(
     datumFrame,
     setDatumFrame: handleDatumFrameChange,
     overlapPairs,
-    invertUx,
-    setInvertUx,
-    autoInvertUx,
-    invertUxManual,
     selectionMode,
     setSelectionMode,
     handleDatumPointSelect,
     handlePairPointSelect,
     clearDatum,
+    saveGlobalFrame,
+    savedShifts,
+    savingGlobal,
+    globalError,
   };
 }

@@ -8,6 +8,9 @@ import { DotboardCalibration } from './DotboardCalibration';
 import { ChArUcoCalibration } from './ChArUcoCalibration';
 import { StereoCalibration } from './StereoCalibration';
 import { StereoCharucoCalibration } from './StereoCharucoCalibration';
+import { SteppedCalibration } from './SteppedCalibration';
+import { StereoSteppedCalibration } from './StereoSteppedCalibration';
+import { ScaleFactorCalibration2 } from './ScaleFactorCalibration2';
 
 interface CalibrationProps {
   config: any;
@@ -15,13 +18,17 @@ interface CalibrationProps {
   refetchConfig?: () => Promise<void>;
 }
 
-// The four supported methods on the calibration2 (pinhole) backend. Stepped board,
-// polynomial and self-calibration return as a follow-up project.
+// Supported methods on the calibration2 backend. Scale-factor is the board-free
+// uniform pixel->mm map (pick origin/axes on the image). Stepped is the dual-level
+// dot board (both Z planes feed one pinhole fit).
 const TABS = [
   { id: 'dotboard', label: 'Planar Dotboard' },
   { id: 'charuco', label: 'Planar ChArUco' },
   { id: 'stereo_dotboard', label: 'Stereo Dotboard' },
   { id: 'stereo_charuco', label: 'Stereo ChArUco' },
+  { id: 'stepped', label: 'Stepped Board' },
+  { id: 'stereo_stepped', label: 'Stereo Stepped' },
+  { id: 'scale_factor', label: 'Scale Factor' },
 ];
 
 export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }) => {
@@ -45,7 +52,7 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
         </CardHeader>
         <CardContent>
           <Tabs value={tab} onValueChange={onTab}>
-            <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+            <TabsList className="grid w-full grid-cols-2 md:grid-cols-7">
               {TABS.map((t) => (
                 <TabsTrigger key={t.id} value={t.id}>{t.label}</TabsTrigger>
               ))}
@@ -62,6 +69,15 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
             </TabsContent>
             <TabsContent value="stereo_charuco" className="mt-6">
               <StereoCharucoCalibration {...common} />
+            </TabsContent>
+            <TabsContent value="stepped" className="mt-6">
+              <SteppedCalibration {...common} />
+            </TabsContent>
+            <TabsContent value="stereo_stepped" className="mt-6">
+              <StereoSteppedCalibration {...common} />
+            </TabsContent>
+            <TabsContent value="scale_factor" className="mt-6">
+              <ScaleFactorCalibration2 {...common} />
             </TabsContent>
           </Tabs>
         </CardContent>
