@@ -134,7 +134,7 @@ export function useStereoCalibration(
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   // Board params (persist to config.calibration.dotboard)
-  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1);
 

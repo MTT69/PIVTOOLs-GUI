@@ -7,10 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { AlertTriangle, CheckCircle2, Loader2, Eye } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { useSelfCalibration } from "@/hooks/useSelfCalibration";
-import ZoomableCanvas from "@/components/viewer/zoomableCanvas";
-import { cn } from "@/lib/utils";
 
 interface SelfCalibrationSectionProps {
   cam1: number;
@@ -22,33 +20,20 @@ interface SelfCalibrationSectionProps {
 
 /**
  * Stereo self-calibration (Wieneke 2005) on the calibration backend. Slots into the
- * stereo tabs below the model results, gated on a saved stereo model. Mirrors the v1
- * SelfCalibrationSection UX (preview, run, history, manual, clear) and adds a
- * base_path (PIV dataset) selector, a filter toggle, and a gallery of the six saved
- * diagnostic figures from the calibration source folder.
+ * stereo tabs below the model results, gated on a saved stereo model. Recovers the
+ * laser-sheet Z-offset and tilt from the recorded particle images and bakes that
+ * correction into both camera models (the DaVis convention), so 3C reconstruction sits
+ * on the true sheet. To undo, regenerate the stereo model and re-run.
  */
 export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
   cam1, cam2, board, hasModel, sourcePathIdx = 0,
 }) => {
   const sc = useSelfCalibration(cam1, cam2, board, sourcePathIdx);
   const [nImagesInput, setNImagesInput] = useState(String(sc.nImages));
-  const [frameInputValue, setFrameInputValue] = useState(String(sc.previewFrameIdx));
 
-  // Shared zoom for side-by-side mode.
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
-  const handleZoomChange = (zl: number, px: number, py: number) => {
-    setZoomLevel(zl); setPanX(px); setPanY(py);
-  };
-
-  React.useEffect(() => { setFrameInputValue(String(sc.previewFrameIdx)); }, [sc.previewFrameIdx]);
   React.useEffect(() => { setNImagesInput(String(sc.nImages)); }, [sc.nImages]);
 
   if (!hasModel) return null;
-
-  const hasPreview = sc.previewImage || sc.cam1Image || sc.cam2Image;
-  const canShowCorrected = sc.hasSelfCal || sc.result !== null;
 
   return (
     <Card>
@@ -58,14 +43,15 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
           {sc.hasSelfCal && (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
               <CheckCircle2 className="h-3 w-3 mr-1" />
-              Applied
+              Baked into model
             </span>
           )}
         </CardTitle>
         <CardDescription>
           Correct laser-sheet misalignment (Wieneke 2005) from the recorded particle
-          images. Recovers the sheet Z-offset and tilt and stores them in the stereo
-          model, so 3C reconstruction sits on the true sheet.
+          images. Recovers the sheet Z-offset and tilt and bakes the correction into
+          both camera models, so 3C reconstruction sits on the true sheet. To undo,
+          regenerate the stereo model and re-run.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -95,97 +81,6 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
               Apply PIV pre-filters (recommended; removes static background)
             </Label>
           </div>
-        </div>
-
-        {/* Dewarp Preview */}
-        <div className="space-y-3">
-          <h4 className="text-sm font-semibold">Dewarp Preview</h4>
-
-          <div className="flex flex-wrap items-center gap-3 p-3 bg-muted/50 rounded-md">
-            <Button size="sm" variant="outline" className="px-2"
-              onClick={() => sc.setPreviewFrameIdx(Math.max(1, sc.previewFrameIdx - 1))}
-              disabled={sc.previewFrameIdx <= 1}>
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 4L6 10l6 6" /></svg>
-            </Button>
-            <input type="range" min={1} max={sc.totalFrames} value={sc.previewFrameIdx}
-              onChange={e => sc.setPreviewFrameIdx(Number(e.target.value))} className="w-32" />
-            <Input type="text" inputMode="numeric" value={frameInputValue}
-              onChange={e => {
-                setFrameInputValue(e.target.value);
-                const num = parseInt(e.target.value);
-                if (!isNaN(num) && num >= 1) sc.setPreviewFrameIdx(Math.min(num, sc.totalFrames));
-              }}
-              onBlur={() => {
-                const num = parseInt(frameInputValue);
-                if (isNaN(num) || num < 1) { setFrameInputValue(String(sc.previewFrameIdx)); }
-                else { const c = Math.max(1, Math.min(num, sc.totalFrames)); sc.setPreviewFrameIdx(c); setFrameInputValue(String(c)); }
-              }}
-              className="w-16 h-8" />
-            <span className="text-xs text-muted-foreground whitespace-nowrap">/ {sc.totalFrames}</span>
-            <Button size="sm" variant="outline" className="px-2"
-              onClick={() => sc.setPreviewFrameIdx(Math.min(sc.totalFrames, sc.previewFrameIdx + 1))}
-              disabled={sc.previewFrameIdx >= sc.totalFrames}>
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 4l6 6-6 6" /></svg>
-            </Button>
-
-            <div className="border-l h-6 mx-1" />
-            <div className="flex items-center gap-1">
-              <span className={cn("text-xs font-medium", sc.subFrame === "A" ? "text-primary" : "text-muted-foreground")}>A</span>
-              <Switch checked={sc.subFrame === "B"} onCheckedChange={(c) => sc.setSubFrame(c ? "B" : "A")} />
-              <span className={cn("text-xs font-medium", sc.subFrame === "B" ? "text-primary" : "text-muted-foreground")}>B</span>
-            </div>
-
-            <div className="border-l h-6 mx-1" />
-            <div className="flex gap-1">
-              <Button size="sm" variant={sc.viewMode === "overlay" ? "default" : "outline"}
-                onClick={() => sc.setViewMode("overlay")} className="h-7 px-2 text-xs">Overlay</Button>
-              <Button size="sm" variant={sc.viewMode === "side_by_side" ? "default" : "outline"}
-                onClick={() => sc.setViewMode("side_by_side")} className="h-7 px-2 text-xs">Side by Side</Button>
-            </div>
-
-            <div className="border-l h-6 mx-1" />
-            <div className="flex items-center gap-2">
-              <Switch id="sc2-corrected" checked={sc.showCorrected} onCheckedChange={sc.setShowCorrected} disabled={!canShowCorrected} />
-              <Label htmlFor="sc2-corrected" className="text-xs">{sc.showCorrected ? "Corrected" : "Uncorrected"}</Label>
-            </div>
-
-            <div className="border-l h-6 mx-1" />
-            <Button onClick={() => sc.loadDewarpPreview(sc.showCorrected)} disabled={sc.previewLoading} variant="outline" size="sm">
-              {sc.previewLoading ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Eye className="h-4 w-4 mr-1" />}
-              Load Preview
-            </Button>
-          </div>
-
-          {hasPreview && (
-            sc.viewMode === "overlay" ? (
-              <div className="border rounded overflow-hidden bg-black">
-                <div className="h-[480px]">
-                  <ZoomableCanvas src={sc.previewImage} vmin={0} vmax={100} colormap="gray"
-                    title="Dewarp Overlay" zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={handleZoomChange} />
-                </div>
-                <div className="px-3 py-1.5 bg-muted text-xs text-muted-foreground">
-                  Red = Camera {cam1}, Cyan = Camera {cam2}. Grey = aligned, colour fringing = misalignment.
-                </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <div className="border rounded overflow-hidden bg-black">
-                  <div className="h-[480px]">
-                    <ZoomableCanvas src={sc.cam1Image} vmin={0} vmax={100} colormap="gray"
-                      title={`Camera ${cam1}`} zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={handleZoomChange} />
-                  </div>
-                  <div className="px-3 py-1.5 bg-muted text-xs text-muted-foreground text-center">Camera {cam1}</div>
-                </div>
-                <div className="border rounded overflow-hidden bg-black">
-                  <div className="h-[480px]">
-                    <ZoomableCanvas src={sc.cam2Image} vmin={0} vmax={100} colormap="gray"
-                      title={`Camera ${cam2}`} zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={handleZoomChange} />
-                  </div>
-                  <div className="px-3 py-1.5 bg-muted text-xs text-muted-foreground text-center">Camera {cam2}</div>
-                </div>
-              </div>
-            )
-          )}
         </div>
 
         {/* Parameters */}
@@ -254,7 +149,7 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
         {sc.result && (
           <div className="space-y-4">
             <h4 className="text-sm font-semibold flex items-center gap-2">
-              Results
+              Recovered sheet (baked into both camera models)
               {sc.result.converged ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Converged</span>
               ) : (
@@ -308,13 +203,10 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
           </div>
         )}
 
-        {/* Saved status (no fresh result, but the record carries self-cal) */}
+        {/* Saved status (no fresh result, but the record already carries a baked correction) */}
         {!sc.result && sc.hasSelfCal && sc.status && (
           <div className="p-3 bg-muted rounded text-sm">
-            <div className="flex items-center justify-between mb-1">
-              <div className="font-semibold">Saved Self-Calibration{sc.status.source === "manual" ? " (manual)" : ""}</div>
-              <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => sc.clearSelfCal()}>Clear</Button>
-            </div>
+            <div className="font-semibold mb-1">Baked Self-Calibration{sc.status.source === "manual" ? " (manual)" : ""}</div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div>Z-offset: <span className="font-mono">{sc.status.z_offset.toFixed(4)} mm</span></div>
               <div>Tilt X: <span className="font-mono">{sc.status.tilt_x_deg.toFixed(4)}&deg;</span></div>
@@ -342,66 +234,8 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
             </div>
           </details>
         )}
-
-        {/* Manual sheet entry — for rigs where automatic self-cal cannot run */}
-        <ManualSelfCalInput
-          onSave={sc.saveManual}
-          onClear={sc.clearSelfCal}
-          currentZ={sc.status?.z_offset}
-          hasSavedValues={sc.hasSelfCal}
-        />
       </CardContent>
     </Card>
-  );
-};
-
-const ManualSelfCalInput: React.FC<{
-  onSave: (z: number, tiltXDeg: number, tiltYDeg: number) => Promise<void>;
-  onClear: () => Promise<void>;
-  currentZ?: number;
-  hasSavedValues: boolean;
-}> = ({ onSave, onClear, currentZ, hasSavedValues }) => {
-  const [zStr, setZStr] = useState(currentZ?.toFixed(4) ?? "0");
-  const [txStr, setTxStr] = useState("0");
-  const [tyStr, setTyStr] = useState("0");
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await onSave(parseFloat(zStr) || 0, parseFloat(txStr) || 0, parseFloat(tyStr) || 0);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <details className="mt-3">
-      <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
-        Manual laser-sheet offset / tilt
-      </summary>
-      <div className="mt-2 p-3 border rounded space-y-3">
-        <p className="text-xs text-muted-foreground">
-          Set the laser-sheet Z-offset (mm) and tilts (degrees) by hand. Z=0 is the
-          calibration plane. Used when automatic self-calibration cannot run.
-        </p>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="w-32"><Label className="text-xs">Z-offset (mm)</Label>
-            <Input type="text" inputMode="numeric" value={zStr} onChange={(e) => setZStr(e.target.value)}
-              onBlur={() => setZStr((parseFloat(zStr) || 0).toFixed(4))} className="h-8 text-sm font-mono" /></div>
-          <div className="w-28"><Label className="text-xs">Tilt X (deg)</Label>
-            <Input type="text" inputMode="numeric" value={txStr} onChange={(e) => setTxStr(e.target.value)}
-              onBlur={() => setTxStr((parseFloat(txStr) || 0).toFixed(4))} className="h-8 text-sm font-mono" /></div>
-          <div className="w-28"><Label className="text-xs">Tilt Y (deg)</Label>
-            <Input type="text" inputMode="numeric" value={tyStr} onChange={(e) => setTyStr(e.target.value)}
-              onBlur={() => setTyStr((parseFloat(tyStr) || 0).toFixed(4))} className="h-8 text-sm font-mono" /></div>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}Save
-          </Button>
-          {hasSavedValues && (<Button size="sm" variant="outline" onClick={onClear}>Clear</Button>)}
-        </div>
-      </div>
-    </details>
   );
 };
 

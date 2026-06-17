@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,8 @@ export interface CalibrationImageViewerProps {
   externalFrame?: number;
   // Extra controls rendered in the settings bar
   settingsBarExtras?: React.ReactNode;
+  // Extra controls rendered inline with the frame stepper (e.g. a camera toggle)
+  frameBarExtras?: React.ReactNode;
   // Loading state for detection data (model loading)
   detectionLoading?: boolean;
   // External overlay points (with optional per-point color, e.g. stepped board)
@@ -107,6 +109,7 @@ export default function CalibrationImageViewer({
   externalCamera,
   externalFrame,
   settingsBarExtras,
+  frameBarExtras,
   detectionLoading = false,
   externalOverlayPoints,
   externalOverlayLines,
@@ -244,7 +247,12 @@ export default function CalibrationImageViewer({
         setMeasureP2({ x: imageX, y: imageY });
       }
     } else if (pointSelectMode && onPointSelect) {
-      onPointSelect(imageX, imageY, externalCamera ?? camera, index);
+      // Report the REQUESTED camera/frame (what the picker drove the viewer to), not the internal
+      // index, which lags externalFrame by a commit. Without this, a same-camera pick (the joint
+      // rescue flow, where camera can't distinguish reference from target) could be attributed to
+      // the wrong frame during the auto-switch. Consumers that don't set externalFrame are
+      // unaffected (externalFrame ?? index === index).
+      onPointSelect(imageX, imageY, externalCamera ?? camera, externalFrame ?? index);
     }
   };
 
@@ -265,6 +273,21 @@ export default function CalibrationImageViewer({
 
   // Measure line prop for ZoomableCanvas
   const measureLine = measureP1 ? { p1: measureP1, p2: measureP2 ?? undefined } : null;
+
+  // "Minimal mesh" overlay for the dotboard/charuco detection grid: thin cyan links, a hollow ring
+  // per detected dot, and a small red centre marking the measured centroid. External overlays
+  // (stepped board, with meaningful per-point colours) keep the historic solid style.
+  const useMeshOverlay = !(externalOverlayPoints && externalOverlayPoints.length > 0);
+  const meshOverlayProps = useMeshOverlay
+    ? {
+        overlayPointStyle: 'ring' as const,
+        overlayColor: 'rgba(34, 211, 238, 0.95)', // cyan ring
+        overlayCenterColor: '#ff3b30', // red centre
+        overlayLineColor: 'rgba(34, 211, 238, 0.5)',
+        overlayLineWidth: 1.5,
+        overlayRadius: 7,
+      }
+    : {};
 
   // Compute overlay points from saved detections for current frame + external
   const savedOverlayPoints = useMemo(() => {
@@ -384,6 +407,7 @@ export default function CalibrationImageViewer({
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
             overlayLines={savedOverlayLines}
+            {...meshOverlayProps}
             clickMode={pointSelectMode}
             onImageClick={handleImageClick}
             markerPoints={selectedMarkers}
@@ -416,13 +440,7 @@ export default function CalibrationImageViewer({
   // Full mode with card wrapper
   return (
     <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-lg">Calibration Image Viewer</CardTitle>
-        <CardDescription>
-          Browse calibration target images for Camera {camera}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 pt-6">
         {/* Frame Navigation */}
         <div className="flex flex-col md:flex-row items-center gap-4">
           <Label className="text-sm font-medium whitespace-nowrap">Frame:</Label>
@@ -468,6 +486,9 @@ export default function CalibrationImageViewer({
               </svg>
             </Button>
           </div>
+
+          {/* Extra controls inline with the frame stepper (e.g. a camera toggle) */}
+          {frameBarExtras}
 
           {/* Play Controls */}
           <div className="flex items-center gap-2">
@@ -515,6 +536,7 @@ export default function CalibrationImageViewer({
             onZoomChange={handleZoomChange}
             overlayPoints={savedOverlayPoints}
             overlayLines={savedOverlayLines}
+            {...meshOverlayProps}
             clickMode={pointSelectMode || measureMode}
             onImageClick={handleImageClick}
             markerPoints={selectedMarkers}

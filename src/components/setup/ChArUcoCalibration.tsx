@@ -13,18 +13,11 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
-  GCInlineControls,
-  GlobalFrameSummary,
-  useGlobalCoordinates,
-  getGlobalCoordMarkers,
-  getGlobalCoordViewerTarget,
-  handleGlobalCoordPointSelect,
-} from "@/components/setup/GlobalCoordinateSetup";
-import {
   useWorldFrame,
   WorldFrameControls,
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
+import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -128,12 +121,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   const datumNum = parseInt(datumFrame) || 1;
   const onDatumFrame = currentFrame === datumNum;
 
-  // Global coordinate system — pass calibrationSources so stale features reset on source change
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
-  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
-  const gcIsSelecting = gc.selectionMode !== "none";
+  // Multi-camera datasets are always solved jointly (one shared board); a single camera uses the
+  // per-camera mono solve. No toggle — the path is chosen by camera count. ChArUco continuity across
+  // images is automatic from corner ids; the user only sets the world origin.
+  const multiCam = cameraOptions.length >= 2;
 
-  // World-frame (coordinate-system x,y) picker — datum frame only.
+  // World-frame (coordinate-system x,y) picker — datum frame only (single-camera mono solve).
   const wf = useWorldFrame({
     board: "charuco", camera, sourcePathIdx, datumFrame: parseInt(datumFrame) || 1,
     boardParams: () => ({
@@ -227,10 +220,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   }, [config.calibration, updateConfig]);
 
   const isActive = config.calibration?.active === "charuco";
-
-  // Check if container format (unsupported on macOS)
-  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
-  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
 
   return (
     <div className="space-y-6">
@@ -381,17 +370,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </div>
           )}
 
-          {/* macOS Warning for Unsupported Formats */}
-          {isContainerFormat && isMacOS && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-              <AlertDescription>
-                .set and .im7 container formats require Windows or Linux.
-              </AlertDescription>
-            </Alert>
-          )}
-
           {/* Section 3: Validation Status */}
           {validation && (
             <ValidationAlert
@@ -455,7 +433,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <Select value={modelType} onValueChange={(v) => setModelType(v as 'pinhole' | 'polynomial')}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="pinhole">Pinhole (DaVis PinholeOpenCV)</SelectItem>
+                  <SelectItem value="pinhole">Pinhole (OpenCV k1,k2,p1,p2)</SelectItem>
                   <SelectItem value="polynomial">Polynomial (3rd order, single plane)</SelectItem>
                 </SelectContent>
               </Select>
@@ -555,6 +533,28 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </div>
           </div>
 
+          {/* Multi-camera datasets are solved jointly against one shared board (no toggle). A single
+              camera uses the per-camera mono solve below. ChArUco corner ids give the grid; the
+              cross-camera linking dotboard needs is automatic here. */}
+          {multiCam && (
+            <JointMultiCamera
+              board="charuco"
+              cameraOptions={cameraOptions}
+              sourcePathIdx={sourcePathIdx}
+              numImages={parseInt(numImages) || 10}
+              imageFormat={imageFormat}
+              imageType={imageType}
+              modelType={modelType}
+              validationValid={!!validation?.valid}
+              datumFrame={parseInt(datumFrame) || 1}
+              calibrateVectors={calibrateVectors}
+              vectorJobStatus={vectorJobStatus}
+              isVectorCalibrating={isVectorCalibrating}
+            />
+          )}
+
+          {!multiCam && (
+          <>
           {/* Section 5: Image Viewer Toggle */}
           {validation?.valid && (
             <div className="flex items-center gap-2">
@@ -587,7 +587,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <CalibrationImageViewer
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
-              camera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
+              camera={camera}
               numImages={parseInt(numImages) || 10}
               calibrationType="charuco"
               refreshKey={`${validation?.camera_path}-${validation?.valid}`}
@@ -595,15 +595,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
-              pointSelectMode={wfIsSelecting || gcIsSelecting}
-              onPointSelect={(px, py, cam, frame) =>
-                wfIsSelecting ? wf.handlePoint(px, py) : handleGlobalCoordPointSelect(gc, px, py, cam, frame)}
-              selectedMarkers={[
-                ...(onDatumFrame ? getWorldFrameMarkers(wf) : []),
-                ...(gcIsSelecting ? getGlobalCoordMarkers(gc, gcViewerTarget ? gcViewerTarget.camera : camera, 1) : []),
-              ]}
-              externalCamera={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
-              externalFrame={gcIsSelecting && !wfIsSelecting && gcViewerTarget ? gcViewerTarget.frame : undefined}
+              pointSelectMode={wfIsSelecting}
+              onPointSelect={(px, py) => { if (wfIsSelecting) wf.handlePoint(px, py); }}
+              selectedMarkers={onDatumFrame ? getWorldFrameMarkers(wf) : []}
               detectionLoading={modelLoading}
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
@@ -617,16 +611,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                     <WorldFrameControls wf={wf} />
                   ) : (
                     <span className="text-xs text-muted-foreground">World frame is set on the datum frame ({datumNum}).</span>
-                  )}
-                  {cameraOptions.length > 1 && (
-                    <GCInlineControls
-                      gc={gc}
-                      currentCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : camera}
-                      cameraOptions={cameraOptions}
-                      onCameraChange={setCamera}
-                      board="charuco"
-                      sourcePathIdx={sourcePathIdx}
-                    />
                   )}
                 </div>
               }
@@ -877,15 +861,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
               </div>
             )}
-
-            <GlobalFrameSummary
-              gc={gc} cameraOptions={cameraOptions} board="charuco" sourcePathIdx={sourcePathIdx} />
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
 
-      {/* Section 8: Camera Model Results */}
-      {hasModel && cameraModel && (
+      {/* Section 8: Camera Model Results (single-camera mono solve) */}
+      {!multiCam && hasModel && cameraModel && (
         <Card>
           <CardHeader>
             <CardTitle>Camera Model Results</CardTitle>

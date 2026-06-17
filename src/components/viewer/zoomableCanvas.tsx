@@ -42,6 +42,10 @@ interface ZoomableCanvasProps {
   overlayPoints?: OverlayPoint[];
   overlayColor?: string;
   overlayRadius?: number;
+  // 'solid' (default) fills each point; 'ring' draws a hollow ring + a small solid centre dot
+  // (the "minimal mesh" calibration overlay). Other viewers keep the historic solid style.
+  overlayPointStyle?: 'solid' | 'ring';
+  overlayCenterColor?: string;
   overlayLines?: OverlayLine[];
   overlayLineColor?: string;
   overlayLineWidth?: number;
@@ -58,6 +62,7 @@ export default function ZoomableCanvas({
   useGrid, gridSize = 16, gridThickness = 1,
   zoomLevel, panX, panY, onZoomChange,
   overlayPoints, overlayColor = '#ff0000', overlayRadius = 8,
+  overlayPointStyle = 'solid', overlayCenterColor = '#ff3b30',
   overlayLines, overlayLineColor = 'rgba(0, 220, 0, 0.9)', overlayLineWidth = 2,
   onImageClick, clickMode = false, markerPoints,
   measureLine
@@ -201,11 +206,16 @@ export default function ZoomableCanvas({
     canvas.height = h;
     ctx.clearRect(0, 0, w, h);
 
-    // Draw lines first (behind dots)
+    const baseDim = Math.max(w, h);
+    const ring = overlayPointStyle === 'ring';
+
+    // Draw lines first (behind dots). Mesh style keeps links thin so the dots read through; the
+    // solid style keeps the historic floor for thick connecting lines (stepped board etc.).
     if (overlayLines && overlayLines.length > 0) {
-      ctx.globalAlpha = 0.8;
-      const baseDim = Math.max(w, h);
-      ctx.lineWidth = Math.max(overlayLineWidth, baseDim * 0.002);
+      ctx.globalAlpha = ring ? 1 : 0.8;
+      ctx.lineWidth = ring
+        ? Math.max(overlayLineWidth, baseDim * 0.0009)
+        : Math.max(overlayLineWidth, baseDim * 0.002);
       for (const line of overlayLines) {
         ctx.strokeStyle = line.color || overlayLineColor;
         ctx.beginPath();
@@ -217,15 +227,36 @@ export default function ZoomableCanvas({
 
     // Draw dots on top
     if (overlayPoints && overlayPoints.length > 0) {
-      ctx.globalAlpha = 0.8;
-      for (const pt of overlayPoints) {
-        ctx.fillStyle = pt.color || overlayColor;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
-        ctx.fill();
+      if (ring) {
+        // Hollow ring at each detected dot + a small solid centre marking its measured centroid.
+        const ringWidth = Math.max(1.25, baseDim * 0.0011);
+        const centreR = Math.max(1.5, overlayRadius * 0.32);
+        for (const pt of overlayPoints) {
+          ctx.globalAlpha = 0.95;
+          ctx.lineWidth = ringWidth;
+          ctx.strokeStyle = pt.color || overlayColor;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = overlayCenterColor;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, centreR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        ctx.globalAlpha = 0.8;
+        for (const pt of overlayPoints) {
+          ctx.fillStyle = pt.color || overlayColor;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, overlayRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
-  }, [overlayPoints, overlayColor, overlayRadius, overlayLines, overlayLineColor, overlayLineWidth, raw, imgEl]);
+  }, [overlayPoints, overlayColor, overlayRadius, overlayPointStyle, overlayCenterColor,
+      overlayLines, overlayLineColor, overlayLineWidth, raw, imgEl]);
 
   // Draw marker points (labeled circles + crosshairs for point selection)
   useEffect(() => {

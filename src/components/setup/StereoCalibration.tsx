@@ -210,10 +210,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     return Object.keys(result).length > 0 ? result : undefined;
   }, [detectionsCam1, detectionsCam2, activeCam, cam1]);
 
-  // Check if container format (unsupported on macOS)
-  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
-  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
-
   return (
     <div className="space-y-6">
       {/* Main Configuration Card */}
@@ -390,17 +386,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* macOS Warning for Unsupported Formats */}
-          {isContainerFormat && isMacOS && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-              <AlertDescription>
-                .set and .im7 container formats require Windows or Linux.
-              </AlertDescription>
-            </Alert>
-          )}
-
           {/* Section 3: Stereo Validation Status */}
           {validation && (
             <div className="space-y-2">
@@ -484,7 +469,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   min={0}
                   value={dotSpacingMmInput}
                   onChange={e => setDotSpacingMmInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 28.89)}
+                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 15.0)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>

@@ -185,7 +185,7 @@ export function useStereoSteppedCalibration(
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   // ---------- Board geometry + dt (persists to config.calibration.stepped) ----------
-  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
   const [stepHeightMm, setStepHeightMm] = useState(3.0);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
   const [dt, setDt] = useState(1.0);
@@ -239,6 +239,7 @@ export function useStereoSteppedCalibration(
   const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollHandles = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
+  const pollGen = useRef(0);  // bumped on source/pair change to cancel in-flight job polls
   const reconstructPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---------- Per-camera setters ----------
@@ -279,9 +280,13 @@ export function useStereoSteppedCalibration(
   const pollJob = useCallback(
     (statusUrl: string, onUpdate?: (d: JobStatus) => void): Promise<JobStatus> =>
       new Promise<JobStatus>((resolve) => {
+        const gen = pollGen.current;  // capture the cancellation generation at start
         let handle: ReturnType<typeof setInterval> | null = null;
         const finish = (d: JobStatus) => {
           if (handle) { clearInterval(handle); pollHandles.current.delete(handle); }
+          // Source/pair change cleared the intervals and bumped pollGen; a final in-flight
+          // tick must NOT resolve, or its stale result would resurrect cleared state.
+          if (pollGen.current !== gen) return;
           resolve(d);
         };
         const tick = async () => {
@@ -466,6 +471,7 @@ export function useStereoSteppedCalibration(
     setDetectionProgress(0);
     setDetectionDataMap({});
     setFitJobStatus(null);
+    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
     pollHandles.current.forEach(h => clearInterval(h));
     pollHandles.current.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -576,14 +582,17 @@ export function useStereoSteppedCalibration(
           const sx = data.snapped_x as number;
           const sy = data.snapped_y as number;
           setFiducialFor(cam, which, [sx, sy]);
+          setSequenceError(null);
           return { snapped_x: sx, snapped_y: sy };
         }
+        // No detected dot near the click: surface it and keep the previous fiducial.
+        // Storing the raw click would feed an un-snapped pixel into the world frame.
         console.error('snap_fiducial failed:', data.error);
-        setFiducialFor(cam, which, [clickX, clickY]);
+        setSequenceError(data.error || `Cam ${cam}: could not snap to a detected dot — click on a dot.`);
         return null;
       } catch (e) {
         console.error('snap_fiducial error:', e);
-        setFiducialFor(cam, which, [clickX, clickY]);
+        setSequenceError(String(e));
         return null;
       }
     },
@@ -591,26 +600,41 @@ export function useStereoSteppedCalibration(
   );
 
   // ---------- Build a complete {frame_idx: peak|trough} map for a camera ----------
-  // Covers EVERY detected frame (generate requires a label per frame); the datum +
-  // any unlabelled/failed pose default to the datum face (inert for failed
-  // detections, which the calibrator skips).
-  const buildPoseLevels = useCallback((cam: number): Record<number, string> => {
-    const poses = sequencePoses[cam] || [];
-    const labels = poseLevels[cam] || {};
-    const datum = clickedLevel[cam] || 'peak';
-    const out: Record<number, string> = {};
-    for (const p of poses) {
-      out[p.frame_idx] = p.is_datum ? datum : (labels[p.frame_idx] ?? datum);
-    }
-    return out;
-  }, [sequencePoses, poseLevels, clickedLevel]);
+  // The generate route requires a label per detected frame. An unverified non-datum
+  // pose has no label: with assumeDatum it deliberately falls back to the datum face;
+  // without it, the map is incomplete and we return null so the caller refuses to
+  // generate rather than silently mislabel poses.
+  const buildPoseLevels = useCallback(
+    (cam: number, assumeDatum: boolean): Record<number, string> | null => {
+      const poses = sequencePoses[cam] || [];
+      const labels = poseLevels[cam] || {};
+      const datum = clickedLevel[cam] || 'peak';
+      const out: Record<number, string> = {};
+      for (const p of poses) {
+        if (p.is_datum) { out[p.frame_idx] = datum; continue; }
+        const label = labels[p.frame_idx];
+        if (label !== undefined) {
+          out[p.frame_idx] = label;
+        } else if (!p.ok) {
+          out[p.frame_idx] = datum;  // failed detection: placeholder, the calibrator skips it
+        } else if (assumeDatum) {
+          out[p.frame_idx] = datum;  // deliberate opt-out
+        } else {
+          return null;  // usable + unverified pose, not assuming -> caller must not generate
+        }
+      }
+      return out;
+    },
+    [sequencePoses, poseLevels, clickedLevel],
+  );
 
   // ---------- Generate the stereo model (one fit, both cameras) ----------
-  const generateModel = useCallback(async () => {
+  const generateModel = useCallback(async (assumeDatum = false) => {
     if (!sequenceId) {
       setFitJobStatus({ status: 'failed', error: 'No sequence detected.' });
       return;
     }
+    const poseLevelsByCam: Record<number, Record<number, string>> = {};
     for (const cam of [cam1, cam2]) {
       const fids = fiducials[cam];
       const level = clickedLevel[cam];
@@ -622,6 +646,13 @@ export function useStereoSteppedCalibration(
         setFitJobStatus({ status: 'failed', error: `Select the clicked level for Cam ${cam}.` });
         return;
       }
+      const built = buildPoseLevels(cam, assumeDatum);
+      if (built === null) {
+        setFitJobStatus({ status: 'failed', error: `Cam ${cam}: some poses are not verified. `
+          + 'Verify every pose, or enable "Assume datum face for unverified poses".' });
+        return;
+      }
+      poseLevelsByCam[cam] = built;
     }
 
     setFitJobStatus({ status: 'starting', progress: 0 });
@@ -638,12 +669,12 @@ export function useStereoSteppedCalibration(
             [String(cam1)]: {
               fiducials: fiducials[cam1],
               clicked_level: clickedLevel[cam1],
-              pose_levels: buildPoseLevels(cam1),
+              pose_levels: poseLevelsByCam[cam1],
             },
             [String(cam2)]: {
               fiducials: fiducials[cam2],
               clicked_level: clickedLevel[cam2],
-              pose_levels: buildPoseLevels(cam2),
+              pose_levels: poseLevelsByCam[cam2],
             },
           },
         }),

@@ -191,7 +191,7 @@ export function WorldFrameControls({ wf }: { wf: WorldFrameState }) {
         size="sm"
         variant={active ? "default" : picked ? "secondary" : "outline"}
         onClick={() => wf.startPick(role)}
-        disabled={wf.busy || !wf.ready}
+        disabled={wf.busy}
         className="h-7 px-2 text-xs"
         style={picked ? { borderColor: ROLE_STYLE[role].color } : undefined}
       >
@@ -206,7 +206,10 @@ export function WorldFrameControls({ wf }: { wf: WorldFrameState }) {
   return (
     <div className="flex items-center gap-1 flex-wrap">
       <span className="text-xs text-muted-foreground">World frame:</span>
-      {!wf.ready && <span className="text-xs text-muted-foreground">detect dots to enable</span>}
+      {wf.busy && <span className="text-xs text-muted-foreground">detecting…</span>}
+      {!wf.busy && !wf.ready && (
+        <span className="text-xs text-muted-foreground">click Set Origin, then click the dot</span>
+      )}
       {(Object.keys(ROLE_STYLE) as WorldFrameRole[]).map(pickBtn)}
       {wf.clicks.origin && (
         <span className="flex items-center gap-1">

@@ -1,5 +1,5 @@
 "use client";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -168,11 +168,29 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
   const [numFramesInput, setNumFramesInput] = useState(String(numCalibrationFrames));
   const [labelTarget, setLabelTarget] = useState<{ frameIdx: number } | null>(null);
   const [displayedFrame, setDisplayedFrame] = useState<number>(datumFrame);
+  // Off by default: generate is gated on every pose being verified. Turning this on is a
+  // deliberate opt-out that labels unverified poses with the datum face (the old behaviour).
+  const [assumeDatumForUnverified, setAssumeDatumForUnverified] = useState(false);
+
+  // In-flight latches: the click handlers are async (await a snap / a pose identify) and
+  // capture this render's step/target, so a second click before the first resolves would
+  // act on stale state. A ref (synchronous, unlike setState) blocks the re-entrant click.
+  const snapInFlight = useRef(false);
+  const labelInFlight = useRef(false);
 
   // Verification derived from poseLevels — persists to config.yaml
   const isVerified = useCallback((frameIdx: number) =>
     (poseLevels?.[camera] || {})[frameIdx] !== undefined,
   [poseLevels, camera]);
+
+  // Every usable (ok, non-datum) pose has an explicit label. Failed detections need no
+  // label (the calibrator skips them); `every` on no such poses is true (the
+  // single-datum-view poly3d case needs no verification). Mirrors the verify UI's count.
+  const allVerifiedForCam = useCallback((cam: number) => {
+    const poses = sequencePoses[cam] ?? [];
+    const labels = poseLevels?.[cam] || {};
+    return poses.filter(p => !p.is_datum && p.ok).every(p => labels[p.frame_idx] !== undefined);
+  }, [sequencePoses, poseLevels]);
 
   React.useEffect(() => { setDotSpacingInput(String(dotSpacingMm)); }, [dotSpacingMm]);
   React.useEffect(() => { setStepHeightInput(String(stepHeightMm)); }, [stepHeightMm]);
@@ -229,10 +247,12 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
       activeSequenceId !== null &&
       hasAllFiducials &&
       (activeClickedLevel === 'peak' || activeClickedLevel === 'trough') &&
+      (assumeDatumForUnverified || allVerifiedForCam(camera)) &&
       activeFitJob?.status !== 'running' &&
       activeFitJob?.status !== 'starting'
     );
-  }, [activeSequenceStatus, activeSequenceId, hasAllFiducials, activeClickedLevel, activeFitJob]);
+  }, [activeSequenceStatus, activeSequenceId, hasAllFiducials, activeClickedLevel,
+      assumeDatumForUnverified, allVerifiedForCam, camera, activeFitJob]);
 
   const canGenerateForAll = useMemo(() => {
     if (cameraOptions.length === 0) return false;
@@ -243,9 +263,11 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
       if (!sid) return false;
       if (!fids?.origin || !fids?.x_axis || !fids?.y_axis) return false;
       if (level !== 'peak' && level !== 'trough') return false;
+      if (!assumeDatumForUnverified && !allVerifiedForCam(cam)) return false;
     }
     return !isMultiCameraCalibrating;
-  }, [cameraOptions, sequenceId, fiducials, clickedLevel, isMultiCameraCalibrating]);
+  }, [cameraOptions, sequenceId, fiducials, clickedLevel, assumeDatumForUnverified,
+      allVerifiedForCam, isMultiCameraCalibrating]);
 
   const hasActiveModel = activeCameraModel !== null;
 
@@ -265,13 +287,23 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
       return;
     }
     if (!fiducialSelectMode || !currentFiducialName) return;
-    await snapFiducial(camera, currentFiducialName, pixelX, pixelY);
-    const nextIdx = fiducialStepIdx + 1;
-    if (nextIdx < FIDUCIAL_STEPS.length) {
-      setFiducialStepIdx(nextIdx);
-    } else {
-      setFiducialSelectMode(false);
-      setFiducialStepIdx(0);
+    // Refuse a second click while a snap is pending: the handler captured this render's
+    // fiducialStepIdx/currentFiducialName, so a double-click would snap two anchors to the
+    // SAME step (e.g. both 'origin'), silently moving the world-frame origin onto the +X dot.
+    if (snapInFlight.current) return;
+    snapInFlight.current = true;
+    try {
+      const snapped = await snapFiducial(camera, currentFiducialName, pixelX, pixelY);
+      if (!snapped) return;  // snap failed (error surfaced by the hook): keep this step, retry
+      const nextIdx = fiducialStepIdx + 1;
+      if (nextIdx < FIDUCIAL_STEPS.length) {
+        setFiducialStepIdx(nextIdx);
+      } else {
+        setFiducialSelectMode(false);
+        setFiducialStepIdx(0);
+      }
+    } finally {
+      snapInFlight.current = false;
     }
   }, [gcIsSelecting, gc, fiducialSelectMode, currentFiducialName, snapFiducial, camera, fiducialStepIdx]);
 
@@ -348,24 +380,32 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
   // config.yaml), then auto-advance to next unverified pose.
   const handleLabelClick = useCallback(async (pixelX: number, pixelY: number) => {
     if (!labelTarget) return;
-    const level = await identifyPoseLevel(camera, labelTarget.frameIdx, pixelX, pixelY);
-    if (!level) { setLabelTarget(null); return; }
+    // Same re-entrancy guard as the fiducial snap: a double-click would identify the same
+    // frame twice and double-advance the verify cursor (skipping a pose).
+    if (labelInFlight.current) return;
+    labelInFlight.current = true;
+    try {
+      const level = await identifyPoseLevel(camera, labelTarget.frameIdx, pixelX, pixelY);
+      if (!level) { setLabelTarget(null); return; }
 
-    setPoseLevel(camera, labelTarget.frameIdx, level);
+      setPoseLevel(camera, labelTarget.frameIdx, level);
 
-    const activePoses = (sequencePoses?.[camera] || []) as Array<{ frame_idx: number; is_datum?: boolean; ok?: boolean }>;
-    const nextPose = activePoses.find(p =>
-      !p.is_datum && p.ok &&
-      p.frame_idx !== labelTarget.frameIdx &&
-      !isVerified(p.frame_idx)
-    );
-    if (nextPose) {
-      setLabelTarget({ frameIdx: nextPose.frame_idx });
-      fetchPoseDetection(camera, nextPose.frame_idx);
-      return;
+      const activePoses = (sequencePoses?.[camera] || []) as Array<{ frame_idx: number; is_datum?: boolean; ok?: boolean }>;
+      const nextPose = activePoses.find(p =>
+        !p.is_datum && p.ok &&
+        p.frame_idx !== labelTarget.frameIdx &&
+        !isVerified(p.frame_idx)
+      );
+      if (nextPose) {
+        setLabelTarget({ frameIdx: nextPose.frame_idx });
+        fetchPoseDetection(camera, nextPose.frame_idx);
+        return;
+      }
+
+      setLabelTarget(null);
+    } finally {
+      labelInFlight.current = false;
     }
-
-    setLabelTarget(null);
   }, [labelTarget, camera, identifyPoseLevel, setPoseLevel, sequencePoses, isVerified, fetchPoseDetection]);
 
   const fmtCoord = (coord: [number, number] | null): string => {
@@ -392,10 +432,6 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
   }, [config.calibration, updateConfig]);
 
   const isActive = config.calibration?.active === "stepped";
-
-  // macOS container format detection
-  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
-  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
 
   return (
     <div className="space-y-6">
@@ -502,14 +538,6 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
               </div>
             </div>
 
-            {isContainerFormat && isMacOS && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-                <AlertDescription>.set and .im7 container formats require Windows or Linux.</AlertDescription>
-              </Alert>
-            )}
-
             {(imageType === "standard" || imageType === "lavision_im7") && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
@@ -601,7 +629,7 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
                   type="text" inputMode="numeric"
                   value={dotSpacingInput}
                   onChange={e => setDotSpacingInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingInput) || 28.89)}
+                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingInput) || 15.0)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
@@ -978,15 +1006,27 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
           <div className="border-t pt-4 space-y-4">
             <h3 className="text-sm font-semibold">Generate Model</h3>
 
+            <div className="flex items-center gap-2">
+              <Switch
+                id="stepped-assume-datum-unverified"
+                checked={assumeDatumForUnverified}
+                onCheckedChange={setAssumeDatumForUnverified}
+              />
+              <Label htmlFor="stepped-assume-datum-unverified" className="text-sm">
+                Assume datum face for unverified poses
+              </Label>
+            </div>
+
             <div className="flex items-center gap-2 flex-wrap">
               <Button
-                onClick={() => generateCameraModel(camera)}
+                onClick={() => generateCameraModel(camera, assumeDatumForUnverified)}
                 disabled={!canGenerateForActive}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
                 title={
                   canGenerateForActive
                     ? `Fit pinhole model for Cam ${camera}`
-                    : 'Need sequence + all 3 fiducials + clicked level for this camera'
+                    : 'Need sequence + all 3 fiducials + clicked level + every pose verified '
+                      + '(or enable "Assume datum face for unverified poses")'
                 }
               >
                 {activeFitJob?.status === 'running' || activeFitJob?.status === 'starting' ? (
@@ -1000,14 +1040,15 @@ export const SteppedCalibration: React.FC<SteppedCalibrationProps> = ({
               </Button>
 
               <Button
-                onClick={() => generateCameraModelAll()}
+                onClick={() => generateCameraModelAll(assumeDatumForUnverified)}
                 disabled={!canGenerateForAll}
                 variant="outline"
                 className="border-blue-400 text-blue-700 hover:bg-blue-50"
                 title={
                   canGenerateForAll
                     ? 'Fit pinhole models for all configured cameras'
-                    : 'All cameras need sequence + all 3 fiducials + clicked level'
+                    : 'All cameras need sequence + all 3 fiducials + clicked level + every pose '
+                      + 'verified (or enable "Assume datum face for unverified poses")'
                 }
               >
                 {isMultiCameraCalibrating ? (

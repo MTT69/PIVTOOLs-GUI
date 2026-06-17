@@ -150,7 +150,7 @@ export function useSteppedCalibration(
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   // ---------- Board geometry + dt (persists to config.calibration.stepped) ----------
-  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
   const [stepHeightMm, setStepHeightMm] = useState(3.0);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
   const [dt, setDt] = useState(1.0);
@@ -202,6 +202,7 @@ export function useSteppedCalibration(
   const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollHandles = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
+  const pollGen = useRef(0);  // bumped on source change to cancel in-flight job polls
   const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---------- Per-camera setters ----------
@@ -264,9 +265,14 @@ export function useSteppedCalibration(
   const pollJob = useCallback(
     (statusUrl: string, onUpdate?: (d: JobStatus) => void): Promise<JobStatus> =>
       new Promise<JobStatus>((resolve) => {
+        const gen = pollGen.current;  // capture the cancellation generation at start
         let handle: ReturnType<typeof setInterval> | null = null;
         const finish = (d: JobStatus) => {
           if (handle) { clearInterval(handle); pollHandles.current.delete(handle); }
+          // A source change cleared the intervals and bumped pollGen; if a final tick's
+          // fetch was already in flight it must NOT resolve, or its stale per-camera
+          // result would resurrect the just-cleared sequence state.
+          if (pollGen.current !== gen) return;
           resolve(d);
         };
         const tick = async () => {
@@ -442,6 +448,7 @@ export function useSteppedCalibration(
     setDetectionProgressMap({});
     setDetectionDataMap({});
     setFitJobStatusMap({});
+    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
     pollHandles.current.forEach(h => clearInterval(h));
     pollHandles.current.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -536,14 +543,18 @@ export function useSteppedCalibration(
           const sx = data.snapped_x as number;
           const sy = data.snapped_y as number;
           setFiducialsFor(cam, prev => ({ ...prev, [which]: [sx, sy] }));
+          setSequenceErrorFor(cam, null);
           return { snapped_x: sx, snapped_y: sy };
         }
+        // No detected dot near the click: surface the failure and keep the previous
+        // fiducial. Storing the raw click would feed an un-snapped pixel into the world
+        // frame — exactly the silent-bad-input the snap exists to prevent.
         console.error('snap_fiducial failed:', data.error);
-        setFiducialsFor(cam, prev => ({ ...prev, [which]: [clickX, clickY] }));
+        setSequenceErrorFor(cam, data.error || 'Could not snap to a detected dot — click on a dot.');
         return null;
       } catch (e) {
         console.error('snap_fiducial error:', e);
-        setFiducialsFor(cam, prev => ({ ...prev, [which]: [clickX, clickY] }));
+        setSequenceErrorFor(cam, String(e));
         return null;
       }
     },
@@ -551,23 +562,38 @@ export function useSteppedCalibration(
   );
 
   // ---------- Build a complete {frame_idx: peak|trough} map for a camera ----------
-  // Covers EVERY detected frame (the generate route requires a label per frame);
-  // the datum + any unlabelled/failed pose default to the datum face (inert for
-  // failed detections, which the calibrator skips).
-  const buildPoseLevels = useCallback((cam: number): Record<number, string> => {
-    const poses = sequencePoses[cam] || [];
-    const labels = poseLevels[cam] || {};
-    const datum = clickedLevel[cam] || 'peak';
-    const out: Record<number, string> = {};
-    for (const p of poses) {
-      out[p.frame_idx] = p.is_datum ? datum : (labels[p.frame_idx] ?? datum);
-    }
-    return out;
-  }, [sequencePoses, poseLevels, clickedLevel]);
+  // The generate route requires a label per detected frame. An unverified non-datum
+  // pose has no label: with assumeDatum it deliberately falls back to the datum face
+  // (the operator opted in via the checkbox); without it, the map is incomplete and we
+  // return null so the caller refuses to generate rather than silently mislabel poses.
+  const buildPoseLevels = useCallback(
+    (cam: number, assumeDatum: boolean): Record<number, string> | null => {
+      const poses = sequencePoses[cam] || [];
+      const labels = poseLevels[cam] || {};
+      const datum = clickedLevel[cam] || 'peak';
+      const out: Record<number, string> = {};
+      for (const p of poses) {
+        if (p.is_datum) { out[p.frame_idx] = datum; continue; }
+        const label = labels[p.frame_idx];
+        if (label !== undefined) {
+          out[p.frame_idx] = label;
+        } else if (!p.ok) {
+          out[p.frame_idx] = datum;  // failed detection: placeholder, the calibrator skips it
+        } else if (assumeDatum) {
+          out[p.frame_idx] = datum;  // deliberate opt-out
+        } else {
+          return null;  // usable + unverified pose, not assuming -> caller must not generate
+        }
+      }
+      return out;
+    },
+    [sequencePoses, poseLevels, clickedLevel],
+  );
 
   // ---------- POST generate_model for one camera + poll to completion ----------
   const runGenerateJob = useCallback(
-    async (cam: number, onUpdate?: (d: JobStatus) => void): Promise<JobStatus> => {
+    async (cam: number, assumeDatum: boolean,
+           onUpdate?: (d: JobStatus) => void): Promise<JobStatus> => {
       const sid = sequenceId[cam];
       const fids = fiducials[cam];
       const level = clickedLevel[cam];
@@ -577,6 +603,11 @@ export function useSteppedCalibration(
       }
       if (level !== 'peak' && level !== 'trough') {
         return { status: 'failed', error: "Select the clicked level ('peak' or 'trough') first." };
+      }
+      const poseLevelsMap = buildPoseLevels(cam, assumeDatum);
+      if (poseLevelsMap === null) {
+        return { status: 'failed', error: 'Some poses are not verified. Verify every pose, '
+          + 'or enable "Assume datum face for unverified poses" to proceed deliberately.' };
       }
       const res = await fetch('/backend/calibration/stepped/generate_model', {
         method: 'POST',
@@ -589,7 +620,7 @@ export function useSteppedCalibration(
             [String(cam)]: {
               fiducials: { origin: fids.origin, x_axis: fids.x_axis, y_axis: fids.y_axis },
               clicked_level: level,
-              pose_levels: buildPoseLevels(cam),
+              pose_levels: poseLevelsMap,
             },
           },
         }),
@@ -604,9 +635,9 @@ export function useSteppedCalibration(
   );
 
   // ---------- Generate model for one camera ----------
-  const generateCameraModel = useCallback(async (cam: number) => {
+  const generateCameraModel = useCallback(async (cam: number, assumeDatum = false) => {
     setFitJobStatusFor(cam, { status: 'starting', progress: 0 });
-    const done = await runGenerateJob(cam, (d) => setFitJobStatusFor(cam, d));
+    const done = await runGenerateJob(cam, assumeDatum, (d) => setFitJobStatusFor(cam, d));
     setFitJobStatusFor(cam, done);
     if (done.status === 'completed') {
       // Partial model from the job payload, then hydrate the rest (camera matrix,
@@ -618,7 +649,7 @@ export function useSteppedCalibration(
   }, [runGenerateJob]);
 
   // ---------- Generate model for ALL cameras (sequential) ----------
-  const generateCameraModelAll = useCallback(async () => {
+  const generateCameraModelAll = useCallback(async (assumeDatum = false) => {
     const cams = cameraOptions.length ? cameraOptions : [camera];
     const results: NonNullable<MultiCameraJobStatus['camera_results']> = {};
     setMultiCameraJobStatus({ status: 'running', processed_cameras: 0, total_cameras: cams.length });
@@ -628,7 +659,7 @@ export function useSteppedCalibration(
         status: 'running', processed_cameras: i, total_cameras: cams.length,
         current_camera: cam, camera_results: { ...results },
       });
-      const done = await runGenerateJob(cam);
+      const done = await runGenerateJob(cam, assumeDatum);
       if (done.status === 'completed') {
         results[`Camera ${cam}`] = {
           status: 'completed', rms: done.rms, num_poses: done.num_views_used, model_path: done.model_path,

@@ -29,6 +29,7 @@ export interface SC2Result {
 /** The saved self_cal block on the stereo record. */
 export interface SC2Status {
   has_self_calibration: boolean;
+  baked: boolean;
   z_offset: number;
   tilt_x: number;
   tilt_y: number;
@@ -45,13 +46,12 @@ export interface SC2Status {
 }
 
 /**
- * Stereo self-calibration (Wieneke disparity minimisation) on the calibration
- * backend. Loads the saved stereo model + recorded PIV particle frames from a
- * base_path dataset, recovers the laser sheet (z_offset, tilt_x, tilt_y), writes it
- * into the stereo record (so apply uses it automatically), and saves six diagnostic
- * figures into the calibration source folder. The calibration counterpart of the v1
- * `useSelfCalibration`, repointed to `/calibration/self_cal/*` with a base-path
- * selector + filter toggle.
+ * Stereo self-calibration (Wieneke 2005) on the calibration backend. Loads the saved
+ * stereo model + recorded PIV particle frames from a base_path dataset, recovers the
+ * laser sheet (z_offset, tilt_x, tilt_y), and **bakes** that correction into both
+ * cameras' extrinsics (the DaVis convention) so 3C reconstruction sits on the true
+ * sheet. Six diagnostic figures are saved into the calibration source folder. To undo
+ * a baked correction, regenerate the stereo model and re-run.
  */
 export function useSelfCalibration(
   cam1: number,
@@ -67,17 +67,6 @@ export function useSelfCalibration(
   const [basePathIdx, setBasePathIdx] = useState(0);
   const [basePaths, setBasePaths] = useState<string[]>([]);
 
-  // Preview
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [cam1Image, setCam1Image] = useState<string | null>(null);
-  const [cam2Image, setCam2Image] = useState<string | null>(null);
-  const [previewFrameIdx, setPreviewFrameIdx] = useState(1);
-  const [subFrame, setSubFrame] = useState<'A' | 'B'>('A');
-  const [showCorrected, setShowCorrected] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [totalFrames, setTotalFrames] = useState(1);
-  const [viewMode, setViewMode] = useState<'overlay' | 'side_by_side'>('overlay');
-
   // Job
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
@@ -91,7 +80,6 @@ export function useSelfCalibration(
   const [error, setError] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hasLoadedPreview = useRef(false);
 
   const locator = useCallback(
     () => ({ board, camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx }),
@@ -145,59 +133,6 @@ export function useSelfCalibration(
   useEffect(() => {
     checkStatus();
   }, [checkStatus]);
-
-  // Live red-cyan dewarp preview of one frame pair.
-  const loadDewarpPreview = useCallback(
-    async (corrected: boolean = false) => {
-      setPreviewLoading(true);
-      setError(null);
-      try {
-        const body: Record<string, any> = {
-          ...locator(),
-          base_path_idx: basePathIdx,
-          frame_idx: previewFrameIdx,
-          sub_frame: subFrame,
-          show_corrected: corrected,
-        };
-        if (corrected) {
-          const src = result ?? status;
-          if (src) {
-            body.z_offset = src.z_offset;
-            body.tilt_x = src.tilt_x;
-            body.tilt_y = src.tilt_y;
-          }
-        }
-        const res = await fetch('/backend/calibration/self_cal/preview', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (data.error) {
-          setError(data.error);
-        } else {
-          setPreviewImage(data.overlay || null);
-          setCam1Image(data.cam1_image || null);
-          setCam2Image(data.cam2_image || null);
-          if (data.total_frames) setTotalFrames(data.total_frames);
-          hasLoadedPreview.current = true;
-        }
-      } catch (e: any) {
-        setError(e?.message || 'Failed to load preview');
-      } finally {
-        setPreviewLoading(false);
-      }
-    },
-    [locator, basePathIdx, previewFrameIdx, subFrame, result, status],
-  );
-
-  // Debounced auto-reload on frame / sub-frame / corrected toggle (after first load).
-  useEffect(() => {
-    if (!hasLoadedPreview.current) return;
-    const timer = setTimeout(() => loadDewarpPreview(showCorrected), 300);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewFrameIdx, subFrame, showCorrected]);
 
   const pollJob = useCallback(
     async (id: string) => {
@@ -282,49 +217,6 @@ export function useSelfCalibration(
     [],
   );
 
-  const saveManual = useCallback(
-    async (zOffset: number, tiltXDeg: number, tiltYDeg: number) => {
-      try {
-        const res = await fetch('/backend/calibration/self_cal/save_manual', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...locator(),
-            z_offset: zOffset,
-            tilt_x_deg: tiltXDeg,
-            tilt_y_deg: tiltYDeg,
-          }),
-        });
-        const data = await res.json();
-        if (data.error) setError(data.error);
-        else await checkStatus();
-      } catch (e: any) {
-        setError(e?.message || 'Failed to save manual self-cal');
-      }
-    },
-    [locator, checkStatus],
-  );
-
-  const clearSelfCal = useCallback(async () => {
-    try {
-      const res = await fetch('/backend/calibration/self_cal/clear', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(locator()),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setResult(null);
-        setFigures([]);
-        await checkStatus();
-      }
-    } catch (e: any) {
-      setError(e?.message || 'Failed to clear self-cal');
-    }
-  }, [locator, checkStatus]);
-
   return {
     // Parameters
     nImages, setNImages,
@@ -332,14 +224,6 @@ export function useSelfCalibration(
     overlap, setOverlap,
     applyFilters, setApplyFilters,
     basePathIdx, setBasePathIdx, basePaths,
-
-    // Preview
-    previewImage, cam1Image, cam2Image,
-    previewFrameIdx, setPreviewFrameIdx,
-    subFrame, setSubFrame,
-    showCorrected, setShowCorrected,
-    previewLoading, loadDewarpPreview,
-    totalFrames, viewMode, setViewMode,
 
     // Job
     jobId, jobStatus, jobProgress, isRunning, runSelfCalibration,
@@ -349,6 +233,6 @@ export function useSelfCalibration(
     hasSelfCal: status?.has_self_calibration ?? false,
 
     // Error + actions
-    error, checkStatus, saveManual, clearSelfCal,
+    error, checkStatus,
   };
 }

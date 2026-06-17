@@ -1,5 +1,5 @@
 "use client";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -182,10 +182,26 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   const [labelTarget, setLabelTarget] = useState<{ frameIdx: number; camera: number } | null>(null);
   const [displayedFrame, setDisplayedFrame] = useState<number>(datumFrame);
 
+  // Off by default: generate is gated on every usable pose being verified. Turning this
+  // on deliberately labels unverified poses with the datum face (the old behaviour).
+  const [assumeDatumForUnverified, setAssumeDatumForUnverified] = useState(false);
+
+  // In-flight latches for the async click handlers (snap / pose identify): a ref blocks a
+  // re-entrant click that would otherwise act on this render's stale step/target.
+  const snapInFlight = useRef(false);
+  const labelInFlight = useRef(false);
+
   // A pose is verified for a camera once its peak/trough label is set.
   const isVerified = useCallback((cam: number, frameIdx: number) =>
     (poseLevels?.[cam] || {})[frameIdx] !== undefined,
   [poseLevels]);
+
+  // Every usable (ok, non-datum) pose has a label. Failed detections need none (the
+  // calibrator skips them); mirrors the verify UI's count.
+  const allVerifiedForCam = useCallback((cam: number) => {
+    const poses = sequencePoses[cam] ?? [];
+    return poses.filter(p => !p.is_datum && p.ok).every(p => isVerified(cam, p.frame_idx));
+  }, [sequencePoses, isVerified]);
 
   React.useEffect(() => { setDotSpacingInput(String(dotSpacingMm)); }, [dotSpacingMm]);
   React.useEffect(() => { setStepHeightInput(String(stepHeightMm)); }, [stepHeightMm]);
@@ -247,9 +263,11 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
       sequenceId !== null &&
       hasAllFiducials(cam1) && hasAllFiducials(cam2) &&
       hasLevel(cam1) && hasLevel(cam2) &&
+      (assumeDatumForUnverified || (allVerifiedForCam(cam1) && allVerifiedForCam(cam2))) &&
       !isGenerating
     );
-  }, [sequenceStatus, sequenceId, hasAllFiducials, hasLevel, cam1, cam2, isGenerating]);
+  }, [sequenceStatus, sequenceId, hasAllFiducials, hasLevel, cam1, cam2,
+      assumeDatumForUnverified, allVerifiedForCam, isGenerating]);
 
   const hasModel = stereoModel !== null;
 
@@ -268,13 +286,26 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
       return;
     }
     if (!fiducialSelectMode || !currentStep || currentStepCam === null) return;
-    await snapFiducial(currentStepCam, currentStep.point, pixelX, pixelY);
-    const nextIdx = fiducialStepIdx + 1;
-    if (nextIdx < FIDUCIAL_STEPS.length) {
-      setFiducialStepIdx(nextIdx);
-    } else {
-      setFiducialSelectMode(false);
-      setFiducialStepIdx(0);
+    // Refuse a re-entrant click while a snap is pending. Worse than mono: a stale click at
+    // the slot-1->slot-2 boundary could snap cam2's pixels against cam1's board, cross-
+    // contaminating the world frame. Pin the target cam/point BEFORE the await so a camera
+    // switch mid-snap can't redirect this result.
+    if (snapInFlight.current) return;
+    snapInFlight.current = true;
+    const targetCam = currentStepCam;
+    const targetWhich = currentStep.point;
+    try {
+      const snapped = await snapFiducial(targetCam, targetWhich, pixelX, pixelY);
+      if (!snapped) return;  // snap failed (error surfaced by the hook): keep this step, retry
+      const nextIdx = fiducialStepIdx + 1;
+      if (nextIdx < FIDUCIAL_STEPS.length) {
+        setFiducialStepIdx(nextIdx);
+      } else {
+        setFiducialSelectMode(false);
+        setFiducialStepIdx(0);
+      }
+    } finally {
+      snapInFlight.current = false;
     }
   }, [gcIsSelecting, gc, fiducialSelectMode, currentStep, currentStepCam, snapFiducial, fiducialStepIdx]);
 
@@ -364,31 +395,39 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   // other camera on the same frame, else the next unverified pose.
   const handleLabelClick = useCallback(async (pixelX: number, pixelY: number) => {
     if (!labelTarget) return;
+    // Re-entrancy guard: a double-click would identify the same frame twice and double-
+    // advance the cursor (skipping a pose, or desyncing activeCam/labelTarget mid-switch).
+    if (labelInFlight.current) return;
+    labelInFlight.current = true;
     const { frameIdx, camera } = labelTarget;
-    const level = await identifyPoseLevel(camera, frameIdx, pixelX, pixelY);
-    if (!level) { setLabelTarget(null); return; }
+    try {
+      const level = await identifyPoseLevel(camera, frameIdx, pixelX, pixelY);
+      if (!level) { setLabelTarget(null); return; }
 
-    setPoseLevel(camera, frameIdx, level);
+      setPoseLevel(camera, frameIdx, level);
 
-    // Other camera, same frame, if it detected and is still unverified.
-    const otherCam = camera === cam1 ? cam2 : cam1;
-    const otherPose = (sequencePoses[otherCam] ?? []).find(p => p.frame_idx === frameIdx);
-    if (otherPose?.ok && !otherPose.is_datum && !isVerified(otherCam, frameIdx)) {
-      setActiveCam(otherCam);
-      setLabelTarget({ frameIdx, camera: otherCam });
-      fetchPoseDetection(otherCam, frameIdx);
-      return;
+      // Other camera, same frame, if it detected and is still unverified.
+      const otherCam = camera === cam1 ? cam2 : cam1;
+      const otherPose = (sequencePoses[otherCam] ?? []).find(p => p.frame_idx === frameIdx);
+      if (otherPose?.ok && !otherPose.is_datum && !isVerified(otherCam, frameIdx)) {
+        setActiveCam(otherCam);
+        setLabelTarget({ frameIdx, camera: otherCam });
+        fetchPoseDetection(otherCam, frameIdx);
+        return;
+      }
+
+      const next = findNextUnverified();
+      if (next && !(next.frameIdx === frameIdx && next.camera === camera)) {
+        setActiveCam(next.camera);
+        setLabelTarget(next);
+        fetchPoseDetection(next.camera, next.frameIdx);
+        return;
+      }
+
+      setLabelTarget(null);
+    } finally {
+      labelInFlight.current = false;
     }
-
-    const next = findNextUnverified();
-    if (next && !(next.frameIdx === frameIdx && next.camera === camera)) {
-      setActiveCam(next.camera);
-      setLabelTarget(next);
-      fetchPoseDetection(next.camera, next.frameIdx);
-      return;
-    }
-
-    setLabelTarget(null);
   }, [labelTarget, cam1, cam2, identifyPoseLevel, setPoseLevel, sequencePoses, isVerified, fetchPoseDetection, findNextUnverified, setActiveCam]);
 
   // ---- Verification roll-up across both cameras ----
@@ -429,10 +468,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   }, [config.calibration, updateConfig]);
 
   const isActive = config.calibration?.active === "stereo_stepped";
-
-  // macOS container format detection
-  const isContainerFormat = imageFormat.includes('.set') || imageFormat.includes('.im7');
-  const isMacOS = typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('mac');
 
   const viewerCamera = gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : activeCam;
 
@@ -546,14 +581,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             </div>
 
-            {isContainerFormat && isMacOS && (
-              <Alert variant="destructive">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-                <AlertDescription>.set and .im7 container formats require Windows or Linux.</AlertDescription>
-              </Alert>
-            )}
-
             {(imageType === "standard" || imageType === "lavision_im7") && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
@@ -631,7 +658,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   type="text" inputMode="numeric"
                   value={dotSpacingInput}
                   onChange={e => setDotSpacingInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingInput) || 28.89)}
+                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingInput) || 15.0)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
@@ -1067,15 +1094,27 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
           <div className="border-t pt-4 space-y-4">
             <h3 className="text-sm font-semibold">Generate Stereo Model</h3>
 
+            <div className="flex items-center gap-2">
+              <Switch
+                id="stereo-stepped-assume-datum-unverified"
+                checked={assumeDatumForUnverified}
+                onCheckedChange={setAssumeDatumForUnverified}
+              />
+              <Label htmlFor="stereo-stepped-assume-datum-unverified" className="text-sm">
+                Assume datum face for unverified poses
+              </Label>
+            </div>
+
             <div className="flex items-center gap-2 flex-wrap">
               <Button
-                onClick={() => generateModel()}
+                onClick={() => generateModel(assumeDatumForUnverified)}
                 disabled={!canGenerate}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
                 title={
                   canGenerate
                     ? 'Fit the stereo pinhole model for both cameras'
-                    : 'Need sequence + all 6 fiducials + a clicked level for each camera'
+                    : 'Need sequence + all 6 fiducials + a clicked level + every pose verified '
+                      + 'for each camera (or enable "Assume datum face for unverified poses")'
                 }
               >
                 {isGenerating ? (

@@ -144,7 +144,7 @@ export function useChArUcoCalibration(
 
   // Board params (persist to config.calibration.charuco) — kept as strings for inputs.
   const [squaresH, setSquaresH] = useState<string>("10");
-  const [squaresV, setSquaresV] = useState<string>("9");
+  const [squaresV, setSquaresV] = useState<string>("7");
   const [squareSize, setSquareSize] = useState<string>("0.03");  // meters
   const [markerRatio, setMarkerRatio] = useState<string>("0.5");
   const [arucoDict, setArucoDict] = useState<string>("DICT_4X4_1000");
@@ -180,7 +180,7 @@ export function useChArUcoCalibration(
 
   const boardParams = useCallback(() => ({
     squares_h: parseInt(squaresH) || 10,
-    squares_v: parseInt(squaresV) || 9,
+    squares_v: parseInt(squaresV) || 7,
     square_size: parseFloat(squareSize) || 0.03,
     marker_ratio: parseFloat(markerRatio) || 0.5,
     aruco_dict: arucoDict,

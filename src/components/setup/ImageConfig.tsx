@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Image as ImageIcon, AlertTriangle, Info, CheckCircle, XCircle } from "lucide-react";
+import { Plus, Minus, Image as ImageIcon, Info, CheckCircle, XCircle } from "lucide-react";
 import { useConfigUpdate, PatternValidation, ValidationState } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
 import { cn } from "@/lib/utils";
@@ -21,13 +21,6 @@ const detectImageType = (pattern: string | undefined): string => {
   if (lower.includes('.set')) return "lavision_set";
   if (lower.includes('.im7') || lower.includes('.ims')) return "lavision_im7";
   return "standard";
-};
-
-// Helper to detect container formats (.set, .im7, .ims, .cine) which store multiple frames
-const isContainerFormat = (pattern: string | undefined): boolean => {
-  if (!pattern) return false;
-  const lower = pattern.toLowerCase();
-  return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims') || lower.includes('.cine');
 };
 
 // Helper to derive A/B pattern pair from a single pattern
@@ -102,8 +95,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [rawPatterns, setRawPatterns] = useState<string[]>([]);
   const [vectorPattern, setVectorPattern] = useState<string>("");
   const [savingMeta, setSavingMeta] = useState<string>("");
-  const [isMacOS, setIsMacOS] = useState(false);
-  const [hasUnsupportedFormat, setHasUnsupportedFormat] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [imageType, setImageType] = useState<string>("standard");
   const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
@@ -117,33 +108,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [startIndexStr, setStartIndexStr] = useState<string>("1");
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
-
-  // Detect macOS
-  useEffect(() => {
-    const platform = navigator.platform.toLowerCase();
-    const userAgent = navigator.userAgent.toLowerCase();
-    const isMac = platform.includes('mac') || userAgent.includes('mac');
-    setIsMacOS(isMac);
-  }, []);
-
-  // Check for unsupported file formats on macOS
-  useEffect(() => {
-    if (!isMacOS) {
-      setHasUnsupportedFormat(false);
-      return;
-    }
-    const imageFormat = config.images?.image_format;
-    if (!imageFormat) {
-      setHasUnsupportedFormat(false);
-      return;
-    }
-    const formats = Array.isArray(imageFormat) ? imageFormat : [imageFormat];
-    const unsupported = formats.some((fmt: string) => {
-      const lower = fmt.toLowerCase();
-      return lower.includes('.set') || lower.includes('.im7') || lower.includes('.ims');
-    });
-    setHasUnsupportedFormat(unsupported);
-  }, [isMacOS, config.images?.image_format]);
 
   // Load config into state
   useEffect(() => {
@@ -391,20 +355,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
             <ImageIcon className="h-6 w-6 text-soton-blue" />
             <h2 className="text-2xl font-bold text-gray-800">Image Configuration</h2>
           </div>
-
-          {/* macOS unsupported format warning */}
-          {hasUnsupportedFormat && (
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Unsupported File Format on macOS</AlertTitle>
-              <AlertDescription>
-                The .set, .im7, and .ims file formats are not supported on macOS due to library limitations.
-                These formats require Windows-specific DLLs from LaVision DaVis.
-                <br />
-                <strong>Recommendation:</strong> Use .tif, .png, or other standard image formats on macOS, or run this application on Windows/Linux.
-              </AlertDescription>
-            </Alert>
-          )}
 
           <Card>
             <CardHeader>

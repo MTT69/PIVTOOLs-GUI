@@ -71,6 +71,7 @@ export interface JobStatus {
   total_images: number;
   error?: string;
   rms_error?: number;
+  rms_unit?: 'px' | 'mm';
   num_images_used?: number;
   warnings?: string[];
 }
@@ -92,7 +93,7 @@ export interface MultiCameraJobStatus {
   processed_images?: number;
   total_images?: number;
   valid_images?: number;
-  camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string; warnings?: string[] }> & {
+  camera_results?: Record<string, { status: string; rms_error?: number; rms_unit?: 'px' | 'mm'; num_images_used?: number; error?: string; warnings?: string[] }> & {
     global_alignment?: GlobalAlignmentResult;
   };
   camera_progress?: Record<number, { current: number; total: number; message?: string }>;
@@ -128,7 +129,7 @@ export function useDotboardCalibration(
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
   // Board params (persist to config.calibration)
-  const [dotSpacingMm, setDotSpacingMm] = useState(28.89);
+  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
   const [dt, setDt] = useState(1.0);
   const [datumFrame, setDatumFrame] = useState(1);
   // Camera-model type: pinhole (3D) or polynomial (single-plane). Planar tabs only.
@@ -277,6 +278,9 @@ export function useDotboardCalibration(
   // RMS for the v1 JobStatus (pinhole: px; polynomial: combined mm).
   const respRms = (d: any): number | undefined =>
     d.model_type === 'polynomial' ? Math.hypot(d.rms_x_mm ?? 0, d.rms_y_mm ?? 0) : d.rms;
+  // The unit that matches respRms — stamped on the job so the display label can't
+  // drift from the live model-type selector after generate.
+  const respUnit = (d: any): 'px' | 'mm' => (d.model_type === 'polynomial' ? 'mm' : 'px');
 
   // Generate the model for one camera (synchronous); optional world-frame clicks.
   const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
@@ -304,7 +308,7 @@ export function useDotboardCalibration(
         setJobStatus({
           status: 'completed', progress: 100,
           processed_images: frameTotal(), valid_images: data.per_view_rms?.length ?? 0,
-          total_images: frameTotal(), rms_error: respRms(data), num_images_used: data.num_images_used,
+          total_images: frameTotal(), rms_error: respRms(data), rms_unit: respUnit(data), num_images_used: data.num_images_used,
         });
       } else {
         setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
@@ -317,7 +321,7 @@ export function useDotboardCalibration(
   // All-cameras generate (loops camera_numbers; v1 behaviour).
   const generateCameraModelAll = useCallback(async (clicks?: WorldFrameClicks | null) => {
     const cams = cameraOptions.length ? cameraOptions : [camera];
-    const results: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string }> = {};
+    const results: Record<string, { status: string; rms_error?: number; rms_unit?: 'px' | 'mm'; num_images_used?: number; error?: string }> = {};
     setMultiCameraJobStatus({ status: 'running', processed_cameras: 0, total_cameras: cams.length });
     for (let i = 0; i < cams.length; i++) {
       const cam = cams[i];
@@ -326,7 +330,7 @@ export function useDotboardCalibration(
         // World frame is defined on camera 1's view; pass clicks only there.
         const data = await generateOne(cam, cam === cams[0] ? clicks : null);
         results[`Camera ${cam}`] = data.success
-          ? { status: 'completed', rms_error: respRms(data), num_images_used: data.num_images_used }
+          ? { status: 'completed', rms_error: respRms(data), rms_unit: respUnit(data), num_images_used: data.num_images_used }
           : { status: 'failed', error: data.error };
         if (data.success && cam === camera) setCameraModel(toCameraModel(data));
       } catch (e) {
