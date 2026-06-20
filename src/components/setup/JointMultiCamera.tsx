@@ -494,14 +494,21 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
 
   // Build the guided walk. Frame-major, camera-inner: every frame is completed across ALL cameras
   // before the walk moves to the next frame. Per non-datum frame, in order: the datum camera's origin
-  // click, then a 2-shared-dot bridge for every OTHER camera (datum-camera dots first, then the same
-  // dots in the other camera). The datum frame goes first so the cross-camera orientation is fixed
-  // before the per-frame origins; on it the world frame already sets the origin, so no origin click.
+  // click, then a 2-shared-dot bridge that ties each remaining camera to its ALREADY-RESOLVED
+  // neighbour, walking OUTWARD from the datum — cam(d+1)←datum, cam(d+2)←cam(d+1), and likewise on the
+  // datum's other side. This matches a linear rig's real overlap chain (cam1–cam2–cam3): a camera
+  // shares dots only with its neighbour, never necessarily with the datum, so bridging everything to
+  // the datum (a star) would ask for shared dots that do not exist. Adjacency is sorted-camera order,
+  // the same convention generatePairs() uses. The backend resolver (resolve_global_grid) stitches the
+  // chain with a fixpoint pass, so a reference need only be resolved earlier in the walk — the outward
+  // order guarantees that. The datum frame goes first so the cross-camera orientation is fixed before
+  // the per-frame origins; on it the world frame already sets the origin, so no origin click.
   //
   // A guided run is a deliberate full pass — it re-walks every detected view regardless of any saved
   // anchor (re-clicking overwrites it cleanly), so pressing the button never silently jumps a step.
-  // A view whose dots aren't detected CAN'T be snapped; it is recorded in `skipped` and surfaced to
-  // the user (a visible notice) rather than dropped in silence.
+  // A view whose dots aren't detected CAN'T be snapped (nor can a camera whose inward neighbour is
+  // missing, since the chain breaks there); it is recorded in `skipped` and surfaced to the user (a
+  // visible notice) rather than dropped in silence.
   const buildGuideActions = useCallback((): {
     actions: GuideAction[];
     skipped: Array<{ camera: number; frame: number }>;
@@ -510,7 +517,8 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     const detected = (cam: number, vw: number) =>
       resolveData.views.some((x) => x.camera === cam && x.view === vw && x.points.length > 0);
     const c0 = grid.datumCamera;
-    const others = cameras.filter((c) => c !== c0);
+    const sorted = [...cameras].sort((a, b) => a - b);
+    const datumIdx = sorted.indexOf(c0);
     const frames = [
       grid.datumView,
       ...Array.from({ length: numImages }, (_, i) => i).filter((v) => v !== grid.datumView),
@@ -519,21 +527,34 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     // the single clean flow, so the user no longer presses a separate Origin button first.
     const actions: GuideAction[] = [{ kind: "datum", camera: c0, view: grid.datumView }];
     const skipped: Array<{ camera: number; frame: number }> = [];
+    // Bridge along one side of the chain at frame f: each camera references the neighbour one step
+    // closer to the datum (already resolved by the time we reach it). A missing detection breaks the
+    // chain, so that camera and everything beyond it on this side is skipped.
+    const emitSide = (indices: number[], f: number) => {
+      let refCamera = c0;
+      let chainOk = true;
+      for (const i of indices) {
+        const ci = sorted[i];
+        if (chainOk && detected(ci, f)) {
+          actions.push({ kind: "bridge", camera: ci, view: f, refCamera, minPairs: MIN_LINK_PAIRS });
+          refCamera = ci;
+        } else {
+          skipped.push({ camera: ci, frame: f + 1 });
+          chainOk = false;
+        }
+      }
+    };
     for (const f of frames) {
       if (!detected(c0, f)) {
         // No datum-camera dots here — can't set this frame's origin or bridge against it.
         skipped.push({ camera: c0, frame: f + 1 });
-        for (const ci of others) skipped.push({ camera: ci, frame: f + 1 });
+        for (const ci of sorted) if (ci !== c0) skipped.push({ camera: ci, frame: f + 1 });
         continue;
       }
       if (f !== grid.datumView) actions.push({ kind: "origin", camera: c0, view: f });
-      for (const ci of others) {
-        if (detected(ci, f)) {
-          actions.push({ kind: "bridge", camera: ci, view: f, refCamera: c0, minPairs: MIN_LINK_PAIRS });
-        } else {
-          skipped.push({ camera: ci, frame: f + 1 });
-        }
-      }
+      // Walk outward from the datum on each side so every bridge's reference is already resolved.
+      emitSide(Array.from({ length: sorted.length - datumIdx - 1 }, (_, k) => datumIdx + 1 + k), f);
+      emitSide(Array.from({ length: datumIdx }, (_, k) => datumIdx - 1 - k), f);
     }
     return { actions, skipped };
   }, [resolveData, grid, cameras, numImages]);
@@ -908,20 +929,11 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
             <JointJobProgress jobStatus={jobStatus} />
           </div>
 
-      {/* Saved joint model */}
-      {model?.exists && (
-        <JointModelResults
-          model={model}
-          cameraOptions={cameraOptions}
-          board={board}
-          sourcePathIdx={sourcePathIdx}
-        />
-      )}
-
       {/* Calibrate Vectors — apply each camera's joint 2D model to its PIV vectors (planar, not
           3C). Same backend path + action as the single-camera button; mono apply resolves the
           joint model per camera. Works for pinhole (unified joint record) and polynomial
-          (per-camera records the polynomial joint solve writes). */}
+          (per-camera records the polynomial joint solve writes). Kept beside Generate, above the
+          saved-model results + proof figures, so the calibrate action does not sit under them. */}
       {model?.exists && calibrateVectors && (
         <div className="mt-3 space-y-2">
           <div className="flex items-center gap-1">
@@ -988,6 +1000,16 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* Saved joint model — results + proof figures, rendered below the calibrate action. */}
+      {model?.exists && (
+        <JointModelResults
+          model={model}
+          cameraOptions={cameraOptions}
+          board={board}
+          sourcePathIdx={sourcePathIdx}
+        />
       )}
     </div>
   );

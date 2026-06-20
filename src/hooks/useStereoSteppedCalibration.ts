@@ -99,6 +99,9 @@ export interface StereoModel {
   // Resolved same-side / transmission — only returned by generate_model, NOT by
   // the load route. Captured at generate time and shown read-only.
   stereo_config?: string;
+  // Cross-camera pose method ("compose" for stepped: per-camera PnP into the shared
+  // plate frame — there is no joint stereoCalibrate reprojection RMS).
+  method?: string;
 }
 
 export interface ValidationResult {
@@ -146,6 +149,10 @@ export interface JobStatus {
   stereo_config?: string;
   baseline_mm?: number | null;
   relative_angle_deg?: number | null;
+  intrinsics1?: CamIntrinsics;
+  intrinsics2?: CamIntrinsics;
+  method?: string;
+  assumed_poses?: Record<string, number[]>;
   model_path?: string;
   figures?: string[];
   error?: string;
@@ -189,9 +196,11 @@ export function useStereoSteppedCalibration(
   const [stepHeightMm, setStepHeightMm] = useState(3.0);
   const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
   const [dt, setDt] = useState(1.0);
+  const [interpolator, setInterpolator] = useState<'cubic' | 'lanczos'>('lanczos');
 
   // ---------- Sequence-mode controls ----------
-  const [numCalibrationFrames, setNumCalibrationFrames] = useState<number>(10);
+  // The stepped sequence length IS the image count (numImages / frameTotal) — there is no
+  // separate "number of frames" knob; both denote how many frames the sweep has.
   const [datumFrame, setDatumFrame] = useState<number>(1);
 
   // ---------- Stereo geometry classification ----------
@@ -199,6 +208,11 @@ export function useStereoSteppedCalibration(
 
   // ---------- Model family ('pinhole' or single-view 'polynomial3d') ----------
   const [modelType, setModelType] = useState<'pinhole' | 'polynomial3d'>('pinhole');
+
+  // ---------- Fix radial k2 = 0 for few-view (<3 frame) pinhole fits ----------
+  // One near-planar view cannot constrain the r⁴ radial term, so a free k2 runs away
+  // and corrupts focal/angle. Defaults ON; only sent when <3 frames and pinhole.
+  const [fixK2, setFixK2] = useState(true);
 
   // ---------- Validation (both cameras) ----------
   const [validation, setValidation] = useState<StereoValidation | null>(null);
@@ -229,6 +243,9 @@ export function useStereoSteppedCalibration(
   const [stereoModel, setStereoModel] = useState<StereoModel | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+  // A persisted detection sidecar (inputs.mat) for this source/pair lets the user
+  // regenerate the model from disk without re-detecting or re-clicking.
+  const [hasSidecar, setHasSidecar] = useState(false);
 
   // ---------- Reconstruct (apply) job ----------
   const [reconstructJobStatus, setReconstructJobStatus] = useState<ReconstructJobStatus | null>(null);
@@ -241,6 +258,7 @@ export function useStereoSteppedCalibration(
   const pollHandles = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
   const pollGen = useRef(0);  // bumped on source/pair change to cancel in-flight job polls
   const reconstructPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const persistClicksRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ---------- Per-camera setters ----------
   const setSequencePosesFor = (cam: number, v: PoseSummary[] | null) =>
@@ -354,7 +372,6 @@ export function useStereoSteppedCalibration(
           if (sp.dot_spacing_mm) setDotSpacingMm(sp.dot_spacing_mm);
           if (sp.step_height_mm) setStepHeightMm(sp.step_height_mm);
           if (sp.board_thickness_mm) setBoardThicknessMm(sp.board_thickness_mm);
-          if (sp.num_calibration_frames) setNumCalibrationFrames(sp.num_calibration_frames);
           if (c2.dt) setDt(c2.dt);
           if (c2.datum_frame) setDatumFrame(c2.datum_frame);
           if (Array.isArray(c2.camera_pair) && c2.camera_pair.length >= 2) {
@@ -363,39 +380,15 @@ export function useStereoSteppedCalibration(
             setActiveCam(Number(c2.camera_pair[0]));
           }
 
-          // Stereo-only operator state lives in its own block (no mono clobber).
+          // Stereo-only SELECTIONS lives in its own block (no mono clobber). Clicks
+          // (fiducials/clicked_level/pose_levels) are NOT read from config — restoreSequence
+          // restores them per-source from the sidecar inputs.mat.
           const ss = c2.stepped_stereo || {};
           if (ss.stereo_config === 'auto' || ss.stereo_config === 'same_side' || ss.stereo_config === 'transmission') {
             setStereoConfig(ss.stereo_config);
           }
           if (ss.model_type === 'pinhole' || ss.model_type === 'polynomial3d') setModelType(ss.model_type);
-          if (ss.clicked_level && typeof ss.clicked_level === 'object') {
-            const parsed: Record<number, 'peak' | 'trough'> = {};
-            for (const [k, v] of Object.entries(ss.clicked_level)) {
-              if (v === 'peak' || v === 'trough') parsed[Number(k)] = v;
-            }
-            setClickedLevelMap(parsed);
-          }
-          if (ss.pose_levels && typeof ss.pose_levels === 'object') {
-            const parsed: Record<number, Record<number, string>> = {};
-            for (const [camKey, inner] of Object.entries(ss.pose_levels)) {
-              if (inner && typeof inner === 'object') {
-                const innerParsed: Record<number, string> = {};
-                for (const [fk, fv] of Object.entries(inner as Record<string, unknown>)) {
-                  innerParsed[Number(fk)] = String(fv);
-                }
-                parsed[Number(camKey)] = innerParsed;
-              }
-            }
-            setPoseLevelsMap(parsed);
-          }
-          if (ss.fiducials && typeof ss.fiducials === 'object') {
-            const parsed: Record<number, FiducialSet> = {};
-            for (const [camKey, fset] of Object.entries(ss.fiducials)) {
-              if (fset && typeof fset === 'object') parsed[Number(camKey)] = fset as FiducialSet;
-            }
-            setFiducialsMap(parsed);
-          }
+          if (ss.fix_k2 !== undefined) setFixK2(ss.fix_k2);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
@@ -406,6 +399,27 @@ export function useStereoSteppedCalibration(
     };
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The source directory the displayed model/overlay belongs to. Lets saveConfig
+  // detect an in-place path edit (same index, new string) and reload after persist.
+  const loadedSourcePathRef = useRef<string>('');
+  // Latest loadModel — the debounced saveConfig reloads through this ref because
+  // loadModel is defined below it (can't be a saveConfig dependency).
+  const loadModelRef = useRef<((resolvedConfig?: string) => Promise<void>) | null>(null);
+
+  // Clear the sequence/detection state for a source change (stale pixels).
+  const resetSourceState = useCallback(() => {
+    setSequenceId(null);
+    setSequenceStatus('idle');
+    setSequencePosesMap({});
+    setSequenceError(null);
+    setDetectionProgress(0);
+    setDetectionDataMap({});
+    setFitJobStatus(null);
+    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
+    pollHandles.current.forEach(h => clearInterval(h));
+    pollHandles.current.clear();
   }, []);
 
   // ---------- Save config (debounced) ----------
@@ -431,15 +445,14 @@ export function useStereoSteppedCalibration(
                 dot_spacing_mm: dotSpacingMm,
                 step_height_mm: stepHeightMm,
                 board_thickness_mm: boardThicknessMm,
-                num_calibration_frames: numCalibrationFrames,
               },
-              // Stereo-only operator state.
+              // Stereo-only SELECTIONS. Clicks (fiducials/clicked_level/pose_levels) are NOT
+              // persisted here — they live in the sidecar inputs.mat and restore via
+              // restoreSequence (config holds only what you type/select before detecting).
               stepped_stereo: {
                 stereo_config: stereoConfig,
                 model_type: modelType,
-                clicked_level: clickedLevel,
-                pose_levels: poseLevels,
-                fiducials,
+                fix_k2: fixK2,
               },
             },
           }),
@@ -447,13 +460,22 @@ export function useStereoSteppedCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
+      // The path is now persisted; if it was an in-place edit of the current source
+      // directory, clear stale sequence/overlay state and reload for the new directory
+      // (mirrors the source/pair-change effects above).
+      const currentPath = calibrationSources[sourcePathIdx] ?? '';
+      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+        loadedSourcePathRef.current = currentPath;
+        resetSourceState();
+        loadModelRef.current?.();
+      }
       validateImages();
     }, 500);
   }, [
     imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders,
     cameraSubfolders, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, datumFrame,
-    cam1, cam2, numCalibrationFrames, stereoConfig, modelType, clickedLevel, poseLevels, fiducials,
-    validateImages,
+    cam1, cam2, stereoConfig, modelType, fixK2,
+    validateImages, resetSourceState,
   ]);
 
   useEffect(() => {
@@ -461,19 +483,10 @@ export function useStereoSteppedCalibration(
     saveConfig();
   }, [saveConfig]);
 
-  // Clear the sequence state when source or the pair changes (stale pixels).
+  // Clear the sequence state when source index or the pair changes (stale pixels).
   useEffect(() => {
     if (!configLoadedRef.current) return;
-    setSequenceId(null);
-    setSequenceStatus('idle');
-    setSequencePosesMap({});
-    setSequenceError(null);
-    setDetectionProgress(0);
-    setDetectionDataMap({});
-    setFitJobStatus(null);
-    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
-    pollHandles.current.forEach(h => clearInterval(h));
-    pollHandles.current.clear();
+    resetSourceState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourcePathIdx, cam1, cam2]);
 
@@ -491,12 +504,13 @@ export function useStereoSteppedCalibration(
 
   // ---------- Detect the shared pose sequence (both cameras) ----------
   const detect = useCallback(async () => {
-    if (numCalibrationFrames < 1) {
-      setSequenceError('Number of frames must be >= 1');
+    const nFrames = frameTotal();
+    if (nFrames < 1) {
+      setSequenceError('Number of images must be >= 1');
       return;
     }
-    if (datumFrame < 1 || datumFrame > numCalibrationFrames) {
-      setSequenceError(`Datum frame ${datumFrame} is outside [1, ${numCalibrationFrames}]`);
+    if (datumFrame < 1 || datumFrame > nFrames) {
+      setSequenceError(`Datum frame ${datumFrame} is outside [1, ${nFrames}]`);
       return;
     }
     setSequenceStatus('detecting');
@@ -512,7 +526,7 @@ export function useStereoSteppedCalibration(
         body: JSON.stringify({
           source_path_idx: sourcePathIdx,
           cameras: [cam1, cam2],
-          num_frames: numCalibrationFrames,
+          num_frames: nFrames,
           start_frame_idx: 1,
           datum_frame_idx: datumFrame,
           board_params: boardParams(),
@@ -553,11 +567,12 @@ export function useStereoSteppedCalibration(
       });
       setDetectionProgress(100);
       setSequenceStatus('ready');
+      setHasSidecar(true);  // detect_sequence persisted the detections to the sidecar
     } catch (e) {
       setSequenceStatus('error');
       setSequenceError(String(e));
     }
-  }, [sourcePathIdx, cam1, cam2, numCalibrationFrames, datumFrame, boardParams, imageFormat, imageType, pollJob, clickedLevel]);
+  }, [sourcePathIdx, cam1, cam2, frameTotal, datumFrame, boardParams, imageFormat, imageType, pollJob, clickedLevel]);
 
   // ---------- Snap a fiducial click against a camera's datum pose ----------
   const snapFiducial = useCallback(
@@ -600,12 +615,11 @@ export function useStereoSteppedCalibration(
   );
 
   // ---------- Build a complete {frame_idx: peak|trough} map for a camera ----------
-  // The generate route requires a label per detected frame. An unverified non-datum
-  // pose has no label: with assumeDatum it deliberately falls back to the datum face;
-  // without it, the map is incomplete and we return null so the caller refuses to
-  // generate rather than silently mislabel poses.
+  // The generate route requires a label per detected frame. Every usable (ok, non-datum)
+  // pose must be verified (peak/trough); an unverified one leaves the map incomplete and we
+  // return null so the caller refuses to generate rather than silently mislabel poses.
   const buildPoseLevels = useCallback(
-    (cam: number, assumeDatum: boolean): Record<number, string> | null => {
+    (cam: number): Record<number, string> | null => {
       const poses = sequencePoses[cam] || [];
       const labels = poseLevels[cam] || {};
       const datum = clickedLevel[cam] || 'peak';
@@ -617,10 +631,8 @@ export function useStereoSteppedCalibration(
           out[p.frame_idx] = label;
         } else if (!p.ok) {
           out[p.frame_idx] = datum;  // failed detection: placeholder, the calibrator skips it
-        } else if (assumeDatum) {
-          out[p.frame_idx] = datum;  // deliberate opt-out
         } else {
-          return null;  // usable + unverified pose, not assuming -> caller must not generate
+          return null;  // usable + unverified pose -> caller must not generate
         }
       }
       return out;
@@ -629,30 +641,67 @@ export function useStereoSteppedCalibration(
   );
 
   // ---------- Generate the stereo model (one fit, both cameras) ----------
-  const generateModel = useCallback(async (assumeDatum = false) => {
-    if (!sequenceId) {
-      setFitJobStatus({ status: 'failed', error: 'No sequence detected.' });
+  // Two paths: a LIVE sequence (build the spec from the current clicks + verified pose
+  // labels), or a regenerate from the persisted SIDECAR (no live sequence — the backend
+  // restores the detections AND saved clicks from inputs.mat, so the body carries only
+  // the locators).
+  const generateModel = useCallback(async () => {
+    const live = Boolean(sequenceId);
+    if (!live && !hasSidecar) {
+      setFitJobStatus({ status: 'failed', error: 'No detected sequence — detect first.' });
       return;
     }
-    const poseLevelsByCam: Record<number, Record<number, string>> = {};
-    for (const cam of [cam1, cam2]) {
-      const fids = fiducials[cam];
-      const level = clickedLevel[cam];
-      if (!fids?.origin || !fids?.x_axis || !fids?.y_axis) {
-        setFitJobStatus({ status: 'failed', error: `Set all three fiducials for Cam ${cam}.` });
-        return;
+
+    let body: Record<string, unknown>;
+    if (live) {
+      const poseLevelsByCam: Record<number, Record<number, string>> = {};
+      for (const cam of [cam1, cam2]) {
+        const fids = fiducials[cam];
+        const level = clickedLevel[cam];
+        if (!fids?.origin || !fids?.x_axis || !fids?.y_axis) {
+          setFitJobStatus({ status: 'failed', error: `Set all three fiducials for Cam ${cam}.` });
+          return;
+        }
+        if (level !== 'peak' && level !== 'trough') {
+          setFitJobStatus({ status: 'failed', error: `Select the clicked level for Cam ${cam}.` });
+          return;
+        }
+        const built = buildPoseLevels(cam);
+        if (built === null) {
+          setFitJobStatus({ status: 'failed', error: `Cam ${cam}: some poses are not verified. `
+            + 'Verify every pose (click a peak/trough dot on each) before generating.' });
+          return;
+        }
+        poseLevelsByCam[cam] = built;
       }
-      if (level !== 'peak' && level !== 'trough') {
-        setFitJobStatus({ status: 'failed', error: `Select the clicked level for Cam ${cam}.` });
-        return;
-      }
-      const built = buildPoseLevels(cam, assumeDatum);
-      if (built === null) {
-        setFitJobStatus({ status: 'failed', error: `Cam ${cam}: some poses are not verified. `
-          + 'Verify every pose, or enable "Assume datum face for unverified poses".' });
-        return;
-      }
-      poseLevelsByCam[cam] = built;
+      body = {
+        sequence_id: sequenceId,
+        stereo: true,
+        stereo_config: stereoConfig,
+        model_type: modelType,
+        fix_k2: fixK2 && frameTotal() < 3 && modelType === 'pinhole',
+        cameras: {
+          [String(cam1)]: {
+            fiducials: fiducials[cam1],
+            clicked_level: clickedLevel[cam1],
+            pose_levels: poseLevelsByCam[cam1],
+          },
+          [String(cam2)]: {
+            fiducials: fiducials[cam2],
+            clicked_level: clickedLevel[cam2],
+            pose_levels: poseLevelsByCam[cam2],
+          },
+        },
+      };
+    } else {
+      body = {
+        stereo: true,
+        camera_pair: [cam1, cam2],
+        source_path_idx: sourcePathIdx,
+        stereo_config: stereoConfig,
+        model_type: modelType,
+        fix_k2: fixK2 && frameTotal() < 3 && modelType === 'pinhole',
+      };
     }
 
     setFitJobStatus({ status: 'starting', progress: 0 });
@@ -660,24 +709,7 @@ export function useStereoSteppedCalibration(
       const res = await fetch('/backend/calibration/stepped/generate_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sequence_id: sequenceId,
-          stereo: true,
-          stereo_config: stereoConfig,
-          model_type: modelType,
-          cameras: {
-            [String(cam1)]: {
-              fiducials: fiducials[cam1],
-              clicked_level: clickedLevel[cam1],
-              pose_levels: poseLevelsByCam[cam1],
-            },
-            [String(cam2)]: {
-              fiducials: fiducials[cam2],
-              clicked_level: clickedLevel[cam2],
-              pose_levels: poseLevelsByCam[cam2],
-            },
-          },
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || !data.job_id) {
@@ -697,6 +729,8 @@ export function useStereoSteppedCalibration(
           model_type: done.model_type === 'polynomial3d' ? 'polynomial3d' : 'pinhole',
           rms_cam1: done.rms_cam1,
           rms_cam2: done.rms_cam2,
+          intrinsics1: done.intrinsics1,
+          intrinsics2: done.intrinsics2,
           per_view_rms1: done.per_view_rms1,
           per_view_rms2: done.per_view_rms2,
           plane_rms_cam1: done.plane_rms_cam1,
@@ -705,15 +739,18 @@ export function useStereoSteppedCalibration(
           relative_angle_deg: done.relative_angle_deg ?? null,
           baseline_mm: done.baseline_mm ?? null,
           stereo_config: done.stereo_config,
+          method: done.method,
           model_path: done.model_path,
         });
+        setHasSidecar(true);
         loadModel(done.stereo_config);
       }
     } catch (e) {
       setFitJobStatus({ status: 'failed', error: String(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sequenceId, cam1, cam2, fiducials, clickedLevel, stereoConfig, modelType, buildPoseLevels, pollJob]);
+  }, [sequenceId, hasSidecar, cam1, cam2, sourcePathIdx, fiducials, clickedLevel, poseLevels,
+      sequencePoses, stereoConfig, modelType, fixK2, frameTotal, buildPoseLevels, pollJob]);
 
   // ---------- Load the saved stereo model (generic calibration route) ----------
   // `resolvedConfig` (if given) carries the resolved same-side/transmission from a
@@ -742,10 +779,18 @@ export function useStereoSteppedCalibration(
           relative_angle_deg: data.stereo_angle_deg ?? null,
           baseline_mm: data.baseline_mm ?? null,
           model_path: data.model_path,
+          method: data.method ?? prev?.method,
           // Keep a resolved config from the generate step if the load route omits it.
           stereo_config: resolvedConfig ?? prev?.stereo_config,
         }));
         setModelLoadError(null);
+        // Seed geometry from the model (self-describing sidecar) rather than config.
+        const geo = data.geometry;
+        if (geo) {
+          if (geo.dot_spacing_mm) setDotSpacingMm(geo.dot_spacing_mm);
+          if (geo.step_height_mm) setStepHeightMm(geo.step_height_mm);
+          if (geo.board_thickness_mm) setBoardThicknessMm(geo.board_thickness_mm);
+        }
       } else {
         // No model yet is the normal first-use state — not an error.
         if (!resolvedConfig) setStereoModel(null);
@@ -757,13 +802,113 @@ export function useStereoSteppedCalibration(
       setModelLoading(false);
     }
   }, [cam1, cam2, sourcePathIdx]);
+  loadModelRef.current = loadModel;
 
-  // ---------- Auto-load the saved model on pair/source change ----------
+  // ---------- Probe the persisted detection sidecar (regenerate-from-disk) ----------
+  // Knowing a sidecar exists lets the tab offer Generate without a live detection — the
+  // backend restores the detections AND the saved clicks from inputs.mat.
+  // Rehydrate the FULL overlay state from the sidecar — detections + fiducials + peak/trough
+  // labels — without re-detecting, so reopening the tab shows exactly what was calibrated.
+  // The backend registers a fresh sequence_id (the in-memory cache is per-session), so the
+  // restored state behaves like a live detection (fetchPoseDetection + Generate work). The
+  // restored clicks are authoritative for this source, superseding the mount-only config load.
+  const restoreSequence = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/backend/calibration/stepped/restore_sequence?camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
+      );
+      const data = await res.json();
+      if (!data?.exists) {
+        setHasSidecar(false);
+        resetSourceState();  // no sidecar for this source: clear stale live state (keep config clicks)
+        return;
+      }
+      setHasSidecar(true);
+      setSequenceId(data.sequence_id ?? null);
+      for (const cam of [cam1, cam2]) {
+        setSequencePosesFor(cam, (data.poses?.[String(cam)] || []) as PoseSummary[]);
+        const datumDet = data.datum_detection?.[String(cam)];
+        if (datumDet?.ok) setDetectionDataFor(cam, datumDet as SteppedDetection);
+      }
+      // Authoritative restore of the operator's clicks for THIS source.
+      const clicks = (data.clicks || {}) as Record<string, {
+        fiducials?: Record<string, [number, number]>;
+        clicked_level?: string;
+        pose_levels?: Record<string, string>;
+      }>;
+      const fidMap: Record<number, FiducialSet> = {};
+      const lvlMap: Record<number, 'peak' | 'trough'> = {};
+      const poseMap: Record<number, Record<number, string>> = {};
+      for (const cam of [cam1, cam2]) {
+        const c = clicks[String(cam)];
+        if (!c) continue;
+        if (c.fiducials) {
+          fidMap[cam] = {
+            origin: (c.fiducials.origin as [number, number]) ?? null,
+            x_axis: (c.fiducials.x_axis as [number, number]) ?? null,
+            y_axis: (c.fiducials.y_axis as [number, number]) ?? null,
+          };
+        }
+        if (c.clicked_level === 'peak' || c.clicked_level === 'trough') lvlMap[cam] = c.clicked_level;
+        if (c.pose_levels) {
+          const inner: Record<number, string> = {};
+          for (const [k, v] of Object.entries(c.pose_levels)) inner[Number(k)] = String(v);
+          poseMap[cam] = inner;
+        }
+      }
+      if (Object.keys(fidMap).length) setFiducialsMap(prev => ({ ...prev, ...fidMap }));
+      if (Object.keys(lvlMap).length) setClickedLevelMap(prev => ({ ...prev, ...lvlMap }));
+      if (Object.keys(poseMap).length) setPoseLevelsMap(prev => ({ ...prev, ...poseMap }));
+      if (data.stereo_config === 'auto' || data.stereo_config === 'same_side'
+          || data.stereo_config === 'transmission') {
+        setStereoConfig(data.stereo_config);
+      }
+      setSequenceStatus('ready');
+    } catch (e) {
+      console.error('restore_sequence failed:', e);
+      setHasSidecar(false);
+    }
+  }, [cam1, cam2, sourcePathIdx, resetSourceState]);
+
+  // ---------- Auto-load the saved model + restore the sidecar overlay on pair/source change ----------
   useEffect(() => {
     if (!configLoaded) return;
+    loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
     loadModel();
+    restoreSequence();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, cam1, cam2, sourcePathIdx]);
+
+  // ---------- Persist clicks to the sidecar as they are picked (debounced) ----------
+  // Clicks no longer live in config, so save them to inputs.mat on change — reopening then
+  // restores them via restoreSequence without needing a full generate. Only once a sequence
+  // exists (the sidecar is written at detect) and only when something is actually picked, so an
+  // empty initial/restore state never overwrites stored clicks.
+  useEffect(() => {
+    if (!sequenceId) return;
+    if (!fiducials[cam1]?.origin && !fiducials[cam2]?.origin) return;
+    if (persistClicksRef.current) clearTimeout(persistClicksRef.current);
+    persistClicksRef.current = setTimeout(() => {
+      const cameras: Record<string, unknown> = {};
+      for (const cam of [cam1, cam2]) {
+        const f = fiducials[cam];
+        cameras[String(cam)] = {
+          fiducials: f ? { origin: f.origin, x_axis: f.x_axis, y_axis: f.y_axis } : {},
+          clicked_level: clickedLevel[cam] ?? null,
+          pose_levels: poseLevels[cam] ?? {},
+        };
+      }
+      fetch('/backend/calibration/stepped/inputs/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx,
+          cameras, stereo_config: stereoConfig,
+        }),
+      }).catch(e => console.error('persist stepped clicks failed:', e));
+    }, 400);
+    return () => { if (persistClicksRef.current) clearTimeout(persistClicksRef.current); };
+  }, [fiducials, clickedLevel, poseLevels, stereoConfig, sequenceId, cam1, cam2, sourcePathIdx]);
 
   // ---------- Reconstruct 3C vectors (generic calibration apply) ----------
   const reconstructVectors = useCallback(async (
@@ -777,7 +922,7 @@ export function useStereoSteppedCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, dt,
+          camera_pair: [cam1, cam2], type_name: typeName, dt, interpolator,
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
       });
@@ -787,7 +932,7 @@ export function useStereoSteppedCalibration(
     } catch (e) {
       setReconstructJobStatus({ status: 'failed', error: String(e) });
     }
-  }, [sourcePathIdx, cam1, cam2, dt]);
+  }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
   // Poll the reconstruct job.
   useEffect(() => {
@@ -912,11 +1057,12 @@ export function useStereoSteppedCalibration(
     boardThicknessMm, setBoardThicknessMm, dt, setDt,
 
     // Sequence controls
-    numCalibrationFrames, setNumCalibrationFrames, datumFrame, setDatumFrame,
+    datumFrame, setDatumFrame,
 
     // Stereo geometry classification
     stereoConfig, setStereoConfig,
     modelType, setModelType,
+    fixK2, setFixK2, showFixK2: frameTotal() < 3 && modelType === 'pinhole',
 
     // Validation
     validation, validating, validateImages,
@@ -929,7 +1075,7 @@ export function useStereoSteppedCalibration(
     poseLevels, setPoseLevel: setPoseLevelFor,
 
     // Stereo fit + model
-    fitJobStatus, stereoModel, modelLoading, modelLoadError,
+    fitJobStatus, stereoModel, modelLoading, modelLoadError, hasSidecar,
     isGenerating: fitJobStatus?.status === 'running' || fitJobStatus?.status === 'starting',
 
     // Reconstruct
@@ -938,7 +1084,7 @@ export function useStereoSteppedCalibration(
       reconstructJobStatus?.status === 'running' || reconstructJobStatus?.status === 'starting',
 
     // Actions
-    detect, snapFiducial, generateModel, loadModel, reconstructVectors,
+    detect, snapFiducial, generateModel, loadModel, reconstructVectors, interpolator, setInterpolator, restoreSequence,
     fetchPoseDetection, identifyPoseLevel,
 
     // Overlay helpers

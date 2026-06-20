@@ -250,6 +250,27 @@ export function useSteppedCalibration(
   const setModelLoadErrorFor = (cam: number, v: string | null) =>
     setModelLoadError(prev => ({ ...prev, [cam]: v }));
 
+  // The source directory the displayed model/overlay belongs to. Lets saveConfig
+  // detect an in-place path edit (same index, new string) and reload after persist.
+  const loadedSourcePathRef = useRef<string>('');
+  // Latest loadModel — the debounced saveConfig reloads through this ref because
+  // loadModel is defined below it (can't be a saveConfig dependency).
+  const loadModelRef = useRef<((cam: number) => Promise<void>) | null>(null);
+
+  // Clear ALL per-camera sequence/detection state for a source change (stale pixels).
+  const resetSourceState = useCallback(() => {
+    setSequenceIdMap({});
+    setSequenceStatusMap({});
+    setSequencePosesMap({});
+    setSequenceErrorMap({});
+    setDetectionProgressMap({});
+    setDetectionDataMap({});
+    setFitJobStatusMap({});
+    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
+    pollHandles.current.forEach(h => clearInterval(h));
+    pollHandles.current.clear();
+  }, []);
+
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
   // Board geometry overrides sent to the stepped detector.
@@ -425,12 +446,22 @@ export function useSteppedCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
+      // The path is now persisted; if it was an in-place edit of the current source
+      // directory, clear stale sequence/overlay state and reload for the new directory
+      // (mirrors the source-index-change effects above).
+      const currentPath = calibrationSources[sourcePathIdx] ?? '';
+      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+        loadedSourcePathRef.current = currentPath;
+        resetSourceState();
+        loadModelRef.current?.(camera);
+      }
       validateImages();
     }, 500);
   }, [
     imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders,
     cameraSubfolders, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, datumFrame,
     numCalibrationFrames, modelType, clickedLevel, poseLevels, fiducials, validateImages,
+    resetSourceState,
   ]);
 
   useEffect(() => {
@@ -438,19 +469,10 @@ export function useSteppedCalibration(
     saveConfig();
   }, [saveConfig]);
 
-  // Clear ALL per-camera sequence state when the source path changes (stale pixels).
+  // Clear ALL per-camera sequence state when the source path index changes (stale pixels).
   useEffect(() => {
     if (!configLoadedRef.current) return;
-    setSequenceIdMap({});
-    setSequenceStatusMap({});
-    setSequencePosesMap({});
-    setSequenceErrorMap({});
-    setDetectionProgressMap({});
-    setDetectionDataMap({});
-    setFitJobStatusMap({});
-    pollGen.current += 1;  // cancel any in-flight job poll so it can't write stale state
-    pollHandles.current.forEach(h => clearInterval(h));
-    pollHandles.current.clear();
+    resetSourceState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourcePathIdx]);
 
@@ -687,6 +709,13 @@ export function useSteppedCalibration(
       if (res.ok && data.exists) {
         setCameraModelFor(cam, toCameraModel(data));
         setModelLoadErrorFor(cam, null);
+        // Seed geometry from the model (self-describing sidecar) rather than config.
+        const geo = data.geometry;
+        if (geo) {
+          if (geo.dot_spacing_mm) setDotSpacingMm(geo.dot_spacing_mm);
+          if (geo.step_height_mm) setStepHeightMm(geo.step_height_mm);
+          if (geo.board_thickness_mm) setBoardThicknessMm(geo.board_thickness_mm);
+        }
       } else {
         // No model yet is the normal first-use state — not an error.
         setCameraModelFor(cam, null);
@@ -698,10 +727,12 @@ export function useSteppedCalibration(
       setModelLoadingFor(cam, false);
     }
   }, [sourcePathIdx]);
+  loadModelRef.current = loadModel;
 
   // ---------- Auto-load the saved model for the active camera ----------
   useEffect(() => {
     if (!configLoaded) return;
+    loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
     loadModel(camera);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, camera, sourcePathIdx]);

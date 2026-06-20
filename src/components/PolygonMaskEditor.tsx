@@ -19,6 +19,7 @@ function PolygonMaskEditor({
 	cameraOptions,
 	camera,
 	onCameraChange,
+	imageLoading,
 }: {
 	raw?: RawImage | null;
 	src?: string | null;
@@ -29,6 +30,7 @@ function PolygonMaskEditor({
 	cameraOptions?: number[];
 	camera?: number;
 	onCameraChange?: (cam: number) => void;
+	imageLoading?: boolean;
 }) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const viewRef = useRef<HTMLCanvasElement | null>(null);
@@ -59,7 +61,18 @@ function PolygonMaskEditor({
 
 	// Load existing mask on mount or when meta changes
 	useEffect(() => {
+		// Guard against out-of-order completion: if the camera/base-path changes again before
+		// this load resolves, a stale response must not overwrite the newer camera's state.
+		let cancelled = false;
 		async function loadExistingMask() {
+			// Reset polygon state on every camera/base-path change. The editor instance now
+			// persists across camera switches (camera is no longer in its React key), so the
+			// previous camera's polygons must be cleared explicitly — otherwise they leak onto
+			// a camera that has no saved mask. Reset to the same default a fresh mount uses (one
+			// empty "Polygon 1" ready to draw into); repopulated below only if a mask is found.
+			setPolys([{ points: [], closed: false, name: "Polygon 1" }]);
+			setActive(0);
+
 			if (meta?.basePathIdx === undefined || !meta?.camera) {
 				setIsLoadingMask(false);
 				setMaskLoadStatus('none');
@@ -76,6 +89,7 @@ function PolygonMaskEditor({
 				});
 
 				const response = await fetch(`/backend/load_mask?${params}`);
+				if (cancelled) return;
 				if (!response.ok) {
 					// No existing mask found - that's fine, start with empty
 					console.log('No existing mask found, starting fresh');
@@ -84,6 +98,7 @@ function PolygonMaskEditor({
 				}
 
 				const data = await response.json();
+				if (cancelled) return;
 
 				if (data.polygons && data.polygons.length > 0) {
 					// Convert loaded polygons to the component's polygon format
@@ -105,11 +120,12 @@ function PolygonMaskEditor({
 				setMaskLoadStatus('error');
 				// Continue with empty polygons on error
 			} finally {
-				setIsLoadingMask(false);
+				if (!cancelled) setIsLoadingMask(false);
 			}
 		}
 
 		loadExistingMask();
+		return () => { cancelled = true; };
 	}, [meta?.basePathIdx, meta?.camera]);
 
 	// Load PNG if provided and detect native size
@@ -846,6 +862,16 @@ function PolygonMaskEditor({
  							border: "2px solid #333",
  						}}
  					/>
+ 					{/* Loading wheel overlaid on the image while a new frame/camera fetches,
+ 					    matching the spinner on the PIV image viewer. */}
+ 					{imageLoading && (
+ 						<div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center">
+ 							<div className="relative">
+ 								<div className="w-8 h-8 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin"></div>
+ 								<div className="absolute inset-0 w-8 h-8 border-4 border-transparent border-t-blue-300 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+ 							</div>
+ 						</div>
+ 					)}
  				</div>
  			</div>
  

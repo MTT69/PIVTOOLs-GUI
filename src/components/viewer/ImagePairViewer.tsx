@@ -409,25 +409,12 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         </div>
 
         {/* --- TOP-LEVEL CONTROLS --- */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
           <div>
             <Label>Source Path</Label>
             <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>{sourcePaths.map((p: string, i: number) => <SelectItem key={i} value={String(i)}>{basename(p)}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Camera</Label>
-            <Select value={String(camera)} onValueChange={v => setCamera(Number(v))} disabled={cameraOptions.length === 0}>
-              <SelectTrigger><SelectValue placeholder={cameraOptions.length === 0 ? "No cameras" : undefined} /></SelectTrigger>
-              <SelectContent>
-                {cameraOptions.length === 0 ? (
-                  <SelectItem value="none" disabled>No cameras available</SelectItem>
-                ) : (
-                  cameraOptions.map((cam: number) => <SelectItem key={cam} value={String(cam)}>{cam}</SelectItem>)
-                )}
-              </SelectContent>
             </Select>
           </div>
           <div>
@@ -468,7 +455,41 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         </div>
 
         {/* --- FRAME NAVIGATION CONTROLS --- */}
-        <div className="flex flex-col md:flex-row items-center justify-center gap-4 mt-4">
+        <div className="flex flex-col md:flex-row flex-wrap items-center justify-center gap-4 mt-4">
+          <div className="flex items-center gap-1">
+            <Label className="text-xs whitespace-nowrap">Camera:</Label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="px-2"
+              disabled={cameraOptions.length <= 1}
+              onClick={() => {
+                const i = cameraOptions.indexOf(camera);
+                const n = cameraOptions.length;
+                setCamera(cameraOptions[(i - 1 + n) % n]);
+              }}
+            >
+              ◀
+            </Button>
+            <span className="text-xs font-medium px-2 py-1 bg-gray-100 rounded min-w-[3.5rem] text-center">
+              {cameraOptions.length === 0 ? "No cameras" : `Cam ${camera}`}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="px-2"
+              disabled={cameraOptions.length <= 1}
+              onClick={() => {
+                const i = cameraOptions.indexOf(camera);
+                const n = cameraOptions.length;
+                setCamera(cameraOptions[(i + 1) % n]);
+              }}
+            >
+              ▶
+            </Button>
+          </div>
           <label htmlFor="frame-slider" className="text-sm font-medium">Frame:</label>
           <div className="flex items-center gap-3 w-full md:w-auto">
             <Button
@@ -489,7 +510,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               max={maxFrames}
               value={index}
               onChange={e => setIndex(Number(e.target.value))}
-              className="w-64"
+              className="w-40"
             />
             <Input
               id="frame-input"

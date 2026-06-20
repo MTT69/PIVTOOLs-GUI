@@ -35,6 +35,10 @@ export interface StereoCharucoModel {
   baseline_distance_mm: number;
   num_image_pairs: number;
   world_frame_mode?: string;
+  /** Joint stereoCalibrate reprojection RMS (px) over all shared views; null if unavailable. */
+  stereo_rms_px?: number | null;
+  /** Cross-camera pose method, e.g. "stereoCalibrate". */
+  method?: string;
 }
 
 /** World-frame clicks (image-down pixels) defining origin/+X/+Y on camera 1. */
@@ -143,6 +147,7 @@ export function useStereoCharucoCalibration(
   const [arucoDict, setArucoDict] = useState<string>("DICT_4X4_1000");
   const [minCorners, setMinCorners] = useState<string>("6");
   const [dt, setDt] = useState(1.0);
+  const [interpolator, setInterpolator] = useState<'cubic' | 'lanczos'>('lanczos');
   const [datumFrame, setDatumFrame] = useState(1);
 
   // Validation
@@ -163,12 +168,19 @@ export function useStereoCharucoCalibration(
   const [detectionsCam2, setDetectionsCam2] = useState<Record<string, StereoCharucoFrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
 
   const configLoadedRef = useRef(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconstructPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The source directory the displayed model/overlay belongs to. Lets saveConfig
+  // detect an in-place path edit (same index, new string) and reload after persist.
+  const loadedSourcePathRef = useRef<string>('');
+  // Latest loadModel — the debounced saveConfig reloads through this ref because
+  // loadModel is defined below it (can't be a saveConfig dependency).
+  const loadModelRef = useRef<(() => Promise<unknown>) | null>(null);
 
   const boardParams = useCallback(() => ({
     squares_h: parseInt(squaresH) || 10,
@@ -281,6 +293,16 @@ export function useStereoCharucoCalibration(
       } catch (e) {
         console.error('Failed to save config:', e);
       }
+      // The path is now persisted; if it was an in-place edit of the current source
+      // directory, clear the stale model/overlay and reload for the new directory.
+      const currentPath = calibrationSources[sourcePathIdx] ?? '';
+      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+        loadedSourcePathRef.current = currentPath;
+        setStereoModel(null);
+        setDetectionsCam1({});
+        setDetectionsCam2({});
+        loadModelRef.current?.();
+      }
       validateImages();
     }, 500);
   }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrame, boardParams, cam1, cam2, validateImages]);
@@ -299,10 +321,12 @@ export function useStereoCharucoCalibration(
     baseline_distance_mm: d.baseline_mm,
     num_image_pairs: d.num_pairs_used ?? (d.per_view_rms1?.length ?? 0),
     world_frame_mode: d.world_frame_mode,
+    stereo_rms_px: d.stereo_rms_px ?? null,
+    method: d.method,
   });
 
   // Generate the stereo model (synchronous); optional world-frame clicks on cam1.
-  const generateStereoModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
+  const generateStereoModel = useCallback(async (clicks?: WorldFrameClicks | null, opts?: { forceRedetect?: boolean }) => {
     setJobStatus({ status: 'running', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: frameTotal(), stage: 'calibrating' });
     try {
       const res = await fetch('/backend/calibration/generate_model', {
@@ -313,6 +337,7 @@ export function useStereoCharucoCalibration(
           board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
           image_format: imageFormat, image_type: imageType,
           clicks: clicks || undefined,
+          force_redetect: opts?.forceRedetect || undefined,
         }),
       });
       const data = await res.json();
@@ -341,10 +366,22 @@ export function useStereoCharucoCalibration(
       if (res.ok && data.exists) {
         setStereoModel(toStereoModel(data));
         setLoadedWorldFrame(data.world_frame ?? null);
+        // Seed geometry from the model (self-describing sidecar) rather than config.
+        const geo = data.geometry;
+        if (geo) {
+          if (geo.squares_h !== undefined) setSquaresH(String(geo.squares_h));
+          if (geo.squares_v !== undefined) setSquaresV(String(geo.squares_v));
+          if (geo.square_size_m !== undefined) setSquareSize(String(geo.square_size_m));
+          if (geo.marker_ratio !== undefined) setMarkerRatio(String(geo.marker_ratio));
+          if (geo.aruco_dict) setArucoDict(geo.aruco_dict);
+          if (geo.min_corners !== undefined) setMinCorners(String(geo.min_corners));
+        }
         return data;
       }
+      // Restore any world-frame picks the sidecar kept (inputs.mat) so a deleted model can be
+      // regenerated without re-clicking; null when none were stored.
       setStereoModel(null);
-      setLoadedWorldFrame(null);
+      setLoadedWorldFrame(data?.world_frame ?? null);
       return null;
     } catch (e) {
       console.error('Failed to load stereo model:', e);
@@ -353,24 +390,7 @@ export function useStereoCharucoCalibration(
       setModelLoading(false);
     }
   }, [sourcePathIdx, cam1, cam2]);
-
-  // Persist the picked world frame (cam1) to config.yaml (calibration.<board>.world_frame).
-  const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
-    if (!p) return;
-    try {
-      await fetch('/backend/update_config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { [BOARD]: { world_frame: {
-            origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
-          } } },
-        }),
-      });
-    } catch (e) {
-      // Non-authoritative (the stereo model holds the world frame), but don't fail silently.
-      console.warn('persistWorldFrame failed:', e);
-    }
-  }, []);
+  loadModelRef.current = loadModel;
 
   // Auto-load the saved model on mount (once config is loaded) and on pair/source change.
   useEffect(() => {
@@ -378,6 +398,7 @@ export function useStereoCharucoCalibration(
     setStereoModel(null);
     setDetectionsCam1({});
     setDetectionsCam2({});
+    loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
     loadModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, cam1, cam2, sourcePathIdx]);
@@ -407,6 +428,45 @@ export function useStereoCharucoCalibration(
     }
   }, [cam1, sourcePathIdx, boardParams, imageFormat, imageType]);
 
+  // Detect every calibration view for BOTH cameras (stereo is pinhole-only, so "Detect
+  // Markers" always shows the full set). One `detecting` flag spans both cameras so the
+  // button can't re-enable mid-sequence. Replaces each cam's detections map.
+  const detectAllViews = useCallback(async () => {
+    setDetecting(true);
+    const errs: string[] = [];
+    try {
+      for (const cam of [cam1, cam2]) {
+        try {
+          const res = await fetch('/backend/calibration/detect_views', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+              board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+              frame_total: frameTotal(),
+            }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            const next: Record<string, StereoCharucoFrameDetection> = {};
+            for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
+              next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
+            }
+            (cam === cam1 ? setDetectionsCam1 : setDetectionsCam2)(next);
+            if (data.n_detected === 0) errs.push(`No board detected on Cam${cam}`);
+          } else {
+            errs.push(`Cam${cam}: ${data.error || 'detection failed'}`);
+          }
+        } catch (e) {
+          errs.push(`Cam${cam}: ${String(e)}`);
+        }
+      }
+      setDetectError(errs.length ? errs.join('; ') : null);
+    } finally {
+      setDetecting(false);
+    }
+  }, [cam1, cam2, sourcePathIdx, boardParams, imageFormat, imageType, frameTotal]);
+
   // Apply the stereo calibration to PIV vectors over selected base paths (Phase D backend).
   const reconstructVectors = useCallback(async (
     typeName: string = 'instantaneous',
@@ -419,7 +479,7 @@ export function useStereoCharucoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, dt,
+          camera_pair: [cam1, cam2], type_name: typeName, dt, interpolator,
           // Omit active_paths → backend applies to all configured base paths.
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
@@ -430,7 +490,7 @@ export function useStereoCharucoCalibration(
     } catch (e) {
       setReconstructJobStatus({ status: 'failed', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0, error: String(e) });
     }
-  }, [sourcePathIdx, cam1, cam2, dt]);
+  }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
   // Poll apply job.
   useEffect(() => {
@@ -494,10 +554,10 @@ export function useStereoCharucoCalibration(
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     reconstructJobStatus, isReconstructing: reconstructJobStatus?.status === 'running' || reconstructJobStatus?.status === 'starting',
-    stereoModel, detectionsCam1, detectionsCam2, modelLoading, detectError, hasModel: stereoModel !== null,
-    loadedWorldFrame, persistWorldFrame,
+    stereoModel, detectionsCam1, detectionsCam2, modelLoading, detectError, detecting, hasModel: stereoModel !== null,
+    loadedWorldFrame,
     showOverlay, setShowOverlay,
-    generateStereoModel, loadModel, reconstructVectors, detectFrame,
+    generateStereoModel, loadModel, reconstructVectors, interpolator, setInterpolator, detectFrame, detectAllViews,
     cameraOptions, sourcePaths,
   };
 }

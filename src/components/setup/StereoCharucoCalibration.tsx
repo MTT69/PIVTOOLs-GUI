@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InterpolatorSelect } from "./InterpolatorSelect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -97,6 +98,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     detectionsCam2,
     modelLoading,
     detectError,
+    detecting,
     hasModel,
 
     // Overlay toggle
@@ -105,12 +107,14 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
 
     // Model restore
     loadedWorldFrame,
-    persistWorldFrame,
 
     // Actions
     generateStereoModel,
     reconstructVectors,
+    interpolator,
+    setInterpolator,
     detectFrame,
+    detectAllViews,
   } = calibration;
 
   // Track the frame currently shown in the viewer (1-based, matches datumFrame).
@@ -589,10 +593,10 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    variant="outline" size="sm" disabled={wf.busy}
-                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                    variant="outline" size="sm" disabled={wf.busy || detecting}
+                    onClick={async () => { await wf.prepare(); await detectAllViews(); setShowOverlay(true); }}
                   >
-                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
+                    {(wf.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
                   </Button>
                   {wfOnDatum ? (
                     <WorldFrameControls wf={wf} />
@@ -610,7 +614,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
           <div className="border-t pt-4">
             <div className="flex gap-3 items-center flex-wrap">
               <Button
-                onClick={async () => { await generateStereoModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                onClick={async () => { await generateStereoModel(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
                 disabled={isCalibrating || !validation?.valid || !wf.complete}
                 title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Markers → Origin → +X → +Y` : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
@@ -625,6 +629,16 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 )}
               </Button>
 
+              {/* Re-detect: ignore the cached detections and detect fresh, then recalibrate */}
+              <Button
+                variant="outline"
+                onClick={async () => { await generateStereoModel(wf.payload, { forceRedetect: true }); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                title="Ignore cached detections and re-detect from the images, then recalibrate"
+              >
+                Re-detect
+              </Button>
+
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
                 <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
@@ -636,6 +650,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                     <SelectItem value="ensemble">Ensemble</SelectItem>
                   </SelectContent>
                 </Select>
+                <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
                 <Button
                   onClick={() => reconstructVectors(reconstructTypeName)}
                   disabled={!hasModel || isReconstructing}
@@ -799,7 +814,19 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 <div className="text-xs text-muted-foreground">Baseline Distance</div>
                 <div className="text-lg font-semibold">{stereoModel.baseline_distance_mm?.toFixed(2)} mm</div>
               </div>
+              <div className="p-3 bg-muted rounded">
+                <div className="text-xs text-muted-foreground">Stereo RMS</div>
+                <div className="text-lg font-semibold">
+                  {stereoModel.stereo_rms_px != null ? `${stereoModel.stereo_rms_px.toFixed(4)} px` : '—'}
+                </div>
+              </div>
             </div>
+
+            {stereoModel.method && (
+              <p className="text-xs text-muted-foreground mb-4">
+                Cross-camera pose: joint fit (<span className="font-mono">{stereoModel.method}</span>)
+              </p>
+            )}
 
             <div className="grid md:grid-cols-2 gap-6">
               {[

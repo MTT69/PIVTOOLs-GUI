@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InterpolatorSelect } from "./InterpolatorSelect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -68,6 +69,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setDt,
     datumFrame,
     setDatumFrame,
+    fixK2,
+    setFixK2,
+    showFixK2,
 
     // Validation
     validation,
@@ -87,6 +91,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     detectionsCam2,
     modelLoading,
     detectError,
+    detecting,
     hasModel,
 
     // Overlay toggle
@@ -95,12 +100,14 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
     // Model restore
     loadedWorldFrame,
-    persistWorldFrame,
 
     // Actions
     generateStereoModel,
     reconstructVectors,
+    interpolator,
+    setInterpolator,
     detectFrame,
+    detectAllViews,
   } = calibration;
 
   // Track the frame currently shown in the viewer (1-based, matches datumFrame).
@@ -340,6 +347,28 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
+          {/* Fix radial k2 = 0 — only relevant with <3 frames, where k2 is unconstrained */}
+          {showFixK2 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="stereo-dotboard-fix-k2"
+                  checked={fixK2}
+                  onCheckedChange={setFixK2}
+                />
+                <Label htmlFor="stereo-dotboard-fix-k2" className="text-sm">
+                  Fix radial k2 = 0 (few views)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-10">
+                {fixK2
+                  ? "k2 fixed at 0 — recommended below 3 frames, where one near-planar view cannot constrain the r⁴ radial term and a free k2 corrupts focal length and stereo angle."
+                  : "k2 fit freely — only do this if you trust a single view to pin the r⁴ radial term."
+                }
+              </p>
+            </div>
+          )}
+
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && (
             <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
@@ -559,10 +588,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    variant="outline" size="sm" disabled={wf.busy}
-                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                    variant="outline" size="sm" disabled={wf.busy || detecting}
+                    onClick={async () => { await wf.prepare(); await detectAllViews(); setShowOverlay(true); }}
                   >
-                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
+                    {(wf.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
                   </Button>
                   {wfOnDatum ? (
                     <WorldFrameControls wf={wf} />
@@ -581,7 +610,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div className="flex gap-3 items-center flex-wrap">
               {/* Generate Stereo Model */}
               <Button
-                onClick={async () => { await generateStereoModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                onClick={async () => { await generateStereoModel(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
                 disabled={isCalibrating || !validation?.valid || !wf.complete}
                 title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Dots → Origin → +X → +Y` : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
@@ -596,6 +625,16 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 )}
               </Button>
 
+              {/* Re-detect: ignore the cached detections and detect fresh, then recalibrate */}
+              <Button
+                variant="outline"
+                onClick={async () => { await generateStereoModel(wf.payload, { forceRedetect: true }); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
+                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                title="Ignore cached detections and re-detect from the images, then recalibrate"
+              >
+                Re-detect
+              </Button>
+
               {/* Reconstruct 3D Vectors with type selector */}
               <div className="flex gap-2 items-center">
                 <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
@@ -607,6 +646,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                     <SelectItem value="ensemble">Ensemble</SelectItem>
                   </SelectContent>
                 </Select>
+                <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
                 <Button
                   onClick={() => reconstructVectors(reconstructTypeName)}
                   disabled={!hasModel || isReconstructing}
@@ -771,7 +811,19 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground">Baseline Distance</div>
                 <div className="text-lg font-semibold">{stereoModel.baseline_distance_mm?.toFixed(2)} mm</div>
               </div>
+              <div className="p-3 bg-muted rounded">
+                <div className="text-xs text-muted-foreground">Stereo RMS</div>
+                <div className="text-lg font-semibold">
+                  {stereoModel.stereo_rms_px != null ? `${stereoModel.stereo_rms_px.toFixed(4)} px` : '—'}
+                </div>
+              </div>
             </div>
+
+            {stereoModel.method && (
+              <p className="text-xs text-muted-foreground mb-4">
+                Cross-camera pose: joint fit (<span className="font-mono">{stereoModel.method}</span>)
+              </p>
+            )}
 
             {/* Per-Camera Intrinsics */}
             <div className="grid md:grid-cols-2 gap-6">

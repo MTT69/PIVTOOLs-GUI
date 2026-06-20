@@ -415,26 +415,14 @@ export function useImagePair(
     };
   }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches, enabled]);
 
-  // Track previous camera to detect camera switches
-  const prevCameraRef = useRef(camera);
-
-  // Clear prefetch buffer and cancel prefetches when source/camera/format changes
-  // Also clear backend cache on camera switch for faster loading
+  // Clear the in-memory prefetch buffer and cancel prefetches when source/camera/format changes.
+  // The backend raw cache is intentionally NOT evicted on camera switch: it is LRU-bounded
+  // (manage_cache_size), so keeping both cameras' frames lets toggling back hit the cache instead
+  // of re-reading and re-encoding the full-resolution pair from disk.
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-
-    // Clear backend raw cache on camera switch (non-blocking fire-and-forget)
-    if (prevCameraRef.current !== camera) {
-      const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-      fetch(`${backendUrl}/clear_raw_cache`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ exclude_camera: cameraNumber }),
-      }).catch(() => {}); // Silent fail — cache clear is best-effort
-      prevCameraRef.current = camera;
-    }
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches, backendUrl]);
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches]);
 
   // Check if a frame is in the prefetch cache
   const isFrameCached = useCallback((idx: number): boolean => {

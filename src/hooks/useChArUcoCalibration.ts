@@ -171,12 +171,19 @@ export function useChArUcoCalibration(
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
 
   const configLoadedRef = useRef(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const configDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The source directory the displayed model/overlay belongs to. Lets saveConfig
+  // detect an in-place path edit (same index, new string) and reload after persist.
+  const loadedSourcePathRef = useRef<string>('');
+  // Latest loadModel — the debounced saveConfig reloads through this ref because
+  // loadModel is defined below it (can't be a saveConfig dependency).
+  const loadModelRef = useRef<(() => Promise<unknown>) | null>(null);
 
   const boardParams = useCallback(() => ({
     squares_h: parseInt(squaresH) || 10,
@@ -270,6 +277,16 @@ export function useChArUcoCalibration(
         });
       } catch (e) {
         console.error('Failed to save config:', e);
+      }
+      // The path is now persisted; if it was an in-place edit of the current source
+      // directory, clear the stale model/overlay and reload for the new directory.
+      const currentPath = calibrationSources[sourcePathIdx] ?? '';
+      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+        loadedSourcePathRef.current = currentPath;
+        setCameraModel(null);
+        setDetections({});
+        setModelLoadError(null);
+        loadModelRef.current?.();
       }
       validateImages();
     }, 500);
@@ -379,11 +396,25 @@ export function useChArUcoCalibration(
       if (res.ok && data.exists) {
         setCameraModel(toCameraModel(data));
         setLoadedWorldFrame(data.world_frame ?? null);
+        // Seed geometry from the model itself (self-describing sidecar) rather than config.
+        // Absent on legacy records -> keep current panel values. square_size is metres.
+        const geo = data.geometry;
+        if (geo) {
+          if (geo.squares_h !== undefined) setSquaresH(String(geo.squares_h));
+          if (geo.squares_v !== undefined) setSquaresV(String(geo.squares_v));
+          if (geo.square_size_m !== undefined) setSquareSize(String(geo.square_size_m));
+          if (geo.marker_ratio !== undefined) setMarkerRatio(String(geo.marker_ratio));
+          if (geo.aruco_dict) setArucoDict(geo.aruco_dict);
+          if (geo.min_corners !== undefined) setMinCorners(String(geo.min_corners));
+          if (geo.model_type === 'pinhole' || geo.model_type === 'polynomial') setModelType(geo.model_type);
+        }
         return data;
       }
-      // No model yet is the normal first-use state — not an error.
+      // No model yet is the normal first-use state — not an error. Restore any world-frame
+      // picks the sidecar kept (inputs.mat) so a deleted model can be regenerated without
+      // re-clicking; null when none were stored.
       setCameraModel(null);
-      setLoadedWorldFrame(null);
+      setLoadedWorldFrame(data?.world_frame ?? null);
       return null;
     } catch (e) {
       setModelLoadError(`Failed to load model: ${e}`);
@@ -392,24 +423,7 @@ export function useChArUcoCalibration(
       setModelLoading(false);
     }
   }, [sourcePathIdx, camera]);
-
-  // Persist the picked world frame to config.yaml (calibration.<board>.world_frame).
-  const persistWorldFrame = useCallback(async (p: WorldFrameClicks | null) => {
-    if (!p) return;
-    try {
-      await fetch('/backend/update_config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { [BOARD]: { world_frame: {
-            origin: p.origin, x_axis: p.x_axis, y_axis: p.y_axis, origin_mm: p.origin_mm,
-          } } },
-        }),
-      });
-    } catch (e) {
-      // Non-authoritative (model.mat holds the world frame), but don't fail silently.
-      console.warn('persistWorldFrame failed:', e);
-    }
-  }, []);
+  loadModelRef.current = loadModel;
 
   // Auto-load the saved model on mount (once config is loaded) and on camera/source change.
   useEffect(() => {
@@ -417,6 +431,7 @@ export function useChArUcoCalibration(
     setCameraModel(null);
     setDetections({});
     setModelLoadError(null);
+    loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
     loadModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, camera, sourcePathIdx]);
@@ -446,6 +461,38 @@ export function useChArUcoCalibration(
       setDetectError(`Detection failed on frame ${frame}: ${String(e)}`);
     }
   }, [camera, sourcePathIdx, boardParams, imageFormat, imageType]);
+
+  // Detect every calibration view in one round-trip (pinhole "Detect Markers" — the
+  // overlay then shows the full set the bundle fit uses). Replaces the detections map.
+  const detectAllViews = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const res = await fetch('/backend/calibration/detect_views', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          camera, source_path_idx: sourcePathIdx, board: BOARD,
+          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+          frame_total: frameTotal(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const next: Record<string, FrameDetection> = {};
+        for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
+          next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
+        }
+        setDetections(next);
+        setDetectError(data.n_detected === 0 ? 'No board detected in any view' : null);
+      } else {
+        setDetectError(data.error || 'Detection failed');
+      }
+    } catch (e) {
+      setDetectError(`Detection failed: ${String(e)}`);
+    } finally {
+      setDetecting(false);
+    }
+  }, [camera, sourcePathIdx, boardParams, imageFormat, imageType, frameTotal]);
 
   // Apply the calibration to PIV vectors over selected base paths (Phase D backend).
   const calibrateVectors = useCallback(async (
@@ -526,10 +573,10 @@ export function useChArUcoCalibration(
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
     vectorJobStatus, isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',
-    cameraModel, detections, modelLoading, modelLoadError, detectError, hasModel: cameraModel !== null,
-    loadedWorldFrame, persistWorldFrame,
+    cameraModel, detections, modelLoading, modelLoadError, detectError, detecting, hasModel: cameraModel !== null,
+    loadedWorldFrame,
     showOverlay, setShowOverlay,
-    generateCameraModel, generateCameraModelAll, loadModel, calibrateVectors, detectFrame,
+    generateCameraModel, generateCameraModelAll, loadModel, calibrateVectors, detectFrame, detectAllViews,
     cameraOptions, sourcePaths,
   };
 }

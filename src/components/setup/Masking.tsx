@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -281,6 +281,21 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 	const { loading, error, imgA, imgB, imgARaw, imgBRaw, metadata, vmin: autoVmin, vmax: autoVmax, reload } = useImagePair("/backend", basePathIdx, `Cam${camera}`, index, 'jpeg', autoScale);
 	const currentImg = frame === "A" ? imgA : imgB;
 	const currentRaw = frame === "A" ? imgARaw : imgBRaw;
+
+	// Keep the last successfully loaded image so the viewer block below stays mounted
+	// during a camera-switch refetch. useImagePair nulls the image before fetching the
+	// new (uncached) frame; without this the `displayImg && ...` blocks would collapse to
+	// zero height and the page would jump to the top. Showing the previous frame until the
+	// new one lands keeps the user looking at the same spot.
+	const lastImgRef = useRef<string | null>(null);
+	const lastImgBaseRef = useRef<number | null>(null);
+	useEffect(() => {
+		if (currentImg) { lastImgRef.current = currentImg; lastImgBaseRef.current = basePathIdx; }
+	}, [currentImg, basePathIdx]);
+	// Only fall back to the retained image within the same source path. Retaining across a
+	// basePathIdx switch would show the previous dataset's frame (wrong dimensions/coordinates,
+	// or a stale image permanently if the new path has no frames).
+	const displayImg = currentImg ?? (lastImgBaseRef.current === basePathIdx ? lastImgRef.current : null);
 	// Contrast is now percentage-based (0-100%), independent of bit depth
 	const maxVal = 100;
 
@@ -500,7 +515,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 			</Card>
 
 			<div className="flex flex-col items-center mt-6">
-				{currentImg && maskingMode === 'polygon' && (
+				{displayImg && maskingMode === 'polygon' && (
 					<div className="w-full space-y-4">
 						{/* Contrast Controls for Polygon Viewer */}
 						<div className="space-y-3 p-3 border rounded-md">
@@ -565,9 +580,9 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 						</div>
 						
 						<PolygonMaskEditor
-							key={`${basePathIdx}-${camera}-${index}-${frame}`}
+							key={`${basePathIdx}-${index}-${frame}`}
 							raw={currentRaw}
-							src={currentRaw ? undefined : currentImg}
+							src={currentRaw ? undefined : displayImg}
 							vmin={vmin}
 							vmax={vmax}
 							title="Polygon Mask Editor"
@@ -576,12 +591,13 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							cameraOptions={cameraOptions}
 							camera={camera}
 							onCameraChange={setCamera}
+							imageLoading={loading}
 						/>
 					</div>
 				)}
-				{maskingMode === 'pixel_border' && currentImg && (
+				{maskingMode === 'pixel_border' && displayImg && (
 					<PixelBorderViewer
-						src={currentImg}
+						src={displayImg}
 						raw={currentRaw}
 						vmin={vmin}
 						vmax={vmax}
@@ -591,13 +607,13 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 						right={rectangularRight}
 					/>
 				)}
-				{maskingMode === 'pixel_border' && !currentImg && !loading && (
+				{maskingMode === 'pixel_border' && !displayImg && !loading && (
 					<div className="text-center text-gray-600 p-8 border rounded-md bg-gray-50">
 						Load an image to preview pixel border masking.
 					</div>
 				)}
-				{loading && <div className="text-center text-gray-500">Loading image...</div>}
-				{(!currentImg && !loading) && (
+				{loading && maskingMode !== 'polygon' && <div className="text-center text-gray-500">Loading image...</div>}
+				{(!displayImg && !loading) && (
 					<div className="text-center text-gray-400">No image loaded.</div>
 				)}
 				{error && <div className="text-red-600 mt-2">Image not found. Validate paths on Setup tab.</div>}

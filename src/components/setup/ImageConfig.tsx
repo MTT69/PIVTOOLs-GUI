@@ -155,19 +155,31 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     configLoadedRef.current = true;
   }, [config]);
 
-  // Auto-fill num_images when empty and validation detects a count
+  // Auto-fill num_images when empty and validation detects a count.
+  // Gate on the authoritative config value (not the local `numImages` state) and
+  // persist ONLY images.num_images — never the full saveConfig payload. On remount
+  // the local state defaults (numCameras="1") haven't synced from config yet, so
+  // routing this through saveConfig would clobber camera_count/camera_numbers back
+  // to 1 every time the Setup tab is reopened.
   useEffect(() => {
+    if (!configLoadedRef.current) return;
+    const cfgNum = config.images?.num_images;
+    const cfgEmpty = cfgNum === undefined || cfgNum === null || cfgNum === 0;
     if (
       validation.checked &&
       validation.detectedCount != null &&
       validation.detectedCount > 0 &&
-      (numImages === "" || numImages === "0")
+      cfgEmpty
     ) {
       const val = String(validation.detectedCount);
       setNumImages(val);
-      saveConfig({ numImages: val });
+      updateConfigBackend({ images: { num_images: validation.detectedCount } }).then(result => {
+        if (result.success && result.data?.updated?.images) {
+          updateConfig(['images'], { ...config.images, ...result.data.updated.images });
+        }
+      });
     }
-  }, [validation.detectedCount, validation.checked]);
+  }, [validation.detectedCount, validation.checked, config.images?.num_images]);
 
   // Fetch frame pair preview
   useEffect(() => {
@@ -206,6 +218,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     // to avoid wiping patterns due to race conditions between concurrent saves
     const rpFiltered = rp.filter(p => p.trim() !== '');
 
+    // Same guard for vector_format: vectorPattern initialises to "" and is filled
+    // by the config-load effect a beat later. A saveConfig firing in that window
+    // (e.g. the num_images auto-fill) would persist vector_format: [''] and wipe
+    // the good pattern. Skip the key when empty so the existing value survives.
+    const vpTrimmed = vp.trim();
+
     const camCount = Number(nc) || 1;
     const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
@@ -217,7 +235,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         pair_stride: ps,
         pairing_preset: preset,
         ...(rpFiltered.length > 0 ? { image_format: rpFiltered } : {}),
-        vector_format: [vp],
+        ...(vpTrimmed !== '' ? { vector_format: [vpTrimmed] } : {}),
         image_type: it,
         use_camera_subfolders: ucsfIM7,
         num_loops: Number(numLoops) || 1,

@@ -863,7 +863,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const res = await fetch(url);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `Failed to fetch limits (${res.status})`);
-      if (typeof json.min === "number" && typeof json.max === "number") {
+      // Prefer robust percentile limits (p5/p95) so a single outlier vector
+      // can't stretch the colour range and wash out the field. Fall back to
+      // raw min/max only for older payloads that lack the percentiles.
+      if (typeof json.p5 === "number" && typeof json.p95 === "number") {
+        setLower(String(json.p5));
+        setUpper(String(json.p95));
+      } else if (typeof json.min === "number" && typeof json.max === "number") {
         setLower(String(json.min));
         setUpper(String(json.max));
       } else {
@@ -1001,6 +1007,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       void fetchAllVars();
     }
   }, [effectiveDir, camera, merged, isUncalibrated, fetchAllVars]);
+
+  // Auto-apply robust (p5/p95) colour limits when the source or variable changes.
+  // Keyed to source/variable/camera/merged (via fetchLimits), so it recomputes a
+  // sensible global range on load and on variable switch, but does NOT re-fire on
+  // manual lower/upper edits within the same variable — those are preserved.
+  useEffect(() => {
+    if (effectiveDir) {
+      void fetchLimits();
+    }
+  }, [effectiveDir, type, camera, merged, fetchLimits]);
 
   // Auto-render when we have a valid configuration
   // Only set hasRendered here for meanMode; non-mean modes wait for

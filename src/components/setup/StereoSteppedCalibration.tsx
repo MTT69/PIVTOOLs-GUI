@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InterpolatorSelect } from "./InterpolatorSelect";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -21,16 +22,9 @@ import {
 } from "@/hooks/useStereoSteppedCalibration";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
+import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { MarkerPoint } from "@/components/viewer/zoomableCanvas";
-import {
-  GCInlineControls,
-  GlobalFrameSummary,
-  useGlobalCoordinates,
-  getGlobalCoordMarkers,
-  getGlobalCoordViewerTarget,
-  handleGlobalCoordPointSelect,
-} from "@/components/setup/GlobalCoordinateSetup";
 
 interface StereoSteppedCalibrationProps {
   config: any;
@@ -108,8 +102,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setDt,
 
     // Sequence controls
-    numCalibrationFrames,
-    setNumCalibrationFrames,
     datumFrame,
     setDatumFrame,
 
@@ -118,6 +110,9 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setStereoConfig,
     modelType,
     setModelType,
+    fixK2,
+    setFixK2,
+    showFixK2,
 
     // Validation
     validation,
@@ -143,6 +138,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     modelLoading,
     modelLoadError,
     isGenerating,
+    hasSidecar,
 
     // Reconstruct
     reconstructJobStatus,
@@ -154,6 +150,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     generateModel,
     loadModel,
     reconstructVectors,
+    interpolator,
+    setInterpolator,
     fetchPoseDetection,
     identifyPoseLevel,
 
@@ -161,11 +159,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     getDetectionOverlayPoints,
     getDetectionOverlayLines,
   } = calibration;
-
-  // Global coordinate system
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
-  const gcViewerTarget = getGlobalCoordViewerTarget(gc);
-  const gcIsSelecting = gc.selectionMode !== "none";
 
   // ---- Local state ----
   const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
@@ -178,13 +171,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   const [boardThicknessInput, setBoardThicknessInput] = useState(String(boardThicknessMm));
   const [dtInput, setDtInput] = useState(String(dt));
   const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
-  const [numFramesInput, setNumFramesInput] = useState(String(numCalibrationFrames));
   const [labelTarget, setLabelTarget] = useState<{ frameIdx: number; camera: number } | null>(null);
   const [displayedFrame, setDisplayedFrame] = useState<number>(datumFrame);
-
-  // Off by default: generate is gated on every usable pose being verified. Turning this
-  // on deliberately labels unverified poses with the datum face (the old behaviour).
-  const [assumeDatumForUnverified, setAssumeDatumForUnverified] = useState(false);
 
   // In-flight latches for the async click handlers (snap / pose identify): a ref blocks a
   // re-entrant click that would otherwise act on this render's stale step/target.
@@ -208,7 +196,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   React.useEffect(() => { setBoardThicknessInput(String(boardThicknessMm)); }, [boardThicknessMm]);
   React.useEffect(() => { setDtInput(String(dt)); }, [dt]);
   React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
-  React.useEffect(() => { setNumFramesInput(String(numCalibrationFrames)); }, [numCalibrationFrames]);
 
   // Auto-switch the viewer to the camera of the current fiducial step.
   React.useEffect(() => {
@@ -258,16 +245,19 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   }, [clickedLevel]);
 
   const canGenerate = useMemo(() => {
-    return (
+    if (isGenerating) return false;
+    const liveReady =
       sequenceStatus === 'ready' &&
       sequenceId !== null &&
       hasAllFiducials(cam1) && hasAllFiducials(cam2) &&
       hasLevel(cam1) && hasLevel(cam2) &&
-      (assumeDatumForUnverified || (allVerifiedForCam(cam1) && allVerifiedForCam(cam2))) &&
-      !isGenerating
-    );
+      allVerifiedForCam(cam1) && allVerifiedForCam(cam2);
+    // Normally restoreSequence rehydrates a live sequence (sequenceId set) so the liveReady
+    // branch governs. This fallback covers the rare state of a flagged sidecar with no live
+    // sequence (restore not yet run / cache expired) — regenerate straight from inputs.mat.
+    return liveReady || (sequenceId === null && hasSidecar);
   }, [sequenceStatus, sequenceId, hasAllFiducials, hasLevel, cam1, cam2,
-      assumeDatumForUnverified, allVerifiedForCam, isGenerating]);
+      allVerifiedForCam, isGenerating, hasSidecar]);
 
   const hasModel = stereoModel !== null;
 
@@ -281,10 +271,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     _cam: number,
     _frame: number,
   ) => {
-    if (gcIsSelecting) {
-      handleGlobalCoordPointSelect(gc, pixelX, pixelY, _cam, _frame);
-      return;
-    }
     if (!fiducialSelectMode || !currentStep || currentStepCam === null) return;
     // Refuse a re-entrant click while a snap is pending. Worse than mono: a stale click at
     // the slot-1->slot-2 boundary could snap cam2's pixels against cam1's board, cross-
@@ -307,7 +293,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     } finally {
       snapInFlight.current = false;
     }
-  }, [gcIsSelecting, gc, fiducialSelectMode, currentStep, currentStepCam, snapFiducial, fiducialStepIdx]);
+  }, [fiducialSelectMode, currentStep, currentStepCam, snapFiducial, fiducialStepIdx]);
 
   // Re-clicking overwrites a fiducial, so a "reset" only needs to restart the step
   // sequence; the existing clicks remain until the next click replaces them.
@@ -331,18 +317,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     }
     return m;
   }, [activeFiducials, displayedFrame, datumFrame]);
-
-  const mergedMarkers = useMemo((): MarkerPoint[] => {
-    if (gcIsSelecting) {
-      const gcMarkers = getGlobalCoordMarkers(
-        gc,
-        gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : activeCam,
-        1,
-      );
-      return [...markerPoints, ...(gcMarkers ?? [])];
-    }
-    return markerPoints;
-  }, [gcIsSelecting, gc, gcViewerTarget, activeCam, markerPoints]);
 
   // ---- Detection overlay for the active camera (pose-level-aware) ----
   const overlayPoints = useMemo(() => {
@@ -469,7 +443,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
 
   const isActive = config.calibration?.active === "stereo_stepped";
 
-  const viewerCamera = gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : activeCam;
+  const viewerCamera = activeCam;
 
   return (
     <div className="space-y-6">
@@ -643,6 +617,42 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 }
               />
             )}
+
+            {/* Suggested file pattern (Did you mean) */}
+            {validation && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-600">Suggestion:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Use &quot;{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}&quot;
+                </Button>
+              </div>
+            )}
+
+            {/* Suggested camera subfolder (Did you mean) */}
+            {validation && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-600">Subfolder suggestion:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setUseCameraSubfolders(true);
+                    setCameraSubfolders([
+                      validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
+                      validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
+                    ]);
+                  }}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Use &quot;{validation.cam1?.suggested_subfolder ?? validation.cam2?.suggested_subfolder}&quot; / &quot;{validation.cam2?.suggested_subfolder ?? validation.cam1?.suggested_subfolder}&quot;
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* ============================================= */}
@@ -710,20 +720,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 <p className="text-xs text-muted-foreground mt-1">World origin image (1-based, both cameras)</p>
               </div>
               <div>
-                <Label className="text-sm font-medium">Number of Frames</Label>
-                <Input
-                  type="text" inputMode="numeric"
-                  value={numFramesInput}
-                  onChange={e => setNumFramesInput(e.target.value)}
-                  onBlur={() => {
-                    const n = parseInt(numFramesInput);
-                    if (!isNaN(n) && n >= 1) setNumCalibrationFrames(n);
-                    else setNumFramesInput(String(numCalibrationFrames));
-                  }}
-                />
-                <p className="text-xs text-muted-foreground mt-1">&ge; 5 recommended for good fx recovery</p>
-              </div>
-              <div>
                 <Label className="text-sm font-medium">Stereo Geometry</Label>
                 <Select value={stereoConfig} onValueChange={v => setStereoConfig(v as 'auto' | 'same_side' | 'transmission')}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -751,6 +747,27 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 </p>
               </div>
             </div>
+
+            {/* Fix radial k2 = 0 — pinhole with <3 frames, where k2 is unconstrained */}
+            {showFixK2 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="stereo-stepped-fix-k2"
+                    checked={fixK2}
+                    onCheckedChange={setFixK2}
+                  />
+                  <Label htmlFor="stereo-stepped-fix-k2" className="text-sm font-medium">
+                    Fix radial k2 = 0 (few views)
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground ml-10">
+                  {fixK2
+                    ? "k2 fixed at 0 — recommended below 3 frames, where one stepped view cannot constrain the r⁴ radial term and a free k2 corrupts focal length and stereo angle."
+                    : "k2 fit freely — only do this if you trust a single stepped view to pin the r⁴ radial term."}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* ============================================= */}
@@ -760,7 +777,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             <h3 className="text-sm font-semibold">Detection + Fiducials</h3>
 
             <p className="text-xs text-muted-foreground">
-              Detects dots on {numCalibrationFrames} frames for BOTH cameras and runs a joint
+              Detects dots on {parseInt(numImages) || 10} frames for BOTH cameras and runs a joint
               stereo pinhole fit using both Z levels. Each camera&apos;s datum fiducial clicks
               anchor its world frame.
             </p>
@@ -1057,7 +1074,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
                 stereoParams={{ cam1, cam2 }}
                 calibrationParams={{}}
-                pointSelectMode={fiducialSelectMode || gcIsSelecting || labelTarget !== null}
+                pointSelectMode={fiducialSelectMode || labelTarget !== null}
                 onPointSelect={(px, py, cam, frame) => {
                   if (labelTarget) {
                     handleLabelClick(px, py);
@@ -1066,24 +1083,13 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   }
                 }}
                 onFrameChange={handleFrameChange}
-                selectedMarkers={mergedMarkers}
-                externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+                selectedMarkers={markerPoints}
                 externalFrame={
-                  gcIsSelecting && gcViewerTarget
-                    ? gcViewerTarget.frame
-                    : (fiducialSelectMode || labelTarget ? (labelTarget?.frameIdx ?? datumFrame) : undefined)
+                  fiducialSelectMode || labelTarget ? (labelTarget?.frameIdx ?? datumFrame) : undefined
                 }
                 externalOverlayPoints={overlayPoints}
                 externalOverlayLines={overlayLines}
                 detectionLoading={modelLoading}
-                settingsBarExtras={
-                  <GCInlineControls
-                    gc={gc}
-                    currentCamera={viewerCamera}
-                    cameraOptions={cameraOptions}
-                    onCameraChange={setActiveCam}
-                  />
-                }
               />
             </div>
           )}
@@ -1094,27 +1100,23 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
           <div className="border-t pt-4 space-y-4">
             <h3 className="text-sm font-semibold">Generate Stereo Model</h3>
 
-            <div className="flex items-center gap-2">
-              <Switch
-                id="stereo-stepped-assume-datum-unverified"
-                checked={assumeDatumForUnverified}
-                onCheckedChange={setAssumeDatumForUnverified}
-              />
-              <Label htmlFor="stereo-stepped-assume-datum-unverified" className="text-sm">
-                Assume datum face for unverified poses
-              </Label>
-            </div>
+            {sequenceId === null && hasSidecar && (
+              <p className="text-xs text-muted-foreground">
+                Using saved detections — <strong>Generate</strong> rebuilds the model from the sidecar
+                without re-detecting or re-clicking. Use <strong>Re-detect</strong> to refresh from the images.
+              </p>
+            )}
 
             <div className="flex items-center gap-2 flex-wrap">
               <Button
-                onClick={() => generateModel(assumeDatumForUnverified)}
+                onClick={() => generateModel()}
                 disabled={!canGenerate}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
                 title={
                   canGenerate
                     ? 'Fit the stereo pinhole model for both cameras'
                     : 'Need sequence + all 6 fiducials + a clicked level + every pose verified '
-                      + 'for each camera (or enable "Assume datum face for unverified poses")'
+                      + '(peak/trough) for each camera'
                 }
               >
                 {isGenerating ? (
@@ -1128,17 +1130,18 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </Button>
 
               <Button
-                onClick={() => loadModel()}
-                disabled={modelLoading}
+                onClick={() => detect()}
+                disabled={isGenerating || sequenceStatus === 'detecting'}
                 variant="outline"
+                title="Re-run detection from the images (refreshes the saved detections)"
               >
-                {modelLoading ? (
+                {sequenceStatus === 'detecting' ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Loading…
+                    Detecting…
                   </>
                 ) : (
-                  'Load Saved'
+                  'Re-detect'
                 )}
               </Button>
 
@@ -1160,6 +1163,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
 
               {/* Reconstruct 3C Vectors */}
               <div className="flex items-center gap-1">
+                <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
                 <Button
                   onClick={() => reconstructVectors(vectorTypeName)}
                   disabled={!hasModel || isReconstructing}
@@ -1236,9 +1240,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 Reconstruction error: {reconstructJobStatus.error || 'Unknown error'}
               </div>
             )}
-
-            <GlobalFrameSummary
-              gc={gc} cameraOptions={cameraOptions} board="stepped" sourcePathIdx={sourcePathIdx} />
           </div>
         </CardContent>
       </Card>
@@ -1303,6 +1304,19 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               )}
             </div>
 
+            {stereoModel.method && (
+              <p className="text-xs text-muted-foreground mb-4">
+                Cross-camera pose:{' '}
+                {stereoModel.method === 'compose'
+                  ? 'composed per-camera PnP (each camera fit independently into the shared plate frame)'
+                  : stereoModel.method === 'polynomial'
+                    ? 'per-camera 3D polynomial (no rig pose)'
+                    : stereoModel.method}
+                . There is no joint reprojection RMS for a composed pair — cross-camera
+                agreement is reported by self-calibration (residual disparity) below.
+              </p>
+            )}
+
             {/* Per-camera: intrinsics (pinhole) or per-plane RMS (polynomial) */}
             <div className="grid md:grid-cols-2 gap-6">
               {[
@@ -1362,6 +1376,16 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               query={{ stereo: 1, board: "stepped", camera_pair: `${cam1},${cam2}`, source_path_idx: sourcePathIdx }}
               trigger={stereoModel}
             />
+
+            {/* Self-calibration (Wieneke disparity): pinhole only — it nudges the
+                extrinsics, which a polynomial pair does not have. */}
+            {stereoModel.model_type !== 'polynomial3d' && (
+              <div className="mt-6">
+                <SelfCalibrationSection
+                  cam1={cam1} cam2={cam2} board="stepped"
+                  hasModel={hasModel} sourcePathIdx={sourcePathIdx} />
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

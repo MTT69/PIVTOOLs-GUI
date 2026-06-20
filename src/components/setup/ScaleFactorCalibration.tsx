@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler, ChevronLeft, ChevronRight } from "lucide-react";
 import ZoomableCanvas, { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
+import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
   GCInlineControls,
@@ -75,6 +76,16 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [result, setResult] = useState<any>(null);
   const [applyJob, setApplyJob] = useState<any>(null);
 
+  // --- Source path validation (folder/pattern "Did you mean" suggestions) -------
+  interface SFValidation {
+    valid: boolean;
+    error?: string;
+    suggested_pattern?: string;
+    suggested_subfolder?: string;
+  }
+  const [validation, setValidation] = useState<SFValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+
   // --- Multi-camera global coordinates (shared chain) ---------------------------
   const calibrationSources: string[] =
     config?.calibration?.calibration_sources || sourcePaths;
@@ -115,6 +126,50 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [viewCamera, viewFrame, sourcePathIdx, imageFormat, imageType]);
 
   useEffect(() => { loadFrame(); }, [loadFrame]);
+
+  // --- Validate the camera's source path/pattern (same route the other tabs use) ----
+  const validate = useCallback(async () => {
+    setValidating(true);
+    try {
+      const res = await fetch(`${BASE}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          camera, source_path_idx: sourcePathIdx,
+          image_format: imageFormat, image_type: imageType, frame_total: 1,
+        }),
+      });
+      setValidation(await res.json());
+    } catch (e) {
+      setValidation({ valid: false, error: String(e) });
+    } finally {
+      setValidating(false);
+    }
+  }, [camera, sourcePathIdx, imageFormat, imageType]);
+
+  useEffect(() => {
+    const t = setTimeout(validate, 400);  // debounce so typing the pattern does not spam the route
+    return () => clearTimeout(t);
+  }, [validate]);
+
+  // Apply a suggested camera subfolder. Scale-factor has no per-camera subfolder UI of its own —
+  // the backend frame loader resolves it from config — so write it there (and enable subfolders).
+  const applySuggestedSubfolder = useCallback(async (sub: string) => {
+    const perCam = cameraOptions.map(c => sub.replace(/\d+/, String(c)));
+    try {
+      await fetch("/backend/update_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          calibration: { use_camera_subfolders: true, camera_subfolders: perCam },
+        }),
+      });
+      updateConfig(["calibration", "use_camera_subfolders"], true);
+      updateConfig(["calibration", "camera_subfolders"], perCam);
+    } catch (e) {
+      console.error("apply subfolder failed", e);
+    }
+  }, [cameraOptions, updateConfig]);
 
   // Apply-poll timer; cleared on unmount so a switched-away tab stops polling.
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -327,6 +382,51 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Source validation + "Did you mean" suggestions */}
+          {validation && (
+            <ValidationAlert
+              validation={{
+                valid: validation.valid,
+                checked: !validating,
+                error: validation.error || null,
+              }}
+              customSuccessMessage={validation.valid ? `Camera ${camera} source validated` : undefined}
+            />
+          )}
+
+          {validation && !validation.valid && validation.suggested_pattern && (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-600">Suggestion:</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setImageFormat(validation.suggested_pattern!)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Use &quot;{validation.suggested_pattern}&quot;
+              </Button>
+            </div>
+          )}
+
+          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+            const sub = validation.suggested_subfolder!;
+            const perCam = cameraOptions.map(c => sub.replace(/\d+/, String(c)));
+            const label = [...new Set(perCam)].join('" / "');
+            return (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-600">Subfolder suggestion:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applySuggestedSubfolder(sub)}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Use &quot;{label}&quot;
+                </Button>
+              </div>
+            );
+          })()}
 
           {/* Image viewer + picking */}
           <div className="space-y-2">

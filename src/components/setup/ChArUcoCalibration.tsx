@@ -97,6 +97,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     modelLoading,
     modelLoadError,
     detectError,
+    detecting,
     hasModel,
 
     // Overlay toggle
@@ -105,13 +106,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
     // Model restore
     loadedWorldFrame,
-    persistWorldFrame,
 
     // Actions
     generateCameraModel,
     generateCameraModelAll,
     calibrateVectors,
     detectFrame,
+    detectAllViews,
   } = calibration;
 
   // Track the frame currently shown in the viewer (1-based, matches datumFrame).
@@ -602,10 +603,15 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    variant="outline" size="sm" disabled={wf.busy}
-                    onClick={async () => { await wf.prepare(); detectFrame(currentFrame); setShowOverlay(true); }}
+                    variant="outline" size="sm" disabled={wf.busy || detecting}
+                    onClick={async () => {
+                      await wf.prepare();
+                      if (modelType === 'polynomial') detectFrame(datumNum);
+                      else await detectAllViews();
+                      setShowOverlay(true);
+                    }}
                   >
-                    {wf.busy && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
+                    {(wf.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Markers
                   </Button>
                   {onDatumFrame ? (
                     <WorldFrameControls wf={wf} />
@@ -621,7 +627,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           <div className="border-t pt-4 space-y-4">
             <div className="flex gap-2 items-center flex-wrap">
               <Button
-                onClick={async () => { await generateCameraModelAll(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                onClick={async () => { await generateCameraModelAll(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
                 disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
                 title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
@@ -638,7 +644,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
               {cameraOptions.length > 1 && (
                 <Button
-                  onClick={async () => { await generateCameraModel(wf.payload); await persistWorldFrame(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
+                  onClick={async () => { await generateCameraModel(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
                   disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
                   title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
                   variant="outline"

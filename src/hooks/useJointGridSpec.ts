@@ -758,15 +758,16 @@ export function useJointGridSpec({
     } else if (a.kind === "origin") {
       prompt = `Click the ORIGIN dot — Camera ${a.camera}, frame ${a.view + 1}`;
     } else if (link?.awaiting === "target") {
-      // Matching phase: name the colour of the next dot to find in the target camera.
+      // Matching phase: name the colour of the next dot to find in the target camera. Lead with the
+      // camera pair being tied so the user knows which overlap they are clicking (Cam 2 ↔ Cam 3).
       const i = link.pixs.length;
       const count = ` (${Math.min(i + 1, a.minPairs)} of ${a.minPairs})`;
-      prompt = `Now find the ${pairColorName(i)} dot${count} in Camera ${a.camera}, frame ${a.view + 1}`;
+      prompt = `Cameras ${a.refCamera} ↔ ${a.camera}: now find the ${pairColorName(i)} dot${count} in Camera ${a.camera}, frame ${a.view + 1}`;
     } else {
-      // Reference phase: pick all shared dots in the datum camera; each gets the next colour.
+      // Reference phase: pick all shared dots in the reference camera; each gets the next colour.
       const i = link?.refs.length ?? 0;
       const count = ` (${Math.min(i + 1, a.minPairs)} of ${a.minPairs})`;
-      prompt = `Click shared dot ${i + 1} (${pairColorName(i)})${count} in Camera ${a.refCamera}, frame ${a.view + 1}`;
+      prompt = `Cameras ${a.refCamera} ↔ ${a.camera}: click shared dot ${i + 1} (${pairColorName(i)})${count} in Camera ${a.refCamera}, frame ${a.view + 1}`;
     }
     return { index: guide.index, total, prompt, kind: a.kind };
   }, [guide, link, wf.mode]);
