@@ -733,17 +733,16 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
               <div>
                 <Label className="text-sm font-medium">Model Type</Label>
+                {/* Stereo polynomial3d is temporarily disabled (builds no stereo pose) —
+                    pinhole only for stereo. Mono stepped still offers polynomial3d. */}
                 <Select value={modelType} onValueChange={(v) => setModelType(v as 'pinhole' | 'polynomial3d')}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pinhole">Pinhole (multi-view)</SelectItem>
-                    <SelectItem value="polynomial3d">Polynomial 3D (single datum view)</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {modelType === 'polynomial3d'
-                    ? 'DaVis poly: per-camera, no baseline/angle'
-                    : 'OpenCV pinhole, composed stereo pose'}
+                  OpenCV pinhole, composed stereo pose
                 </p>
               </div>
             </div>
