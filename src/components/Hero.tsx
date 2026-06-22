@@ -51,10 +51,14 @@ export default function Hero({ onGetStarted }: { onGetStarted?: () => void }) {
             <Download size={20} />
             Get Started
           </button>
-          <button className="border-2 border-white text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-white hover:text-soton-darkblue transition-colors duration-200 flex items-center gap-2 justify-center">
+          <a
+            href="https://www.youtube.com/@pivtools"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="border-2 border-white text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-white hover:text-soton-darkblue transition-colors duration-200 flex items-center gap-2 justify-center">
             <Play size={20} />
             Watch Demo
-          </button>
+          </a>
         </motion.div>
 
         <motion.div

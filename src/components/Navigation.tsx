@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Github, HelpCircle, Settings, Menu, X } from 'lucide-react';
+import { Github, HelpCircle, Settings, Menu, X, ClipboardCheck } from 'lucide-react';
 
 export default function Navigation() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -38,8 +38,17 @@ export default function Navigation() {
               <Settings size={18} />
               Settings
             </a>
-            <a 
-              href="https://github.com/MTT69/python-PIVTOOLs" 
+            <a
+              href="/pivtools-experimental-setup-checklist.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-600 hover:text-soton-blue px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2"
+            >
+              <ClipboardCheck size={18} />
+              Setup Checklist
+            </a>
+            <a
+              href="https://github.com/MTT69/python-PIVTOOLs"
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-600 hover:text-soton-blue px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2"
@@ -78,6 +87,16 @@ export default function Navigation() {
               >
                 <Settings size={18} />
                 Settings
+              </a>
+              <a
+                href="/pivtools-experimental-setup-checklist.pdf"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-soton-blue block px-3 py-2 rounded-md text-base font-medium flex items-center gap-2"
+                onClick={() => setIsOpen(false)}
+              >
+                <ClipboardCheck size={18} />
+                Setup Checklist
               </a>
               <a
                 href="https://github.com/MTT69/python-PIVTOOLs"
