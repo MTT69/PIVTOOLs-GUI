@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, Sliders, Crosshair } from "lucide-react";
 import { useEnsemblePivConfig } from "@/hooks/useEnsemblePivConfig";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { useFftSizes } from "@/hooks/useFftSizes";
+import { WindowSizeSelect } from "./WindowSizeSelect";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
 import RunPIV from "./RunPIV";
 import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettings";
@@ -43,6 +45,9 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
   } = useEnsemblePivConfig(config.ensemble_piv, updateConfig);
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
+
+  // Valid FFT window sizes (served by backend; codelet engine only supports these)
+  const { sizes: fftSizes } = useFftSizes();
 
   // Camera selection state
   const cameraCount = config?.paths?.camera_count || 1;
@@ -186,17 +191,17 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
               const isLastPass = i === passes.length - 1;
               return (
                 <div key={i} className="grid grid-cols-12 gap-x-2 items-center bg-gray-50 p-2 rounded-md">
-                  <Input
+                  <WindowSizeSelect
                     className="col-span-2"
-                    type="text"
                     value={p.windowX}
-                    onChange={e => updatePassField(i, 'windowX', e.target.value)}
+                    sizes={fftSizes}
+                    onChange={v => updatePassField(i, 'windowX', v)}
                   />
-                  <Input
+                  <WindowSizeSelect
                     className="col-span-2"
-                    type="text"
                     value={p.windowY}
-                    onChange={e => updatePassField(i, 'windowY', e.target.value)}
+                    sizes={fftSizes}
+                    onChange={v => updatePassField(i, 'windowY', v)}
                   />
                   <Input
                     className="col-span-2"
@@ -252,19 +257,19 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 <div className="grid grid-cols-2 gap-4 mt-2">
                   <div className="space-y-1">
                     <Label className="text-xs">Width (X)</Label>
-                    <Input
-                      type="text"
+                    <WindowSizeSelect
                       value={sumWindow[0]}
-                      onChange={e => updateSumWindow(0, e.target.value)}
+                      sizes={fftSizes}
+                      onChange={v => updateSumWindow(0, v)}
                       className="h-8"
                     />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">Height (Y)</Label>
-                    <Input
-                      type="text"
+                    <WindowSizeSelect
                       value={sumWindow[1]}
-                      onChange={e => updateSumWindow(1, e.target.value)}
+                      sizes={fftSizes}
+                      onChange={v => updateSumWindow(1, v)}
                       className="h-8"
                     />
                   </div>

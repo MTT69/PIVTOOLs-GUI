@@ -389,6 +389,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     onMouseLeave,
     handleMagnifierMove,
     handleMagnifierLeave,
+    // Box zoom
+    boxZoomMode,
+    setBoxZoomMode,
+    selectionRect,
+    beginBoxSelect,
+    updateBoxSelect,
+    commitBoxSelect,
+    resetZoom,
     basename,
     downloadCurrentView,
     copyCurrentView,
@@ -1005,6 +1013,30 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   >
                     Copy PNG
                   </Button>
+
+                  <Button
+                    size="sm"
+                    variant={boxZoomMode ? "default" : "outline"}
+                    onClick={() => {
+                      // Hide the magnifier when entering box-zoom so it doesn't linger during a drag.
+                      if (!boxZoomMode) handleMagnifierLeave();
+                      setBoxZoomMode(!boxZoomMode);
+                    }}
+                    disabled={!imageSrc || loading || statsLoading}
+                    title="Drag a rectangle on the plot to zoom into that region"
+                  >
+                    Box Zoom
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={resetZoom}
+                    disabled={!imageSrc || loading || statsLoading}
+                    title="Reset axis limits to the full extent"
+                  >
+                    Reset Zoom
+                  </Button>
                 </>
               )}
             </div>
@@ -1083,11 +1115,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   width: '100%',
                   maxWidth: '1100px',
                   margin: '0 auto',
-                  cursor: datumMode ? 'crosshair' : magVisible ? 'none' : 'default'
                 }}
-                onMouseMove={e => { onMouseMove(e); handleMagnifierMove(e); }}
-                onMouseLeave={e => { onMouseLeave(); handleMagnifierLeave(); }}
-                onClick={e => { if (datumMode) handleImageClick(e); }}
               >
                 {/* Frame navigation arrows - Only show when frame navigation is available */}
                 {hasFrameNavigation && (
@@ -1120,14 +1148,35 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   </>
                 )}
 
-                <img
-                  ref={imgRef}
-                  src={`data:image/png;base64,${imageSrc}`}
-                  alt="Vector Result"
-                  className="rounded border w-full max-w-5xl select-none"
-                  style={{ width: '100%', maxWidth: '1000px', height: 'auto' }}
-                  draggable={false}
-                />
+                <div
+                  style={{
+                    position: 'relative',
+                    width: '100%',
+                    maxWidth: '1000px',
+                    cursor: boxZoomMode ? 'zoom-in' : datumMode ? 'crosshair' : magVisible ? 'none' : 'default',
+                  }}
+                  onMouseDown={e => { if (boxZoomMode) beginBoxSelect(e); }}
+                  onMouseMove={e => { if (boxZoomMode) { updateBoxSelect(e); } else { onMouseMove(e); handleMagnifierMove(e); } }}
+                  onMouseUp={() => { if (boxZoomMode) void commitBoxSelect(); }}
+                  onMouseLeave={e => { if (boxZoomMode) { void commitBoxSelect(); } else { onMouseLeave(); handleMagnifierLeave(); } }}
+                  onClick={e => { if (!boxZoomMode && datumMode) handleImageClick(e); }}
+                >
+                  <img
+                    ref={imgRef}
+                    src={`data:image/png;base64,${imageSrc}`}
+                    alt="Vector Result"
+                    className="rounded border w-full max-w-5xl select-none"
+                    style={{ width: '100%', maxWidth: '1000px', height: 'auto', display: 'block' }}
+                    draggable={false}
+                  />
+                  {/* Box-zoom rubber band (display px relative to the image) */}
+                  {boxZoomMode && selectionRect && (
+                    <div
+                      className="absolute pointer-events-none border-2 border-dashed border-white bg-blue-500/20"
+                      style={{ left: selectionRect.x, top: selectionRect.y, width: selectionRect.w, height: selectionRect.h }}
+                    />
+                  )}
+                </div>
 
                 {/* Magnifier Canvas */}
                 <canvas

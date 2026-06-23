@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, CheckCircle, Sliders } from "lucide-react";
 import { useInstantaneousPivConfig } from "@/hooks/useInstantaneousPivConfig";
 import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { useFftSizes } from "@/hooks/useFftSizes";
+import { WindowSizeSelect } from "./WindowSizeSelect";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
 import RunPIV from "./RunPIV";
 import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettings";
@@ -27,6 +29,9 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
     useInstantaneousPivConfig(config.instantaneous_piv, updateConfig);
 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
+
+  // Valid FFT window sizes (served by backend; codelet engine only supports these)
+  const { sizes: fftSizes } = useFftSizes();
 
   // Camera selection state
   const cameraCount = config?.paths?.camera_count || 1;
@@ -156,8 +161,8 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
               const isLastPass = i === passes.length - 1;
               return (
                 <div key={i} className="grid grid-cols-12 gap-x-2 items-center bg-gray-50 p-2 rounded-md">
-                  <Input className="col-span-2" type="text" value={p.windowX} onChange={e => updatePassField(i, 'windowX', e.target.value)} />
-                  <Input className="col-span-2" type="text" value={p.windowY} onChange={e => updatePassField(i, 'windowY', e.target.value)} />
+                  <WindowSizeSelect className="col-span-2" value={p.windowX} sizes={fftSizes} onChange={v => updatePassField(i, 'windowX', v)} />
+                  <WindowSizeSelect className="col-span-2" value={p.windowY} sizes={fftSizes} onChange={v => updatePassField(i, 'windowY', v)} />
                   <Input className="col-span-2" type="text" value={p.overlap} onChange={e => updatePassField(i, 'overlap', e.target.value)} />
                   <div className="col-span-1 flex justify-center">
                     <Button 

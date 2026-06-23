@@ -249,6 +249,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const MAG_SIZE = 180;
   const MAG_FACTOR = 2.5;
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  // Box zoom: drag a rectangle over the plot, then re-render at those axis limits.
+  // Mirrors the image-viewer UX (zoomableCanvas) but commits to xlim/ylim instead of a CSS transform.
+  const [boxZoomMode, setBoxZoomMode] = useState(false);
+  // selectionRect is in display pixels relative to the <img> top-left (for the rubber-band overlay).
+  const [selectionRect, setSelectionRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const isSelectingRef = useRef(false);
+  const selectionStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
   // Track available runs for validation
@@ -1227,12 +1234,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   useEffect(() => { clearHover(); }, [imageSrc, meta, type, index, meanMode, camera, merged, clearHover]);
 
-  const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
+  // Build the query params for /plot/get_vector_at_position at a plot-area position.
+  // Shared by the hover tooltip (fetchValueAt) and box zoom (fetchCoordAt) so both map a
+  // percentage to a data coordinate through the exact same convention (incl. y-orientation).
+  const buildPositionParams = useCallback((xPercent: number, yPercent: number) => {
     // Note: Backend handles uncalibrated data by returning pixel coordinates (i, j indices)
-
-    if (pendingFetchRef.current) return;
-    pendingFetchRef.current = true;
-    // Use get_vector_at_position for all sources - it handles var_source parameter
     const { varSource, varName } = parseVarType(type);
     const params = new URLSearchParams();
     params.set("base_path", effectiveDir);
@@ -1267,7 +1273,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("ylim_min", String(Number(ylimMin)));
       params.set("ylim_max", String(Number(ylimMax)));
     }
+    return params;
+  }, [effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, isStereoData, availableDataSources]);
 
+  const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
+    if (pendingFetchRef.current) return;
+    pendingFetchRef.current = true;
+    const params = buildPositionParams(xPercent, yPercent);
     const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
     fetch(url)
       .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
@@ -1277,7 +1289,22 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
-  }, [backendUrl, effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, isStereoData, availableDataSources]);
+  }, [backendUrl, buildPositionParams]);
+
+  // Resolve a plot-area position (percentages) to a true data coordinate via the same
+  // endpoint the tooltip uses. Returns null on any failure (no silent fallback to fake coords).
+  const fetchCoordAt = useCallback(async (xPercent: number, yPercent: number): Promise<{ x: number; y: number } | null> => {
+    const params = buildPositionParams(xPercent, yPercent);
+    const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
+    try {
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!r.ok || j.error || typeof j.x !== "number" || typeof j.y !== "number") return null;
+      return { x: j.x, y: j.y };
+    } catch {
+      return null;
+    }
+  }, [backendUrl, buildPositionParams]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     const bbox = meta?.axes_bbox;
@@ -1320,6 +1347,93 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   }, [meta, fetchValueAt, index, type, meanMode, clearHover]);
 
   const onMouseLeave = useCallback(() => { clearHover(); }, [clearHover]);
+
+  // --- Box zoom -------------------------------------------------------------
+  // Convert a display position (px relative to the <img> top-left) into plot-area
+  // percentages, using the same transform as onMouseMove but clamping corners that
+  // land outside the axes back onto the nearest edge (so a sloppy drag still zooms).
+  const displayToPercent = useCallback((dispX: number, dispY: number): { xPercent: number; yPercent: number } | null => {
+    const bbox = meta?.axes_bbox;
+    const imgEl = imgRef.current;
+    if (!bbox || !imgEl) return null;
+    const rect = imgEl.getBoundingClientRect();
+    const scaleX = bbox.png_width / rect.width;
+    const scaleY = bbox.png_height / rect.height;
+    const px = Math.max(bbox.left, Math.min(bbox.left + bbox.width, dispX * scaleX));
+    const py = Math.max(bbox.top, Math.min(bbox.top + bbox.height, dispY * scaleY));
+    return { xPercent: (px - bbox.left) / bbox.width, yPercent: (py - bbox.top) / bbox.height };
+  }, [meta]);
+
+  const beginBoxSelect = useCallback((e: React.MouseEvent) => {
+    const imgEl = imgRef.current;
+    if (!imgEl) return;
+    const rect = imgEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    isSelectingRef.current = true;
+    selectionStartRef.current = { x, y };
+    setSelectionRect({ x, y, w: 0, h: 0 });
+  }, []);
+
+  const updateBoxSelect = useCallback((e: React.MouseEvent) => {
+    if (!isSelectingRef.current) return;
+    const imgEl = imgRef.current;
+    if (!imgEl) return;
+    const rect = imgEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const s = selectionStartRef.current;
+    setSelectionRect({
+      x: Math.min(s.x, x), y: Math.min(s.y, y),
+      w: Math.abs(x - s.x), h: Math.abs(y - s.y),
+    });
+  }, []);
+
+  // Trim trailing-zero noise so the limit inputs read cleanly after a zoom.
+  const fmtLimit = (v: number) => String(Number(v.toFixed(4)));
+
+  const commitBoxSelect = useCallback(async () => {
+    const wasSelecting = isSelectingRef.current;
+    isSelectingRef.current = false;
+    const sel = selectionRect;
+    setSelectionRect(null);
+    // Ignore stray clicks / tiny drags (matches zoomableCanvas' 10px threshold).
+    if (!wasSelecting || !sel || sel.w < 10 || sel.h < 10) return;
+    // Top-left and bottom-right corners of the box, in display px relative to the image.
+    const topLeft = displayToPercent(sel.x, sel.y);
+    const botRight = displayToPercent(sel.x + sel.w, sel.y + sel.h);
+    if (!topLeft || !botRight) return;
+    const [cTop, cBot] = await Promise.all([
+      fetchCoordAt(topLeft.xPercent, topLeft.yPercent),
+      fetchCoordAt(botRight.xPercent, botRight.yPercent),
+    ]);
+    if (!cTop || !cBot) return;
+    // x always increases left->right: xlim = [min, max].
+    setXlimMin(fmtLimit(Math.min(cTop.x, cBot.x)));
+    setXlimMax(fmtLimit(Math.max(cTop.x, cBot.x)));
+    // y: assign by SCREEN edge to preserve the axis orientation. The backend applies
+    // set_ylim((ylim_min, ylim_max)) => (bottom, top), so the top-of-box data-y goes to
+    // ylim_max and the bottom-of-box data-y to ylim_min. For y-up (calibrated) this is a
+    // normal min<max range; for an inverted (pixel) axis it yields max<min, keeping it flipped.
+    setYlimMax(fmtLimit(cTop.y));
+    setYlimMin(fmtLimit(cBot.y));
+    setBoxZoomMode(false); // auto-exit after one zoom, like the image viewer
+  }, [selectionRect, displayToPercent, fetchCoordAt]);
+
+  // Reset to full extent: clearing the limits (state + refs) triggers the auto-render effect.
+  const resetZoom = useCallback(() => {
+    setXlimMin(""); setXlimMax(""); setYlimMin(""); setYlimMax("");
+    xlimMinRef.current = ""; xlimMaxRef.current = ""; ylimMinRef.current = ""; ylimMaxRef.current = "";
+  }, []);
+
+  // Clear any in-progress selection whenever box-zoom turns off (e.g. the user toggles the
+  // button mid-drag), so a stale isSelectingRef / rect can't leak into the next session.
+  useEffect(() => {
+    if (!boxZoomMode) {
+      isSelectingRef.current = false;
+      setSelectionRect(null);
+    }
+  }, [boxZoomMode]);
 
   const handleMagnifierMove = (e: React.MouseEvent) => {
     const img = imgRef.current;
@@ -1947,6 +2061,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     onMouseLeave,
     handleMagnifierMove,
     handleMagnifierLeave,
+    // Box zoom
+    boxZoomMode,
+    setBoxZoomMode,
+    selectionRect,
+    beginBoxSelect,
+    updateBoxSelect,
+    commitBoxSelect,
+    resetZoom,
     basename,
     downloadCurrentView,
     copyCurrentView,
