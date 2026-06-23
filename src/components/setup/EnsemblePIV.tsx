@@ -396,21 +396,18 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                   <div className="space-y-2">
-                    <Label className="text-sm">Fit Method</Label>
-                    <Select
-                      value={config?.ensemble_piv?.fit_method || 'kspace'}
-                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'fit_method'], value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="gaussian">Gaussian (In Development)</SelectItem>
-                        <SelectItem value="kspace">K-space (Default)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">K-space Kurtosis Correction</Label>
+                      <Button
+                        variant={(config?.ensemble_piv?.kspace_kurtosis ?? true) ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => updateConfigValue(['ensemble_piv', 'kspace_kurtosis'], !(config?.ensemble_piv?.kspace_kurtosis ?? true))}
+                      >
+                        {(config?.ensemble_piv?.kspace_kurtosis ?? true) ? "Enabled" : "Disabled"}
+                      </Button>
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      K-space (recommended): fits in frequency domain with predictor-aware noise modelling (40-90% improved Reynolds stress accuracy). Gaussian (in development): fits a Gaussian function to the correlation peak.
+                      Ensemble PIV uses the closed-form k-space fit. Enabled (default): adds a per-axis (decoupled) kurtosis term — beats the Gaussian model where the displacement PDF is sub-Gaussian (validated on channel flow). Disabled: pure-Gaussian PDF, the robust baseline for near-Gaussian or low-SNR data.
                     </p>
                   </div>
 
