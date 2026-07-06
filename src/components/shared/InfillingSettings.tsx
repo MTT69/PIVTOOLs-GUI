@@ -20,21 +20,17 @@ const InfillingSettings = memo(function InfillingSettings({
   const infillingConfig = config?.[configPath] || { mid_pass: {}, final_pass: {} };
 
   // Local state for text inputs
-  const [localMidKsize, setLocalMidKsize] = useState<string>('');
   const [localMidNeighbors, setLocalMidNeighbors] = useState<string>('');
-  const [localFinalKsize, setLocalFinalKsize] = useState<string>('');
   const [localFinalNeighbors, setLocalFinalNeighbors] = useState<string>('');
   const isUserEditingRef = useRef(false);
 
   // Sync local state from config
   useEffect(() => {
     if (isUserEditingRef.current) return;
-    setLocalMidKsize(infillingConfig.mid_pass?.parameters?.ksize?.toString() ?? '3');
     setLocalMidNeighbors(infillingConfig.mid_pass?.parameters?.n_neighbors?.toString() ?? '');
-    setLocalFinalKsize(infillingConfig.final_pass?.parameters?.ksize?.toString() ?? '3');
     setLocalFinalNeighbors(infillingConfig.final_pass?.parameters?.n_neighbors?.toString() ?? '');
-  }, [infillingConfig.mid_pass?.parameters?.ksize, infillingConfig.mid_pass?.parameters?.n_neighbors,
-      infillingConfig.final_pass?.parameters?.ksize, infillingConfig.final_pass?.parameters?.n_neighbors]);
+  }, [infillingConfig.mid_pass?.parameters?.n_neighbors,
+      infillingConfig.final_pass?.parameters?.n_neighbors]);
 
   const updateMidPass = (field: string, value: any) => {
     const updated = { ...infillingConfig.mid_pass, [field]: value };
@@ -66,42 +62,19 @@ const InfillingSettings = memo(function InfillingSettings({
           <div className="space-y-1">
             <Label className="text-xs">Method</Label>
             <Select
-              value={infillingConfig.mid_pass?.method || 'local_median'}
+              value={infillingConfig.mid_pass?.method || 'nearest'}
               onValueChange={(value) => updateMidPass('method', value)}
             >
               <SelectTrigger className="h-8 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="local_median">Local Median</SelectItem>
+                <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                 <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
                 <SelectItem value="biharmonic">Biharmonic</SelectItem>
               </SelectContent>
             </Select>
           </div>
-
-          {infillingConfig.mid_pass?.method === 'local_median' && (
-            <div className="space-y-1">
-              <Label className="text-xs">Kernel Size</Label>
-              <Input
-                className="h-8 text-sm"
-                type="text"
-                value={localMidKsize}
-                onFocus={() => { isUserEditingRef.current = true; }}
-                onChange={(e) => setLocalMidKsize(e.target.value)}
-                onBlur={() => {
-                  isUserEditingRef.current = false;
-                  const num = parseInt(localMidKsize, 10);
-                  if (!isNaN(num) && localMidKsize !== '') {
-                    updateMidPassParam('ksize', num);
-                  } else {
-                    setLocalMidKsize('3');
-                    updateMidPassParam('ksize', 3);
-                  }
-                }}
-              />
-            </div>
-          )}
 
           {infillingConfig.mid_pass?.method === 'knn' && (
             <>
@@ -177,42 +150,19 @@ const InfillingSettings = memo(function InfillingSettings({
             <div className="space-y-1">
               <Label className="text-xs">Method</Label>
               <Select
-                value={infillingConfig.final_pass?.method || 'local_median'}
+                value={infillingConfig.final_pass?.method || 'biharmonic'}
                 onValueChange={(value) => updateFinalPass('method', value)}
               >
                 <SelectTrigger className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="local_median">Local Median</SelectItem>
+                  <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                   <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
                   <SelectItem value="biharmonic">Biharmonic</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-
-            {infillingConfig.final_pass?.method === 'local_median' && (
-              <div className="space-y-1">
-                <Label className="text-xs">Kernel Size</Label>
-                <Input
-                  className="h-8 text-sm"
-                  type="text"
-                  value={localFinalKsize}
-                  onFocus={() => { isUserEditingRef.current = true; }}
-                  onChange={(e) => setLocalFinalKsize(e.target.value)}
-                  onBlur={() => {
-                    isUserEditingRef.current = false;
-                    const num = parseInt(localFinalKsize, 10);
-                    if (!isNaN(num) && localFinalKsize !== '') {
-                      updateFinalPassParam('ksize', num);
-                    } else {
-                      setLocalFinalKsize('3');
-                      updateFinalPassParam('ksize', 3);
-                    }
-                  }}
-                />
-              </div>
-            )}
 
             {infillingConfig.final_pass?.method === 'knn' && (
               <>
