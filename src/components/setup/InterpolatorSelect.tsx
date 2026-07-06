@@ -5,9 +5,10 @@ export type Interpolator = "cubic" | "lanczos";
 /**
  * Stereo 3C reconstruction resample kernel.
  *
- * Selects how cam2's displacement field is resampled onto cam1's grid. "lanczos"
- * (default) and "cubic" use cv2.remap and remove the grid-locked variance ringing the
- * legacy bilinear resample imprints on stereo RMS / Reynolds-stress fields.
+ * Selects how both cameras' displacement fields are resampled onto the regular world
+ * grid. "lanczos" (default) and "cubic" use cv2.remap and remove the grid-locked
+ * variance ringing the legacy bilinear resample imprints on stereo RMS /
+ * Reynolds-stress fields.
  */
 export function InterpolatorSelect({
   value,
