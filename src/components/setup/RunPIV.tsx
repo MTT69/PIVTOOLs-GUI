@@ -108,6 +108,16 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const handleRunClick = async () => {
     if (activePaths.length === 0) return;
 
+    // Ensemble resume REQUIRES the existing ensemble_result.mat (passes 1..N-1);
+    // the overwrite dialog's only affirmative action deletes it, so skip the check.
+    // The backend validates the file exists and errors loudly if it doesn't.
+    const resumeFromPass = mode === 'ensemble' ? (config?.ensemble_piv?.resume_from_pass ?? 0) : 0;
+    if (resumeFromPass > 0) {
+      console.log(`[RunPIV] resume_from_pass=${resumeFromPass} — skipping overwrite check, resuming`);
+      await startJob(mode, settings);
+      return;
+    }
+
     setIsCheckingOutput(true);
     try {
       const url = `/backend/check_output_exists?active_paths=${activePaths.join(',')}&mode=${mode}`;

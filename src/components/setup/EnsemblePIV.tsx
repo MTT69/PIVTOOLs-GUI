@@ -396,22 +396,6 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-sm">Kurtosis Terms</Label>
-                      <Button
-                        variant={(config?.ensemble_piv?.kspace_kurtosis ?? true) ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => updateConfigValue(['ensemble_piv', 'kspace_kurtosis'], !(config?.ensemble_piv?.kspace_kurtosis ?? true))}
-                      >
-                        {(config?.ensemble_piv?.kspace_kurtosis ?? true) ? "Enabled" : "Disabled"}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Adds per-axis k⁴ flatness terms to the k-space shape model, capturing non-Gaussian velocity PDFs (recommended). Disable to fit a pure Gaussian shape.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
                     <Label className="text-sm">Background Subtraction</Label>
                     <Select
                       value={config?.ensemble_piv?.background_subtraction_method || 'correlation'}
@@ -480,45 +464,23 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-sm">Predictor Interpolation</Label>
-                    <Select
-                      value={config?.ensemble_piv?.predictor_interpolation || 'cubic'}
-                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'predictor_interpolation'], value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="nearest">Nearest</SelectItem>
-                        <SelectItem value="linear">Linear</SelectItem>
-                        <SelectItem value="cubic">Cubic</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Interpolation for upscaling the predictor field between passes. Cubic recommended.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-sm">Image Warp Interpolation</Label>
-                    <Select
-                      value={config?.ensemble_piv?.image_warp_interpolation || 'cubic'}
-                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'image_warp_interpolation'], value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
-                        <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Interpolation for image dewarping. Cubic is fastest. Lanczos-3 preserves particle sharpness better (~1.5× slower).
-                    </p>
-                  </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Image Warp Interpolation</Label>
+                  <Select
+                    value={config?.ensemble_piv?.image_warp_interpolation || 'cubic'}
+                    onValueChange={(value) => updateConfigValue(['ensemble_piv', 'image_warp_interpolation'], value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
+                      <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Interpolation for image dewarping. Cubic is fastest. Lanczos-3 preserves particle sharpness better (~1.5× slower). Predictor-field upscaling between passes is always cubic.
+                  </p>
                 </div>
 
                 <BoundaryConditionEditor
