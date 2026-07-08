@@ -35,7 +35,7 @@ export function useCalibrationImageViewer(
   idx: number,
   imageFormat: 'jpeg' | 'png' = 'jpeg',
   autoLimits: boolean = true,
-  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board' = 'dotboard',
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board' | 'scale_factor' = 'dotboard',
   refreshKey?: string,
 ) {
   const [loading, setLoading] = useState(false);

@@ -32,7 +32,7 @@ export interface CalibrationImageViewerProps {
   sourcePathIdx: number;
   camera: number;
   numImages: number;
-  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board';
+  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board' | 'scale_factor';
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;

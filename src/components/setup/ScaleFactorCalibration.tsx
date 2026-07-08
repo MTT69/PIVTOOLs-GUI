@@ -7,8 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler, ChevronLeft, ChevronRight } from "lucide-react";
-import ZoomableCanvas, { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
+import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler } from "lucide-react";
+import { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
+import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
@@ -49,8 +50,13 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     config?.calibration?.image_format || "calib%05d.tif");
   const [imageType, setImageType] = useState<string>(
     config?.calibration?.image_type || "standard");
+  const [calibrationSources, setCalibrationSources] = useState<string[]>(
+    () => config?.calibration?.calibration_sources || []);
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState<boolean>(
+    Boolean(config?.calibration?.use_camera_subfolders));
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>(
+    () => config?.calibration?.camera_subfolders || []);
   const [frameIdx, setFrameIdx] = useState(1);
-  const [frameCount, setFrameCount] = useState(0);
 
   // --- Scale-factor params ------------------------------------------------------
   const [pxPerMm, setPxPerMm] = useState<string>(
@@ -61,10 +67,25 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [xDir, setXDir] = useState<AxisDirX>("right");
   const [yDir, setYDir] = useState<AxisDirY>("up");
   const [swapAxes, setSwapAxes] = useState(false);
+  // World (X, Y) mm assigned to the picked origin pixel — same semantics as the board
+  // tabs' world-frame "Origin is at X/Y mm" inputs (baked into the model at generate).
+  const [originMmX, setOriginMmX] = useState("0");
+  const [originMmY, setOriginMmY] = useState("0");
 
-  // --- Viewer + interaction -----------------------------------------------------
-  const [previewB64, setPreviewB64] = useState<string | null>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // Buffered numeric origin entry (commit on blur), kept in sync with picked origin.
+  const [originXInput, setOriginXInput] = useState("");
+  const [originYInput, setOriginYInput] = useState("");
+  useEffect(() => {
+    setOriginXInput(originPx ? originPx[0].toFixed(1) : "");
+    setOriginYInput(originPx ? originPx[1].toFixed(1) : "");
+  }, [originPx]);
+  const commitOrigin = useCallback(() => {
+    const x = parseFloat(originXInput);
+    const y = parseFloat(originYInput);
+    if (Number.isFinite(x) && Number.isFinite(y)) setOriginPx([x, y]);
+  }, [originXInput, originYInput]);
+
+  // --- Viewer interaction ---------------------------------------------------------
   const [pickMode, setPickMode] = useState<PickMode>("none");
   const [measureP1, setMeasureP1] = useState<[number, number] | null>(null);
   const [measureP2, setMeasureP2] = useState<[number, number] | null>(null);
@@ -76,10 +97,36 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [result, setResult] = useState<any>(null);
   const [applyJob, setApplyJob] = useState<any>(null);
 
+  // --- Vector calibration type (shared calibration.piv_type key) -----------------
+  const [vectorTypeName, setVectorTypeName] = useState<"instantaneous" | "ensemble">("instantaneous");
+  useEffect(() => {
+    const pivType = config?.calibration?.piv_type;
+    if (pivType === "instantaneous" || pivType === "ensemble") setVectorTypeName(pivType);
+  }, [config?.calibration?.piv_type]);
+  const handleVectorTypeChange = useCallback(async (value: "instantaneous" | "ensemble") => {
+    setVectorTypeName(value);
+    try {
+      const res = await fetch("/backend/update_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calibration: { piv_type: value } }),
+      });
+      const json = await res.json();
+      if (res.ok && json.updated?.calibration) {
+        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+      }
+    } catch (e) {
+      console.error("Failed to save piv_type:", e);
+    }
+  }, [config, updateConfig]);
+
   // --- Source path validation (folder/pattern "Did you mean" suggestions) -------
   interface SFValidation {
     valid: boolean;
     error?: string;
+    found_count?: number | "container";
+    camera_path?: string;
+    image_size?: [number, number];
     suggested_pattern?: string;
     suggested_subfolder?: string;
   }
@@ -87,9 +134,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [validating, setValidating] = useState(false);
 
   // --- Multi-camera global coordinates (shared chain) ---------------------------
-  const calibrationSources: string[] =
-    config?.calibration?.calibration_sources || sourcePaths;
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, calibrationSources);
+  const gcSources = calibrationSources.length ? calibrationSources : sourcePaths;
+  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, gcSources);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
 
@@ -101,31 +147,39 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     () => ({ board: "scale_factor", camera, source_path_idx: sourcePathIdx }),
     [camera, sourcePathIdx]);
 
-  // --- Frame loading ------------------------------------------------------------
-  const loadFrame = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({
-        camera: String(viewCamera), idx: String(viewFrame),
-        source_path_idx: String(sourcePathIdx), format: "png",
-        image_format: imageFormat, image_type: imageType,
-      });
-      const res = await fetch(`${BASE}/frame?${params.toString()}`);
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        c2.setError(data.error || "failed to load frame");
-        setPreviewB64(null);
-        return;
+  // --- Persist image/source config (shared calibration.* keys the other tabs use) ---
+  // CalibrationImageViewer fetches frames WITHOUT image_format/image_type params — the
+  // backend reads them (and calibration_sources / camera subfolders) from config, so
+  // edits must land there before the viewer or validation can see them.
+  const hydrated = useRef(false);
+  useEffect(() => {
+    if (!hydrated.current) { hydrated.current = true; return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/backend/update_config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            calibration: {
+              image_format: imageFormat,
+              image_type: imageType,
+              calibration_sources: calibrationSources,
+              use_camera_subfolders: useCameraSubfolders,
+              camera_subfolders: cameraSubfolders,
+            },
+          }),
+        });
+        const json = await res.json();
+        if (res.ok && json.updated?.calibration) {
+          updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
+        }
+      } catch (e) {
+        console.error("persist calibration image config failed", e);
       }
-      setPreviewB64(data.image);
-      setDims({ w: data.width, h: data.height });
-      if (data.frame_count) setFrameCount(data.frame_count);
-    } catch (e: any) {
-      c2.setError(String(e));
-    }
+    }, 500);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewCamera, viewFrame, sourcePathIdx, imageFormat, imageType]);
-
-  useEffect(() => { loadFrame(); }, [loadFrame]);
+  }, [imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
@@ -147,29 +201,21 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     }
   }, [camera, sourcePathIdx, imageFormat, imageType]);
 
+  // Debounced past the 500 ms config persist above: source dir + subfolders are resolved
+  // from config on the backend, so validation must run after the persist lands.
   useEffect(() => {
-    const t = setTimeout(validate, 400);  // debounce so typing the pattern does not spam the route
+    const t = setTimeout(validate, 800);
     return () => clearTimeout(t);
-  }, [validate]);
+  }, [validate, calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
-  // Apply a suggested camera subfolder. Scale-factor has no per-camera subfolder UI of its own —
-  // the backend frame loader resolves it from config — so write it there (and enable subfolders).
-  const applySuggestedSubfolder = useCallback(async (sub: string) => {
-    const perCam = cameraOptions.map(c => sub.replace(/\d+/, String(c)));
-    try {
-      await fetch("/backend/update_config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          calibration: { use_camera_subfolders: true, camera_subfolders: perCam },
-        }),
-      });
-      updateConfig(["calibration", "use_camera_subfolders"], true);
-      updateConfig(["calibration", "camera_subfolders"], perCam);
-    } catch (e) {
-      console.error("apply subfolder failed", e);
-    }
-  }, [cameraOptions, updateConfig]);
+  // Image dimensions for overlay geometry: validation reports [W, H]; a restored/generated
+  // model carries image_width/height as a fallback before validation completes.
+  const dims: { w: number; h: number } | null =
+    validation?.valid && Array.isArray(validation.image_size)
+      ? { w: Number(validation.image_size[0]), h: Number(validation.image_size[1]) }
+      : result?.image_width
+        ? { w: result.image_width, h: result.image_height }
+        : null;
 
   // Apply-poll timer; cleared on unmount so a switched-away tab stops polling.
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -194,6 +240,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         setXDir(m.x_dir === "left" ? "left" : "right");
         setYDir(m.y_dir === "down" ? "down" : "up");
         setSwapAxes(Boolean(m.swap_axes));
+        if (Array.isArray(m.origin_mm)) {
+          setOriginMmX(String(m.origin_mm[0]));
+          setOriginMmY(String(m.origin_mm[1]));
+        }
       } else {
         setResult(null);
       }
@@ -202,9 +252,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [sourcePathIdx, camera]);
 
   // --- Click routing ------------------------------------------------------------
-  const onImageClick = useCallback((x: number, y: number) => {
+  // Receives the camera/frame the viewer attributed the click to (it may be driven to
+  // the GC target while a GC pick is active).
+  const onImageClick = useCallback((x: number, y: number, cam?: number, frame?: number) => {
     if (gcIsSelecting) {
-      handleGlobalCoordPointSelect(gc, x, y, viewCamera, viewFrame);
+      handleGlobalCoordPointSelect(gc, x, y, cam ?? viewCamera, frame ?? viewFrame);
       return;
     }
     if (pickMode === "origin") {
@@ -255,11 +307,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     }
     if (measureP1) markerPoints.push({ x: measureP1[0], y: measureP1[1], color: "#22c55e", label: "A" });
     if (measureP2) markerPoints.push({ x: measureP2[0], y: measureP2[1], color: "#22c55e", label: "B" });
+    if (measureP1 && measureP2) {
+      overlayLines.push({
+        x1: measureP1[0], y1: measureP1[1], x2: measureP2[0], y2: measureP2[1], color: "#22c55e",
+      });
+    }
   }
-  const measureLine = (!gcIsSelecting && measureP1)
-    ? { p1: { x: measureP1[0], y: measureP1[1] },
-        p2: measureP2 ? { x: measureP2[0], y: measureP2[1] } : undefined }
-    : null;
 
   // --- Generate -----------------------------------------------------------------
   const generate = useCallback(async () => {
@@ -269,17 +322,22 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       px_per_mm: parseFloat(pxPerMm) || 1.0,
       dt: parseFloat(dt) || 1.0,
       origin_px: originPx,
+      origin_mm: [parseFloat(originMmX) || 0, parseFloat(originMmY) || 0],
       x_dir: xDir, y_dir: yDir, swap_axes: swapAxes,
       frame_idx: frameIdx, image_format: imageFormat, image_type: imageType,
     });
     if (data) {
       setResult(data);
     }
-  }, [originPx, pxPerMm, dt, xDir, yDir, swapAxes, frameIdx, imageFormat, imageType, locator]);
+  }, [originPx, originMmX, originMmY, pxPerMm, dt, xDir, yDir, swapAxes, frameIdx,
+      imageFormat, imageType, locator]);
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
   const runApply = useCallback(async () => {
-    const started = await c2.startApply({ board: "scale_factor", stereo: false, dt: parseFloat(dt) || 1.0 });
+    const started = await c2.startApply({
+      board: "scale_factor", stereo: false, source_path_idx: sourcePathIdx,
+      type_name: vectorTypeName, dt: parseFloat(dt) || 1.0,
+    });
     if (!started?.job_id) return;
     setApplyJob({ status: "running" });
     const poll = async () => {
@@ -290,7 +348,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       }
     };
     poll();
-  }, [dt]);
+  }, [dt, vectorTypeName, sourcePathIdx]);
 
   // --- Set as active ------------------------------------------------------------
   const isActive = config?.calibration?.active === "scale_factor";
@@ -308,6 +366,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [config, updateConfig]);
 
   const clickActive = pickMode !== "none" || gcIsSelecting;
+  const handleFrameChange = useCallback((idx: number) => setFrameIdx(idx), []);
 
   return (
     <div className="space-y-6">
@@ -320,8 +379,27 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Source + camera */}
-          <div className="grid md:grid-cols-3 gap-4">
+          {/* Section 1: Calibration Source Path (primary input) */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Calibration Images Location</Label>
+            <Input
+              value={calibrationSources[sourcePathIdx] || ""}
+              onChange={e => {
+                const newSources = [...calibrationSources];
+                while (newSources.length <= sourcePathIdx) newSources.push("");
+                newSources[sourcePathIdx] = e.target.value;
+                setCalibrationSources(newSources);
+              }}
+              placeholder="/path/to/calibration/images"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
+            </p>
+          </div>
+
+          {/* Section 2: Base path + camera */}
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
               <Label className="text-sm font-medium">Base Path</Label>
               <Select value={String(sourcePathIdx)} onValueChange={v => setSourcePathIdx(Number(v))}>
@@ -332,6 +410,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved. Configured in Settings → Directories.</p>
             </div>
             <div>
               <Label className="text-sm font-medium">Camera</Label>
@@ -343,7 +422,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">Scale-factor models are generated per camera.</p>
             </div>
+          </div>
+
+          {/* Section 3: Image configuration */}
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
               <Label className="text-sm font-medium">Image Type</Label>
               <Select value={imageType} onValueChange={setImageType}>
@@ -356,32 +440,70 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 </SelectContent>
               </Select>
             </div>
-          </div>
-          <div className="grid md:grid-cols-2 gap-4">
             <div>
               <Label className="text-sm font-medium">Image Format</Label>
               <Input value={imageFormat} onChange={e => setImageFormat(e.target.value)}
                      placeholder="calib%05d.tif" />
             </div>
-            <div>
-              <Label className="text-sm font-medium">Frame</Label>
+          </div>
+
+          {/* Camera subfolders toggle — for standard and IM7 formats */}
+          {(imageType === "standard" || imageType === "lavision_im7") && (
+            <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="icon" disabled={frameIdx <= 1}
-                        onClick={() => setFrameIdx(f => Math.max(1, f - 1))}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Input type="text" inputMode="numeric" className="w-20 text-center"
-                       value={String(frameIdx)}
-                       onChange={e => setFrameIdx(Math.max(1, parseInt(e.target.value) || 1))} />
-                <Button variant="outline" size="icon"
-                        disabled={frameCount > 0 && frameIdx >= frameCount}
-                        onClick={() => setFrameIdx(f => f + 1)}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                {frameCount > 0 && <span className="text-xs text-muted-foreground">of {frameCount}</span>}
+                <Switch
+                  id="sf-use-camera-subfolders"
+                  checked={useCameraSubfolders}
+                  onCheckedChange={setUseCameraSubfolders}
+                />
+                <Label htmlFor="sf-use-camera-subfolders" className="text-sm">
+                  Use camera subfolders
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground ml-10">
+                {useCameraSubfolders
+                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
+                  : "Images in source directory without camera subfolders."
+                }
+              </p>
+            </div>
+          )}
+
+          {/* Camera subfolder names — only when using camera subfolders */}
+          {useCameraSubfolders && cameraOptions.length > 1 && (
+            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
+              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
+              <p className="text-xs text-muted-foreground">
+                Camera subfolders are relative to the calibration source path.
+                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || 'Cam1'}/
+              </p>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Camera Subfolder Names (optional)</Label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {cameraOptions.map((cam, idx) => (
+                    <div key={cam}>
+                      <Label className="text-xs text-muted-foreground">Camera {cam}</Label>
+                      <Input
+                        placeholder={`Cam${cam}`}
+                        value={cameraSubfolders[idx] || ''}
+                        onChange={e => {
+                          const newSubfolders = [...cameraSubfolders];
+                          while (newSubfolders.length < cameraOptions.length) {
+                            newSubfolders.push('');
+                          }
+                          newSubfolders[idx] = e.target.value;
+                          setCameraSubfolders(newSubfolders);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Source validation + "Did you mean" suggestions */}
           {validation && (
@@ -391,7 +513,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 checked: !validating,
                 error: validation.error || null,
               }}
-              customSuccessMessage={validation.valid ? `Camera ${camera} source validated` : undefined}
+              customSuccessMessage={
+                validation.valid
+                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  : undefined
+              }
             />
           )}
 
@@ -419,7 +545,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => applySuggestedSubfolder(sub)}
+                  onClick={() => {
+                    setUseCameraSubfolders(true);
+                    setCameraSubfolders(perCam);
+                  }}
                   className="text-blue-600 border-blue-300 hover:bg-blue-50"
                 >
                   Use &quot;{label}&quot;
@@ -428,64 +557,97 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             );
           })()}
 
-          {/* Image viewer + picking */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button variant={pickMode === "origin" ? "default" : "outline"} size="sm"
-                      onClick={() => { setPickMode(pickMode === "origin" ? "none" : "origin"); gc.setSelectionMode("none"); }}>
-                <Crosshair className="h-4 w-4 mr-1" />
-                {pickMode === "origin" ? "Click the origin…" : "Pick Origin"}
-              </Button>
-              <Button variant={pickMode === "measure" ? "default" : "outline"} size="sm"
-                      onClick={() => {
-                        const next = pickMode === "measure" ? "none" : "measure";
-                        setPickMode(next);
-                        if (next === "measure") { setMeasureP1(null); setMeasureP2(null); }
-                      }}>
-                <Ruler className="h-4 w-4 mr-1" />
-                {pickMode === "measure" ? "Click two points…" : "Measure Scale"}
-              </Button>
-              {originPx && (
-                <span className="text-xs text-muted-foreground">
-                  origin = ({originPx[0].toFixed(1)}, {originPx[1].toFixed(1)}) px
-                </span>
-              )}
-              {cameraOptions.length > 1 && (
-                <GCInlineControls gc={gc} currentCamera={viewCamera}
-                                  cameraOptions={cameraOptions} onCameraChange={setCamera}
-                                  board="scale_factor" sourcePathIdx={sourcePathIdx} />
-              )}
-            </div>
-
-            {measureDistPx && pickMode === "measure" && (
-              <div className="flex items-center gap-2 text-sm bg-muted/40 p-2 rounded">
-                <span>{measureDistPx.toFixed(1)} px =</span>
-                <Input className="w-24" placeholder="mm" value={measureMm}
-                       onChange={e => setMeasureMm(e.target.value)} />
-                <span>mm</span>
-                <Button size="sm" variant="outline" onClick={applyMeasuredScale}
-                        disabled={!(parseFloat(measureMm) > 0)}>
-                  Use as px/mm ({(parseFloat(measureMm) > 0 ? (measureDistPx / parseFloat(measureMm)).toFixed(3) : "—")})
+          {/* Image viewer with origin/measure picking (shared component — same as other tabs) */}
+          <CalibrationImageViewer
+            backendUrl="/backend"
+            sourcePathIdx={sourcePathIdx}
+            camera={viewCamera}
+            numImages={typeof validation?.found_count === "number" ? validation.found_count : 1}
+            calibrationType="scale_factor"
+            refreshKey={`${validation?.camera_path}-${validation?.valid}`}
+            onFrameChange={handleFrameChange}
+            externalFrame={viewFrame}
+            externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}
+            pointSelectMode={clickActive}
+            onPointSelect={onImageClick}
+            selectedMarkers={markerPoints}
+            externalOverlayLines={overlayLines.length ? overlayLines : undefined}
+            settingsBarExtras={
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button variant={pickMode === "origin" ? "default" : "outline"} size="sm"
+                        onClick={() => { setPickMode(pickMode === "origin" ? "none" : "origin"); gc.setSelectionMode("none"); }}>
+                  <Crosshair className="h-4 w-4 mr-1" />
+                  {pickMode === "origin" ? "Click the origin…" : "Pick Origin"}
                 </Button>
+                <Button variant={pickMode === "measure" ? "default" : "outline"} size="sm"
+                        onClick={() => {
+                          const next = pickMode === "measure" ? "none" : "measure";
+                          setPickMode(next);
+                          if (next === "measure") { setMeasureP1(null); setMeasureP2(null); }
+                        }}>
+                  <Ruler className="h-4 w-4 mr-1" />
+                  {pickMode === "measure" ? "Click two points…" : "Measure Scale"}
+                </Button>
+                {originPx && (
+                  <span className="text-xs text-muted-foreground">
+                    origin = ({originPx[0].toFixed(1)}, {originPx[1].toFixed(1)}) px
+                    {(parseFloat(originMmX) || parseFloat(originMmY))
+                      ? ` = (${parseFloat(originMmX) || 0}, ${parseFloat(originMmY) || 0}) mm`
+                      : ""}
+                  </span>
+                )}
+                {cameraOptions.length > 1 && (
+                  <GCInlineControls gc={gc} currentCamera={viewCamera}
+                                    cameraOptions={cameraOptions} onCameraChange={setCamera}
+                                    board="scale_factor" sourcePathIdx={sourcePathIdx} />
+                )}
               </div>
-            )}
+            }
+          />
 
-            <div className="border rounded">
-              <ZoomableCanvas
-                src={previewB64}
-                vmin={0} vmax={100} colormap="gray"
-                title={`Camera ${viewCamera} — frame ${viewFrame}`}
-                clickMode={clickActive}
-                onImageClick={onImageClick}
-                markerPoints={markerPoints}
-                overlayLines={overlayLines}
-                measureLine={measureLine}
-              />
+          {measureDistPx && pickMode === "measure" && (
+            <div className="flex items-center gap-2 text-sm bg-muted/40 p-2 rounded">
+              <span>{measureDistPx.toFixed(1)} px =</span>
+              <Input className="w-24" placeholder="mm" value={measureMm}
+                     onChange={e => setMeasureMm(e.target.value)} />
+              <span>mm</span>
+              <Button size="sm" variant="outline" onClick={applyMeasuredScale}
+                      disabled={!(parseFloat(measureMm) > 0)}>
+                Use as px/mm ({(parseFloat(measureMm) > 0 ? (measureDistPx / parseFloat(measureMm)).toFixed(3) : "—")})
+              </Button>
             </div>
-          </div>
+          )}
 
-          {/* Scale + axes */}
+          {/* Origin + scale + axes */}
           <div className="border-t pt-4 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <Label className="text-sm font-medium">Origin X (px)</Label>
+              <Input type="text" inputMode="numeric" value={originXInput}
+                     placeholder="click or type"
+                     onChange={e => setOriginXInput(e.target.value)}
+                     onBlur={commitOrigin} />
+              <p className="text-xs text-muted-foreground mt-1">Pixel column of world origin</p>
+            </div>
+            <div>
+              <Label className="text-sm font-medium">Origin Y (px)</Label>
+              <Input type="text" inputMode="numeric" value={originYInput}
+                     placeholder="click or type"
+                     onChange={e => setOriginYInput(e.target.value)}
+                     onBlur={commitOrigin} />
+              <p className="text-xs text-muted-foreground mt-1">Pixel row of world origin</p>
+            </div>
+            <div>
+              <Label className="text-sm font-medium">Origin X (mm)</Label>
+              <Input type="text" inputMode="numeric" value={originMmX}
+                     onChange={e => setOriginMmX(e.target.value)} />
+              <p className="text-xs text-muted-foreground mt-1">World X of the origin pixel</p>
+            </div>
+            <div>
+              <Label className="text-sm font-medium">Origin Y (mm)</Label>
+              <Input type="text" inputMode="numeric" value={originMmY}
+                     onChange={e => setOriginMmY(e.target.value)} />
+              <p className="text-xs text-muted-foreground mt-1">World Y of the origin pixel</p>
+            </div>
             <div>
               <Label className="text-sm font-medium">Scale (px/mm)</Label>
               <Input type="text" inputMode="numeric" value={pxPerMm}
@@ -539,13 +701,29 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                     title={!originPx ? "Pick the origin first" : undefined}>
               {c2.busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating…</> : "Generate Model"}
             </Button>
-            <Button onClick={runApply} disabled={!result}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                    title={!result ? "Generate the model first" : "Calibrate vectors"}>
-              {applyJob && (applyJob.status === "running" || applyJob.status === "starting")
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Calibrating…</>
-                : "Calibrate Vectors"}
-            </Button>
+
+            {/* Calibrate Vectors with type selection (same split control as the other tabs) */}
+            <div className="flex items-center gap-1">
+              <Button onClick={runApply}
+                      disabled={!result || applyJob?.status === "running" || applyJob?.status === "starting"}
+                      className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
+                      title={!result ? "Generate the model first" : "Calibrate vectors"}>
+                {applyJob && (applyJob.status === "running" || applyJob.status === "starting")
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Calibrating…</>
+                  : "Calibrate Vectors"}
+              </Button>
+              <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}
+                      disabled={applyJob?.status === "running" || applyJob?.status === "starting"}>
+                <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="instantaneous">Instantaneous</SelectItem>
+                  <SelectItem value="ensemble">Ensemble</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <Button onClick={setAsActive} disabled={isActive}
                     variant={isActive ? "default" : "outline"}
                     className={isActive ? "bg-green-600 hover:bg-green-600" : ""}>
@@ -580,6 +758,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
               <div><span className="text-muted-foreground">Origin (px):</span>
                 <span className="ml-2 font-medium">({result.origin_px?.[0]?.toFixed(1)}, {result.origin_px?.[1]?.toFixed(1)})</span></div>
+              <div><span className="text-muted-foreground">Origin (mm):</span>
+                <span className="ml-2 font-medium">({result.origin_mm?.[0] ?? 0}, {result.origin_mm?.[1] ?? 0})</span></div>
               <div><span className="text-muted-foreground">Scale:</span>
                 <span className="ml-2 font-medium">{result.px_per_mm?.toFixed(4)} px/mm</span></div>
               <div><span className="text-muted-foreground">Δt:</span>
