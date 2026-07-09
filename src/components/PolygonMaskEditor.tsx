@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { usePanZoom } from "@/hooks/usePanZoom";
 
 type DType = "uint8" | "uint16";
 type RawImage = {
@@ -32,12 +33,18 @@ function PolygonMaskEditor({
 	onCameraChange?: (cam: number) => void;
 	imageLoading?: boolean;
 }) {
+	// containerRef is the fixed viewport (overflow-hidden) that box zoom / pan
+	// operate within.
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const viewRef = useRef<HTMLCanvasElement | null>(null);
 	const overlayRef = useRef<HTMLCanvasElement | null>(null);
 	const imgRef = useRef<HTMLImageElement | null>(null);
 	// NEW: wrapper to control CSS size and allow centering
 	const wrapperRef = useRef<HTMLDivElement | null>(null);
+	// Last fit signature committed to state — lets redraw() avoid re-fitting (and
+	// resetting the user's zoom) on every polygon edit; only genuine changes
+	// (image size or viewport height) refit.
+	const lastFitRef = useRef<{ W: number; H: number; vpH: number }>({ W: 0, H: 0, vpH: 0 });
 
 	// Magnifier refs & state
 	const magRef = useRef<HTMLCanvasElement | null>(null);
@@ -49,6 +56,20 @@ function PolygonMaskEditor({
 	const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
 	const [nativeSize, setNativeSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+	// Fit (CSS) size of the drawn canvases + resolved viewport height, updated by
+	// redraw(); the viewport frames this.
+	const [fitSize, setFitSize] = useState<{ W: number; H: number; vpH: number }>({ W: 0, H: 0, vpH: 0 });
+
+	// Box zoom + drag-pan (shared with the pixel-border preview). A click that
+	// barely moves adds a polygon point; a drag pans; Box Zoom drags a rectangle.
+	const { zoom, pan, boxZoomMode, setBoxZoomMode, selectionRect, isDragging, onMouseDown, onMouseMove, onMouseUp, resetView } =
+		usePanZoom(containerRef, { onClick: (cx, cy) => addPointAt(cx, cy) });
+
+	// Recentre / fit whenever the drawn size or viewport height changes (new
+	// image/camera, window resize).
+	useEffect(() => {
+		if (fitSize.W && fitSize.H) resetView(fitSize.W, fitSize.H);
+	}, [fitSize.W, fitSize.H, fitSize.vpH, resetView]);
 
 	// polygons state: array of {points, closed}
 	type Pt = { x: number; y: number };
@@ -357,20 +378,27 @@ function PolygonMaskEditor({
 		const W = Math.max(1, Math.round(w * scale));
 		const H = Math.max(1, Math.round(h * scale));
 
-		// Use larger padding for more clickable area
-		const PADDING_H = 100;  // horizontal padding
-		const PADDING_V = 25;   // reduced vertical padding to 25 pixels
-		
-		// Size the container to explicitly include padding
+		// Vertical breathing room so clicks just outside the image still land in
+		// the viewport and snap to the nearest edge (toNativeXY clamps them).
+		const VMARGIN = 24;
+
+		// Cap the viewport height so the toolbar AND the whole image stay on
+		// screen without scrolling; resetView() then fits the image into whatever
+		// the cap resolves to. CSS min() keeps it responsive to the window height,
+		// and the ResizeObserver on this element refits when the cap changes.
 		if (containerRef.current) {
-			// Make container larger to accommodate the image plus padding
-			containerRef.current.style.minHeight = `${H + PADDING_V * 2}px`;
-			containerRef.current.style.minWidth = `${W + PADDING_H * 2}px`;
-			containerRef.current.style.padding = `${PADDING_V}px ${PADDING_H}px`;
-			// ensure container can host absolutely positioned controls (magnifier toggle)
-			containerRef.current.style.position = "relative";
+			containerRef.current.style.height = `min(${H + VMARGIN * 2}px, 68vh)`;
 		}
-		
+		const vpH = containerRef.current?.clientHeight ?? (H + VMARGIN * 2);
+
+		// Publish the fit signature only when it actually changes, so per-edit
+		// redraws don't refit and clobber the user's current zoom. Include the
+		// resolved viewport height so a window resize refits too.
+		if (lastFitRef.current.W !== W || lastFitRef.current.H !== H || lastFitRef.current.vpH !== vpH) {
+			lastFitRef.current = { W, H, vpH };
+			setFitSize({ W, H, vpH });
+		}
+
 		// Set up the base image canvas at the original calculated size
 		base.width = W;
 		base.height = H;
@@ -469,15 +497,17 @@ function PolygonMaskEditor({
 		}
 	}
 
-	// Update the toNative function to handle both canvas and div events
-	function toNative(e: React.PointerEvent<HTMLElement>) {  // Changed type to more generic HTMLElement
+	// Map raw client (screen) coordinates to native image pixels.
+	// wrapperRef sits inside the pan/zoom transform, and getBoundingClientRect()
+	// returns the post-transform rect, so this stays correct at any zoom/pan.
+	function toNativeXY(clientX: number, clientY: number) {
 		const wrapper = wrapperRef.current!;
 		const rect = wrapper.getBoundingClientRect();
 		const { w, h } = nativeSize;
-		
+
 		// Get position relative to the image (wrapper)
-		const vx = e.clientX - rect.left;
-		const vy = e.clientY - rect.top;
+		const vx = clientX - rect.left;
+		const vy = clientY - rect.top;
 		
 		// Map to native image coordinates
 		let nx = (vx / rect.width) * w;
@@ -569,8 +599,7 @@ function PolygonMaskEditor({
 		});
 	}
 
-	function addPoint(e: React.PointerEvent<HTMLElement>) {
-		e.preventDefault();
+	function addPointAt(clientX: number, clientY: number) {
 		if (nativeSize.w === 0) return;
 
 		setPolys(prev => {
@@ -589,7 +618,7 @@ function PolygonMaskEditor({
 			if (poly.closed) return list;
 
 			// Get point with edge snapping applied
-			const pt = toNative(e);
+			const pt = toNativeXY(clientX, clientY);
 			
 			// Check if we're close to the first point (auto-close polygon)
 			if (poly.points.length >= 3) {
@@ -814,6 +843,8 @@ function PolygonMaskEditor({
 					<Button size="sm" onClick={selectNext} disabled={polys.length === 0}>Next</Button>
 				</div>
 				<div className="flex items-center gap-2">
+					<Button size="sm" variant={boxZoomMode ? "default" : "outline"} onClick={() => setBoxZoomMode(!boxZoomMode)}>Box Zoom</Button>
+					<Button size="sm" variant="outline" onClick={() => resetView(fitSize.W, fitSize.H)} disabled={nativeSize.w === 0}>Fit</Button>
 					<Button size="sm" variant={magnifierEnabled ? "default" : "outline"} onClick={() => setMagnifierEnabled(v => !v)}>
 						{magnifierEnabled ? "🔎 On" : "🔍"}
 					</Button>
@@ -824,56 +855,62 @@ function PolygonMaskEditor({
 
 			<div
 				ref={containerRef}
-				className="bg-black/80 rounded-md overflow-visible border border-gray-200 flex justify-center items-center cursor-crosshair"
-				onPointerDown={(e) => {
-					// If the click is directly on the container (not a child element)
-					// or if we're in the padding area, add the point
-					if (e.currentTarget === e.target) {
-						e.preventDefault();
-						addPoint(e);
-					}
-				}}
+				className="relative bg-black/80 rounded-md overflow-hidden border border-gray-200"
+				style={{ cursor: boxZoomMode ? "zoom-in" : isDragging ? "grabbing" : "crosshair" }}
+				onMouseDown={onMouseDown}
+				onMouseMove={onMouseMove}
+				onMouseUp={onMouseUp}
+				onMouseLeave={onMouseUp}
 			>
-				{/* NEW: wrapper that gets exact W×H so overlay/base align and can be centered */}
-				<div ref={wrapperRef} className="relative cursor-crosshair" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
- 					<canvas ref={viewRef} className="block" />
- 					<canvas
- 						ref={overlayRef}
- 						className="absolute cursor-crosshair"
- 						onPointerDown={(e) => {
- 						 e.stopPropagation();
- 						 addPoint(e);
- 						}}
- 					/>
- 					{/* Magnifier canvas (fixed positioning, centered on cursor) */}
- 					<canvas
- 						ref={magRef}
- 						style={{
- 							display: magVisible && magnifierEnabled ? "block" : "none",
- 							position: "fixed",
- 							pointerEvents: "none",
- 							zIndex: 9999,
- 							width: MAG_SIZE,
- 							height: MAG_SIZE,
- 							left: magPos.left,
- 							top: magPos.top,
- 							borderRadius: "50%",
- 							boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
- 							border: "2px solid #333",
- 						}}
- 					/>
- 					{/* Loading wheel overlaid on the image while a new frame/camera fetches,
- 					    matching the spinner on the PIV image viewer. */}
- 					{imageLoading && (
- 						<div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center">
- 							<div className="relative">
- 								<div className="w-8 h-8 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin"></div>
- 								<div className="absolute inset-0 w-8 h-8 border-4 border-transparent border-t-blue-300 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
- 							</div>
- 						</div>
- 					)}
- 				</div>
- 			</div>
+				{/* Pan / box-zoom transform holds the image + polygon overlay.
+				    toNativeXY() and the magnifier read the post-transform rects, so
+				    point placement stays pixel-accurate at any zoom/pan. */}
+				<div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "0 0" }}>
+					{/* wrapper that gets exact W×H so overlay/base align */}
+					<div ref={wrapperRef} className="relative" onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
+						<canvas ref={viewRef} className="block" />
+						<canvas ref={overlayRef} className="absolute" />
+						{/* Loading wheel overlaid on the image while a new frame/camera fetches,
+						    matching the spinner on the PIV image viewer. */}
+						{imageLoading && (
+							<div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center">
+								<div className="relative">
+									<div className="w-8 h-8 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin"></div>
+									<div className="absolute inset-0 w-8 h-8 border-4 border-transparent border-t-blue-300 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+								</div>
+							</div>
+						)}
+					</div>
+				</div>
+
+				{/* Box-zoom rubber band (viewport pixels) */}
+				{selectionRect && (
+					<div
+						className="absolute pointer-events-none border-2 border-dashed border-white bg-blue-500/20"
+						style={{ left: selectionRect.x, top: selectionRect.y, width: selectionRect.w, height: selectionRect.h }}
+					/>
+				)}
+
+				{/* Magnifier canvas — OUTSIDE the transform so its position:fixed is not
+				    captured by the transformed ancestor (a transform makes fixed
+				    descendants position relative to it). */}
+				<canvas
+					ref={magRef}
+					style={{
+						display: magVisible && magnifierEnabled ? "block" : "none",
+						position: "fixed",
+						pointerEvents: "none",
+						zIndex: 9999,
+						width: MAG_SIZE,
+						height: MAG_SIZE,
+						left: magPos.left,
+						top: magPos.top,
+						borderRadius: "50%",
+						boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+						border: "2px solid #333",
+					}}
+				/>
+			</div>
  
 
 		</div>

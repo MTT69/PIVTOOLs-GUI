@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { useImagePair } from "@/hooks/useImagePair";
 import { useMaskingConfig } from "@/hooks/useMaskingConfig";
 import PolygonMaskEditor from "@/components/PolygonMaskEditor";
+import { usePanZoom } from "@/hooks/usePanZoom";
 import { basename } from "@/lib/utils";
 import * as Slider from '@radix-ui/react-slider';
 
@@ -32,7 +33,27 @@ const PixelBorderViewer: React.FC<{
 }> = ({ src, raw, vmin, vmax, top, bottom, left, right }) => {
 	const canvasRef = React.useRef<HTMLCanvasElement>(null);
 	const overlayRef = React.useRef<HTMLCanvasElement>(null);
+	const viewportRef = React.useRef<HTMLDivElement>(null);
 	const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+	// Display (CSS) size of the drawn canvases; the viewport frames this exactly.
+	const [displaySize, setDisplaySize] = React.useState({ width: 0, height: 0 });
+
+	const { zoom, pan, boxZoomMode, setBoxZoomMode, selectionRect, isDragging, onMouseDown, onMouseMove, onMouseUp, resetView } =
+		usePanZoom(viewportRef);
+
+	// Recentre / fit whenever the drawn size changes (new image), and on window
+	// resize (the 68vh viewport cap changes, so refit to keep the whole image in).
+	React.useEffect(() => {
+		if (displaySize.width && displaySize.height) resetView(displaySize.width, displaySize.height);
+	}, [displaySize.width, displaySize.height, resetView]);
+
+	React.useEffect(() => {
+		const onResize = () => {
+			if (displaySize.width && displaySize.height) resetView(displaySize.width, displaySize.height);
+		};
+		window.addEventListener('resize', onResize);
+		return () => window.removeEventListener('resize', onResize);
+	}, [displaySize.width, displaySize.height, resetView]);
 
 	React.useEffect(() => {
 		if (!src && !raw) return;
@@ -61,6 +82,9 @@ const PixelBorderViewer: React.FC<{
 			canvas.height = displayHeight;
 			overlay.width = displayWidth;
 			overlay.height = displayHeight;
+			// Only update when the size actually changes, so border-slider redraws
+			// don't refit and reset the user's zoom.
+			setDisplaySize(prev => (prev.width === displayWidth && prev.height === displayHeight) ? prev : { width: displayWidth, height: displayHeight });
 
 			// Convert raw data to displayable image with contrast
 			// For raw data, use the actual data range based on bit depth
@@ -113,6 +137,7 @@ const PixelBorderViewer: React.FC<{
 				canvas.height = displayHeight;
 				overlay.width = displayWidth;
 				overlay.height = displayHeight;
+				setDisplaySize(prev => (prev.width === displayWidth && prev.height === displayHeight) ? prev : { width: displayWidth, height: displayHeight });
 
 				const ctx = canvas.getContext('2d');
 				if (ctx) {
@@ -199,14 +224,40 @@ const PixelBorderViewer: React.FC<{
 		}
 	};
 
+	const cursor = boxZoomMode ? 'zoom-in' : isDragging ? 'grabbing' : 'grab';
+
 	return (
 		<div className="flex flex-col items-center space-y-2">
-			<div className="text-sm text-gray-600">
-				Preview: Red overlay shows masked regions (Top: {top}px, Bottom: {bottom}px, Left: {left}px, Right: {right}px)
+			<div className="flex items-center justify-between w-full gap-2">
+				<div className="text-sm text-gray-600">
+					Preview: Red overlay shows masked regions (Top: {top}px, Bottom: {bottom}px, Left: {left}px, Right: {right}px)
+				</div>
+				<div className="flex items-center gap-2 shrink-0">
+					<Button variant={boxZoomMode ? "default" : "outline"} size="sm" onClick={() => setBoxZoomMode(!boxZoomMode)}>Box Zoom</Button>
+					<Button variant="outline" size="sm" onClick={() => resetView(displaySize.width, displaySize.height)}>Fit</Button>
+				</div>
 			</div>
-			<div className="relative border rounded-md overflow-hidden bg-black">
-				<canvas ref={canvasRef} className="block" />
-				<canvas ref={overlayRef} className="absolute top-0 left-0 pointer-events-none" />
+			{/* Cap height so the controls and the whole image stay on screen; the
+			    fit effect above scales the image into the resolved height. */}
+			<div
+				ref={viewportRef}
+				className="relative border rounded-md overflow-hidden bg-black"
+				style={{ width: displaySize.width || undefined, height: displaySize.height ? `min(${displaySize.height}px, 68vh)` : undefined, cursor }}
+				onMouseDown={onMouseDown}
+				onMouseMove={onMouseMove}
+				onMouseUp={onMouseUp}
+				onMouseLeave={onMouseUp}
+			>
+				<div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+					<canvas ref={canvasRef} className="block" />
+					<canvas ref={overlayRef} className="absolute top-0 left-0 pointer-events-none" />
+				</div>
+				{selectionRect && (
+					<div
+						className="absolute pointer-events-none border-2 border-dashed border-white bg-blue-500/20"
+						style={{ left: selectionRect.x, top: selectionRect.y, width: selectionRect.w, height: selectionRect.h }}
+					/>
+				)}
 			</div>
 			{dimensions.width > 0 && (
 				<div className="text-xs text-gray-500">
