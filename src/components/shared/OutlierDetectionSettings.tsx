@@ -17,6 +17,7 @@ interface OutlierMethod {
   type: 'peak_mag' | 'median_2d' | 'sigma';
   threshold?: number;
   epsilon?: number;
+  size?: number;
   sigma_threshold?: number;
 }
 
@@ -24,6 +25,7 @@ interface LocalOutlierMethod {
   type: 'peak_mag' | 'median_2d' | 'sigma';
   threshold: string;
   epsilon: string;
+  size: string;
   sigma_threshold: string;
 }
 
@@ -46,6 +48,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
       ...m,
       threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '3.0' : '0.4'),
       epsilon: m.epsilon?.toString() ?? '0.1',
+      size: m.size?.toString() ?? '5',
       sigma_threshold: m.sigma_threshold?.toString() ?? '3.0'
     }));
     setLocalMethods(locals);
@@ -66,7 +69,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
     if (field === 'type') {
       // Reset to sensible defaults when switching type
       if (value === 'median_2d') {
-        newMethods[index] = { type: 'median_2d', epsilon: 0.1, threshold: 3.0 };
+        newMethods[index] = { type: 'median_2d', epsilon: 0.1, threshold: 3.0, size: 5 };
       } else if (value === 'peak_mag') {
         newMethods[index] = { type: 'peak_mag', threshold: 0.4 };
       } else if (value === 'sigma') {
@@ -225,6 +228,31 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                               setLocalMethods(newLocal);
                               updateOutlierMethod(i, 'threshold', defaultVal);
                             }
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Window Size</Label>
+                        <Input
+                          className="h-8 text-sm"
+                          type="text"
+                          value={localMethods[i]?.size ?? '5'}
+                          onFocus={() => { isUserEditingRef.current = true; }}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const newLocal = [...localMethods];
+                            newLocal[i] = { ...newLocal[i], size: val };
+                            setLocalMethods(newLocal);
+                          }}
+                          onBlur={() => {
+                            isUserEditingRef.current = false;
+                            let n = parseInt(localMethods[i]?.size, 10);
+                            if (isNaN(n) || n < 3) n = 5;
+                            if (n % 2 === 0) n = n + 1;  // enforce an odd neighbourhood
+                            const newLocal = [...localMethods];
+                            newLocal[i] = { ...newLocal[i], size: n.toString() };
+                            setLocalMethods(newLocal);
+                            updateOutlierMethod(i, 'size', n);
                           }}
                         />
                       </div>

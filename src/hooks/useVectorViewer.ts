@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import { normalizeVarName } from "@/lib/plotUnits";
 
 interface UseVectorViewerProps {
   backendUrl: string;
@@ -105,18 +106,26 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [ylimMin, setYlimMin] = useState<string>("");
   const [ylimMax, setYlimMax] = useState<string>("");
   const [plotTitle, setPlotTitle] = useState<string>("");
+  // Wall-units (viscous scaling) view: empty uTau = off. View-only — the
+  // backend divides at plot time, nothing is written to disk.
+  const [uTau, setUTau] = useState<string>("");
+  const [nuVisc, setNuVisc] = useState<string>("1.5e-5");
   // Refs to access latest values without triggering re-renders
   const xlimMinRef = useRef(xlimMin);
   const xlimMaxRef = useRef(xlimMax);
   const ylimMinRef = useRef(ylimMin);
   const ylimMaxRef = useRef(ylimMax);
   const plotTitleRef = useRef(plotTitle);
+  const uTauRef = useRef(uTau);
+  const nuViscRef = useRef(nuVisc);
   // Keep refs in sync with state
   xlimMinRef.current = xlimMin;
   xlimMaxRef.current = xlimMax;
   ylimMinRef.current = ylimMin;
   ylimMaxRef.current = ylimMax;
   plotTitleRef.current = plotTitle;
+  uTauRef.current = uTau;
+  nuViscRef.current = nuVisc;
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ run: number; var: string; width?: number; height?: number; axes_bbox?: { left: number; top: number; width: number; height: number; png_width: number; png_height: number; xlim?: [number, number]; ylim?: [number, number] } } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -166,6 +175,22 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const isStereoData = useMemo(() =>
     dataSource === "stereo_instantaneous" || dataSource === "stereo_ensemble" || dataSource === "stereo_statistics",
     [dataSource]
+  );
+
+  // Wall-units view is only meaningful for calibrated data (m/s, mm)
+  const wallUnitsActive = useMemo(() => {
+    const v = Number(uTau);
+    const n = Number(nuVisc);
+    return !isUncalibrated && uTau.trim() !== "" && Number.isFinite(v) && v > 0 && Number.isFinite(n) && n > 0;
+  }, [uTau, nuVisc, isUncalibrated]);
+  // y (mm) <-> y+ converters; refs keep the latest values inside stable callbacks
+  const yPlusFromMm = useCallback(
+    (yMm: number) => (yMm / 1000) * Number(uTauRef.current) / Number(nuViscRef.current),
+    []
+  );
+  const mmFromYPlus = useCallback(
+    (yp: number) => (yp * Number(nuViscRef.current)) / Number(uTauRef.current) * 1000,
+    []
   );
 
   // Stereo detection: check if active calibration method is stereo
@@ -272,14 +297,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // This ensures cache entries are invalidated when ANY display setting changes,
   // without relying on effect ordering for a version counter.
   const buildCacheKey = useCallback((frameIdx: number) => {
-    return `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-${cmap}-${lower}-${upper}-${xOffset}-${yOffset}-${xlimMinRef.current}-${xlimMaxRef.current}-${ylimMinRef.current}-${ylimMaxRef.current}-${plotTitleRef.current}-${isUncalibrated}-${merged}-${isStereoData}`;
+    return `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-${cmap}-${lower}-${upper}-${xOffset}-${yOffset}-${xlimMinRef.current}-${xlimMaxRef.current}-${ylimMinRef.current}-${ylimMaxRef.current}-${plotTitleRef.current}-${uTauRef.current}-${nuViscRef.current}-${isUncalibrated}-${merged}-${isStereoData}`;
   }, [effectiveDir, camera, type, run, cmap, lower, upper, xOffset, yOffset, isUncalibrated, merged, isStereoData]);
 
   // Invalidate prefetch cache when rendering-affecting settings change
   useEffect(() => {
     prefetchBufferRef.current.clear();
     prefetchInProgressRef.current.clear();
-  }, [cmap, lower, upper, xOffset, yOffset, xlimMin, xlimMax, ylimMin, ylimMax, plotTitle, isUncalibrated, merged, isStereoData]);
+  }, [cmap, lower, upper, xOffset, yOffset, xlimMin, xlimMax, ylimMin, ylimMax, plotTitle, uTau, nuVisc, isUncalibrated, merged, isStereoData]);
+
+  // Append wall-units params to a plot request. Uses refs so the callback is
+  // stable; the backend ignores them for uncalibrated data.
+  const appendWallUnitsParams = useCallback((params: URLSearchParams) => {
+    const v = Number(uTauRef.current);
+    const n = Number(nuViscRef.current);
+    if (uTauRef.current.trim() !== "" && Number.isFinite(v) && v > 0 && Number.isFinite(n) && n > 0) {
+      params.set("u_tau", String(v));
+      params.set("nu", String(n));
+    }
+  }, []);
 
   // Helper to parse type value into source and variable name
   // Format: "source:varname" or just "varname" (defaults to "inst")
@@ -319,28 +355,37 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // Parse current variable
     const { varSource, varName } = parseVarType(type);
 
+    // The same physical quantity has different names per source (uu_inst /
+    // UU_stress / uu). Match on the normalized base name (plotUnits strips the
+    // _inst/_stress/_correction suffixes) so swapping sources keeps the user
+    // on the equivalent variable; otherwise default to ux.
+    const base = normalizeVarName(varName);
+    const findEquivalent = (vars: string[]): string | undefined => {
+      if (vars.includes(varName)) return varName;
+      // Prefer the plain quantity over correction/diagnostic variants
+      // (UU_stress, not UU_correction / UU_stress_uncorrected)
+      return vars.find(v =>
+        normalizeVarName(v) === base && !v.toLowerCase().includes('correction') && !v.toLowerCase().includes('uncorrected')
+      );
+    };
+    const pickType = (prefix: string, vars: string[], fallback: string) => {
+      const equivalent = findEquivalent(vars);
+      if (equivalent) setType(`${prefix}:${equivalent}`);
+      else if (vars.includes('ux')) setType(`${prefix}:ux`);
+      else if (vars.length > 0) setType(`${prefix}:${vars[0]}`);
+      else setType(fallback);
+    };
+
     if (isEnsembleSource) {
-      // Switching TO ensemble - need ensemble variable
+      // Switching TO ensemble - need ensemble variable (uu/uu_inst -> UU_stress)
       if (varSource !== 'ens') {
-        // Try to find equivalent in ensemble vars, or default to first, or fallback to ens:ux
-        if (allVars.ensemble.includes(varName)) {
-          setType(`ens:${varName}`);
-        } else if (allVars.ensemble.length > 0) {
-          setType(`ens:${allVars.ensemble[0]}`);
-        } else {
-          // Fallback to ens:ux if ensemble vars haven't loaded yet
-          setType('ens:ux');
-        }
+        pickType('ens', allVars.ensemble, 'ens:ux');
       }
       // Note: fetchAvailableRuns effect will handle setting the correct run value
     } else if (isStatisticsSource) {
-      // Switching TO statistics - need mean variable
+      // Switching TO statistics - need mean variable (UU_stress/uu_inst -> uu)
       if (varSource !== 'mean') {
-        if (allVars.mean_stats.includes(varName)) {
-          setType(`mean:${varName}`);
-        } else if (allVars.mean_stats.length > 0) {
-          setType(`mean:${allVars.mean_stats[0]}`);
-        }
+        pickType('mean', allVars.mean_stats, 'mean:ux');
       }
     } else {
       // Switching TO instantaneous (calibrated or uncalibrated)
@@ -357,11 +402,18 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           }
         }
       } else if (varSource === 'ens') {
-        // Coming from ensemble - switch to instantaneous equivalent
+        // Coming from ensemble - switch to instantaneous equivalent.
+        // Ensemble stresses map to the per-frame stats (UU_stress -> uu_inst)
+        // when those exist (calibrated only); velocities match by name.
         // Note: Don't auto-correct 'mean' vars when on instantaneous source
         // because mean stats are intentionally shown in the dropdown for instantaneous mode
+        const instStatEquivalent = !isUncalibratedSource ? findEquivalent(allVars.instantaneous_stats) : undefined;
         if (allVars.instantaneous.includes(varName)) {
           setType(`inst:${varName}`);
+        } else if (instStatEquivalent) {
+          setType(`inst_stat:${instStatEquivalent}`);
+        } else if (allVars.instantaneous.includes('ux')) {
+          setType('inst:ux');
         } else if (allVars.instantaneous.length > 0) {
           setType(`inst:${allVars.instantaneous[0]}`);
         } else {
@@ -461,8 +513,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const cameraPair = availableDataSources.stereo_instantaneous?.camera_pair || [1, 2];
         params.set("camera_pair", cameraPair.join(","));
       }
-      if (xOffset.trim() !== "") params.set("x_offset", xOffset);
-      if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+      // NOTE: coordinate offsets are persisted server-side via /calibration/set_datum
+      // (they rewrite coordinates.mat); /plot_vector does not read x_offset/y_offset.
       // Axis limits - only send if both min and max are provided (use refs for latest values)
       if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
         params.set("xlim_min", String(Number(xlimMinRef.current)));
@@ -474,6 +526,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       // Custom title (use ref for latest value)
       if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
+      appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
@@ -499,7 +552,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType, isStereoData, availableDataSources, buildCacheKey]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType, isStereoData, availableDataSources, buildCacheKey, appendWallUnitsParams]);
 
   // Prefetch a single frame for smooth playback
   const prefetchFrame = useCallback(async (frameIdx: number) => {
@@ -537,8 +590,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         const cameraPair = availableDataSources.stereo_instantaneous?.camera_pair || [1, 2];
         params.set("camera_pair", cameraPair.join(","));
       }
-      if (xOffset.trim() !== "") params.set("x_offset", xOffset);
-      if (yOffset.trim() !== "") params.set("y_offset", yOffset);
+      // NOTE: coordinate offsets are persisted server-side via /calibration/set_datum
+      // (they rewrite coordinates.mat); /plot_vector does not read x_offset/y_offset.
       // Axis limits - only send if both min and max are provided (use refs for latest values)
       if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
         params.set("xlim_min", String(Number(xlimMinRef.current)));
@@ -550,6 +603,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       // Custom title (use ref for latest value)
       if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
+      appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
       const res = await fetch(url);
@@ -574,7 +628,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources, parseVarType, buildCacheKey]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, availableDataSources, parseVarType, buildCacheKey, appendWallUnitsParams]);
 
   // Prefetch surrounding frames for smooth playback
   const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
@@ -702,6 +756,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       // Custom title (use ref for latest value)
       if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
+      appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_ensemble?${params.toString()}`;
       const res = await fetch(url);
@@ -733,7 +788,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, isMerged, isUncalibrated, isStereoData, availableDataSources, parseVarType]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, isMerged, isUncalibrated, isStereoData, availableDataSources, parseVarType, appendWallUnitsParams]);
 
   // Unified fetch function that chooses the right endpoint based on data source
   const fetchCurrentView = useCallback(async () => {
@@ -959,6 +1014,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       // Custom title (use ref for latest value)
       if (plotTitleRef.current.trim() !== "") params.set("title", plotTitleRef.current);
+      appendWallUnitsParams(params);
       
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
       const res = await fetch(url);
@@ -991,7 +1047,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setStatsLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isStereoData, availableDataSources, parseVarType]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isStereoData, availableDataSources, parseVarType, appendWallUnitsParams]);
 
   // Auto-fetch stat vars when configuration changes in mean mode
   useEffect(() => {
@@ -1082,28 +1138,18 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     const xPercent = (px - bbox.left) / bbox.width;
     const yPercent = (py - bbox.top) / bbox.height;
     try {
-      const { varSource, varName } = parseVarType(type);
-      const params = new URLSearchParams();
-      params.set("base_path", effectiveDir);
-      params.set("camera", String(camera));
-      params.set("frame", String(index));
-      params.set("var", varName);
-      params.set("var_source", varSource);
-      params.set("run", String(run));
-      params.set("merged", merged ? "1" : "0");
-      params.set("x_percent", xPercent.toString());
-      params.set("y_percent", yPercent.toString());
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = availableDataSources.stereo_instantaneous?.camera_pair || [1, 2];
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      // Reuse buildPositionParams so the click resolves through the SAME convention
+      // as hover/box-zoom: it carries the rendered axis limits (correct when zoomed)
+      // and converts the y+ wall-units axis back to mm at this boundary.
+      const params = buildPositionParams(xPercent, yPercent);
       const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
       const res = await fetch(url);
       const json = await res.json();
       if (!res.ok || json.error) throw new Error(json.error || "Failed to get vector value");
-      alert(`New datum set at physical position: x=${json.x?.toFixed(4)}, y=${json.y?.toFixed(4)}`);
+      // json.x/json.y are always raw mm (get_vector_at_position works in mm); note that
+      // in the alert so a y+ view doesn't make the value look wrong.
+      const unit = wallUnitsActive ? " mm" : "";
+      alert(`New datum set at physical position: x=${json.x?.toFixed(4)}${unit}, y=${json.y?.toFixed(4)}${unit}`);
       await sendDatumToBackend(json.x, json.y);
       void fetchCurrentView();
     } catch (e: any) {
@@ -1115,6 +1161,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const updateOffsets = async () => {
     try {
       const body: Record<string, any> = {
+        base_path: effectiveDir,
         base_path_idx: basePathIdx,
         camera: camera,
         run: run,
@@ -1148,6 +1195,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const sendDatumToBackend = async (x: number, y: number) => {
     try {
       const body: Record<string, any> = {
+        base_path: effectiveDir,
         base_path_idx: basePathIdx,
         camera: camera,
         run: run,
@@ -1266,15 +1314,19 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("xlim_min", String(Number(xlimMin)));
       params.set("xlim_max", String(Number(xlimMax)));
     }
+    // With wall units active the rendered y axis (and hence meta.axes_bbox.ylim
+    // and the Y limit inputs) is in y+ space, but get_vector_at_position maps
+    // percentages against raw mm coordinates — convert at this boundary.
+    const convY = wallUnitsActive ? mmFromYPlus : (v: number) => v;
     if (meta?.axes_bbox?.ylim) {
-      params.set("ylim_min", String(meta.axes_bbox.ylim[0]));
-      params.set("ylim_max", String(meta.axes_bbox.ylim[1]));
+      params.set("ylim_min", String(convY(meta.axes_bbox.ylim[0])));
+      params.set("ylim_max", String(convY(meta.axes_bbox.ylim[1])));
     } else if (ylimMin.trim() !== "" && ylimMax.trim() !== "") {
-      params.set("ylim_min", String(Number(ylimMin)));
-      params.set("ylim_max", String(Number(ylimMax)));
+      params.set("ylim_min", String(convY(Number(ylimMin))));
+      params.set("ylim_max", String(convY(Number(ylimMax))));
     }
     return params;
-  }, [effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, isStereoData, availableDataSources]);
+  }, [effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, isStereoData, availableDataSources, wallUnitsActive, mmFromYPlus]);
 
   const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
     if (pendingFetchRef.current) return;
@@ -1415,16 +1467,28 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // set_ylim((ylim_min, ylim_max)) => (bottom, top), so the top-of-box data-y goes to
     // ylim_max and the bottom-of-box data-y to ylim_min. For y-up (calibrated) this is a
     // normal min<max range; for an inverted (pixel) axis it yields max<min, keeping it flipped.
-    setYlimMax(fmtLimit(cTop.y));
-    setYlimMin(fmtLimit(cBot.y));
+    // Fetched coords are raw mm; the Y inputs live in y+ space when wall units are active.
+    const toDispY = wallUnitsActive ? yPlusFromMm : (v: number) => v;
+    setYlimMax(fmtLimit(toDispY(cTop.y)));
+    setYlimMin(fmtLimit(toDispY(cBot.y)));
     setBoxZoomMode(false); // auto-exit after one zoom, like the image viewer
-  }, [selectionRect, displayToPercent, fetchCoordAt]);
+  }, [selectionRect, displayToPercent, fetchCoordAt, wallUnitsActive, yPlusFromMm]);
 
   // Reset to full extent: clearing the limits (state + refs) triggers the auto-render effect.
   const resetZoom = useCallback(() => {
     setXlimMin(""); setXlimMax(""); setYlimMin(""); setYlimMax("");
     xlimMinRef.current = ""; xlimMaxRef.current = ""; ylimMinRef.current = ""; ylimMaxRef.current = "";
   }, []);
+
+  // Y limits live in the rendered axis space (mm or y+), so toggling wall units
+  // would leave the inputs in the wrong space — clear them instead.
+  const prevWallUnitsRef = useRef(wallUnitsActive);
+  useEffect(() => {
+    if (prevWallUnitsRef.current !== wallUnitsActive) {
+      prevWallUnitsRef.current = wallUnitsActive;
+      resetZoom();
+    }
+  }, [wallUnitsActive, resetZoom]);
 
   // Clear any in-progress selection whenever box-zoom turns off (e.g. the user toggles the
   // button mid-drag), so a stale isSelectingRef / rect can't leak into the next session.
@@ -1634,6 +1698,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       // Wait for type to be updated to ens: prefix
       return;
     }
+    if (!isEnsembleSource && varSource === 'ens') {
+      // Ensemble variable lingering on a non-ensemble source (e.g. ens:UU_stress
+      // after switching to instantaneous) - wait for the auto-correction
+      return;
+    }
     if (isStatisticsSource && varSource !== 'mean') {
       // Wait for type to be updated to mean: prefix
       return;
@@ -1676,6 +1745,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     ylimMin,
     ylimMax,
     plotTitle,
+    uTau,
+    nuVisc,
   ]);
 
   // Simple sequential playback: only advance when current frame finishes loading
@@ -2007,6 +2078,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setYlimMax,
     plotTitle,
     setPlotTitle,
+    uTau,
+    setUTau,
+    nuVisc,
+    setNuVisc,
+    wallUnitsActive,
+    yPlusFromMm,
     imageSrc,
     meta,
     loading,

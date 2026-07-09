@@ -8,6 +8,7 @@ import { useVectorViewer, GroupedVariables, DataSourceType } from "@/hooks/useVe
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
 import ColormapSelect from "@/components/shared/ColormapSelect";
+import { unitsForVar, wallScaleDivisor } from "@/lib/plotUnits";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -134,32 +135,8 @@ const getFilteredVars = (
   };
 };
 
-// Unit lookup for hover tooltip (calibrated mode)
-const VARIABLE_UNITS: Record<string, string> = {
-  // Velocities
-  ux: "m/s", uy: "m/s", uz: "m/s",
-  mean_ux: "m/s", mean_uy: "m/s", mean_uz: "m/s",
-  // Fluctuations
-  u_prime: "m/s", v_prime: "m/s", w_prime: "m/s",
-  // Mean stresses
-  uu: "m\u00B2/s\u00B2", vv: "m\u00B2/s\u00B2", ww: "m\u00B2/s\u00B2",
-  uv: "m\u00B2/s\u00B2", uw: "m\u00B2/s\u00B2", vw: "m\u00B2/s\u00B2",
-  // Instantaneous stresses
-  uu_inst: "m\u00B2/s\u00B2", vv_inst: "m\u00B2/s\u00B2", ww_inst: "m\u00B2/s\u00B2",
-  uv_inst: "m\u00B2/s\u00B2", uw_inst: "m\u00B2/s\u00B2", vw_inst: "m\u00B2/s\u00B2",
-  // Ensemble stresses
-  UU_stress: "m\u00B2/s\u00B2", VV_stress: "m\u00B2/s\u00B2", WW_stress: "m\u00B2/s\u00B2",
-  UV_stress: "m\u00B2/s\u00B2", UW_stress: "m\u00B2/s\u00B2", VW_stress: "m\u00B2/s\u00B2",
-  // TKE
-  tke: "m\u00B2/s\u00B2",
-  // Vorticity / divergence
-  vorticity: "1/s", divergence: "1/s",
-  // Gamma (dimensionless)
-  gamma1: "", gamma2: "",
-  // Peak magnitude (dimensionless)
-  peak_mag: "", peakheight: "",
-  mean_peak_height: "",
-};
+// Hover-tooltip units come from @/lib/plotUnits (unitsForVar), which mirrors
+// the backend map that labels the rendered PNG \u2014 keep the two in sync.
 
 // Inline Vector Merging Hook
 const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: string) => {
@@ -343,6 +320,12 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     setYlimMax,
     plotTitle,
     setPlotTitle,
+    uTau,
+    setUTau,
+    nuVisc,
+    setNuVisc,
+    wallUnitsActive,
+    yPlusFromMm,
     imageSrc,
     meta,
     loading,
@@ -971,6 +954,39 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             </div>
 
+            {/* Wall units (viscous scaling) - view-only */}
+            <div className="flex items-end gap-4 flex-wrap">
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-sm font-medium block mb-2">u&#964; (m/s):</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={uTau}
+                  onChange={e => setUTau(e.target.value)}
+                  placeholder="off"
+                  disabled={isUncalibrated}
+                  title="Friction velocity - converts the view to wall units (y+, u+). Leave empty to disable."
+                />
+              </div>
+              <div className="flex-1 min-w-[120px]">
+                <label className="text-sm font-medium block mb-2">&#957; (m&#178;/s):</label>
+                <Input
+                  type="text" inputMode="numeric"
+                  value={nuVisc}
+                  onChange={e => setNuVisc(e.target.value)}
+                  placeholder="1.5e-5"
+                  disabled={isUncalibrated || uTau.trim() === ""}
+                  title="Kinematic viscosity used for y+ = y*u_tau/nu"
+                />
+              </div>
+              <div className="flex-[2] min-w-[200px] text-xs text-gray-500 pb-2">
+                {isUncalibrated
+                  ? "Wall units need calibrated data"
+                  : wallUnitsActive
+                    ? "y+/u+ view active — colour limits are entered in raw units"
+                    : "Set uτ to view in wall units (view-only)"}
+              </div>
+            </div>
+
             {/* Custom Plot Title */}
             <div className="flex items-end gap-4">
               <div className="flex-1">
@@ -1075,25 +1091,31 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-gray-600 uppercase">Y:</span>
+                          <span className="text-xs font-medium text-gray-600 uppercase">{wallUnitsActive ? "Y+:" : "Y:"}</span>
                           <span className="font-mono text-sm font-semibold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {display.y.toFixed(3)}{isUncalibrated ? " px" : " mm"}
+                            {wallUnitsActive
+                              ? yPlusFromMm(display.y).toFixed(3)
+                              : `${display.y.toFixed(3)}${isUncalibrated ? " px" : " mm"}`}
                           </span>
                         </div>
-                        {varVal != null && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-medium text-gray-600 uppercase">
-                              {type.includes(':') ? type.split(':').slice(1).join(':') : type}:
-                            </span>
-                            <span className="font-mono text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border">
-                              {(() => {
-                                const varName = type.includes(':') ? type.split(':').slice(1).join(':') : type;
-                                const unit = isUncalibrated ? "px" : (VARIABLE_UNITS[varName] ?? "m/s");
-                                return `${varVal.toFixed(3)}${unit ? ` ${unit}` : ""}`;
-                              })()}
-                            </span>
-                          </div>
-                        )}
+                        {varVal != null && (() => {
+                          const varName = type.includes(':') ? type.split(':').slice(1).join(':') : type;
+                          // Wall-units view: value divided by u_tau (velocities) or
+                          // u_tau^2 (stresses) to match the rendered plot.
+                          const divisor = wallUnitsActive ? wallScaleDivisor(varName, Number(uTau)) : null;
+                          const shown = divisor ? varVal / divisor : varVal;
+                          const unit = divisor ? "" : unitsForVar(varName, isUncalibrated);
+                          return (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-gray-600 uppercase">
+                                {divisor ? `${varName}+` : varName}:
+                              </span>
+                              <span className="font-mono text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border">
+                                {`${shown.toFixed(3)}${unit ? ` ${unit}` : ""}`}
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })()}
