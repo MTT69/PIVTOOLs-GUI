@@ -291,17 +291,17 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-sm font-semibold text-blue-800">Sum Fitting Window</Label>
                   <Button
-                    variant={(config?.ensemble_piv?.sum_fitting_window_enabled) ? "default" : "outline"}
+                    variant={(config?.ensemble_piv?.sum_fitting_window_enabled ?? true) ? "default" : "outline"}
                     size="sm"
-                    onClick={() => updateConfigValue(['ensemble_piv', 'sum_fitting_window_enabled'], !config?.ensemble_piv?.sum_fitting_window_enabled)}
+                    onClick={() => updateConfigValue(['ensemble_piv', 'sum_fitting_window_enabled'], !(config?.ensemble_piv?.sum_fitting_window_enabled ?? true))}
                   >
-                    {config?.ensemble_piv?.sum_fitting_window_enabled ? "Enabled" : "Disabled"}
+                    {(config?.ensemble_piv?.sum_fitting_window_enabled ?? true) ? "Enabled" : "Disabled"}
                   </Button>
                 </div>
                 <p className="text-xs text-blue-600 mb-2">
                   Extract a central sub-region from the summed correlation plane before peak fitting. Reduces memory and speeds up fitting.
                 </p>
-                {config?.ensemble_piv?.sum_fitting_window_enabled && (
+                {(config?.ensemble_piv?.sum_fitting_window_enabled ?? true) && (
                   <div className="grid grid-cols-2 gap-4 mt-2">
                     <div className="space-y-1">
                       <Label className="text-xs">Height</Label>

@@ -89,7 +89,7 @@ export function useEnsemblePivConfig(
     resumeFromPass: number | string;
   }>({
     passes: initialPasses,
-    sumWindow: [config.sum_window?.[1] ?? 16, config.sum_window?.[0] ?? 16],  // Frontend: (X, Y)
+    sumWindow: [config.sum_window?.[1] ?? 32, config.sum_window?.[0] ?? 32],  // Frontend: (X, Y)
     storePlanes: config.store_planes ?? false,
     saveDiagnostics: config.save_diagnostics ?? false,
     resumeFromPass: config.resume_from_pass ?? 0
@@ -144,8 +144,8 @@ export function useEnsemblePivConfig(
         type: passesToSave.map(p => p.type),
         runs: runsArray,
         sum_window: [
-          typeof sumWindowToSave[1] === 'number' ? sumWindowToSave[1] : parseInt(sumWindowToSave[1] as string) || 16,  // Backend convention: height (Y) first
-          typeof sumWindowToSave[0] === 'number' ? sumWindowToSave[0] : parseInt(sumWindowToSave[0] as string) || 16   // width (X) second
+          typeof sumWindowToSave[1] === 'number' ? sumWindowToSave[1] : parseInt(sumWindowToSave[1] as string) || 32,  // Backend convention: height (Y) first
+          typeof sumWindowToSave[0] === 'number' ? sumWindowToSave[0] : parseInt(sumWindowToSave[0] as string) || 32   // width (X) second
         ],
         store_planes: storePlanesToSave,
         save_diagnostics: saveDiagnosticsToSave,
@@ -209,8 +209,8 @@ export function useEnsemblePivConfig(
     // Sync sum_window - swap from backend (height, width) to frontend (X, Y) convention
     if (config.sum_window) {
       const newSumWindow: [number | string, number | string] = [
-        config.sum_window[1] ?? 16,  // width (X) from backend index 1
-        config.sum_window[0] ?? 16   // height (Y) from backend index 0
+        config.sum_window[1] ?? 32,  // width (X) from backend index 1
+        config.sum_window[0] ?? 32   // height (Y) from backend index 0
       ];
       if (newSumWindow[0] !== sumWindow[0] || newSumWindow[1] !== sumWindow[1]) {
         setSumWindow(newSumWindow);
