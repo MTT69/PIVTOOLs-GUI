@@ -220,6 +220,13 @@ export const FILTER_DEFINITIONS: FilterDefinition[] = [
     ]
   },
   {
+    type: 'meannorm',
+    name: 'Mean Normalize',
+    description: 'Divides every frame by its own mean intensity. Equalizes pair-to-pair brightness (laser energy drift) so bright pairs do not dominate ensemble correlation sums. Global gain only — use Range/Background Normalize for within-frame illumination gradients.',
+    category: 'spatial',
+    parameters: []
+  },
+  {
     type: 'ssmin',
     name: 'SSMin',
     description: 'Sliding minimum background subtraction. Median-smooths, extracts the local minimum (background envelope), box-smooths it, and subtracts. Removes slowly-varying background (laser sheet profile, reflections). Output clipped to ≥ 0.',

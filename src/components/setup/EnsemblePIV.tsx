@@ -127,19 +127,30 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
   // Local-buffered numeric inputs for sum_fitting_window
   const sumFitHeight = useNumericInput({
     configValue: config?.ensemble_piv?.sum_fitting_window?.[0],
-    defaultValue: 16,
+    defaultValue: 32,
     onCommit: (val) => {
-      const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+      const current = config?.ensemble_piv?.sum_fitting_window || [32, 32];
       updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [val, current[1]]);
     },
     min: 1,
   });
 
+  const lmKmaxCap = useNumericInput({
+    configValue: config?.ensemble_piv?.lm_k_max_cap ?? undefined,
+    defaultValue: 0.35,
+    onCommit: (val) => {
+      updateConfigValue(['ensemble_piv', 'lm_k_max_cap'], val);
+    },
+    mode: 'float',
+    min: 0.05,
+    max: 0.5,
+  });
+
   const sumFitWidth = useNumericInput({
     configValue: config?.ensemble_piv?.sum_fitting_window?.[1],
-    defaultValue: 16,
+    defaultValue: 32,
     onCommit: (val) => {
-      const current = config?.ensemble_piv?.sum_fitting_window || [16, 16];
+      const current = config?.ensemble_piv?.sum_fitting_window || [32, 32];
       updateConfigValue(['ensemble_piv', 'sum_fitting_window'], [current[0], val]);
     },
     min: 1,
@@ -407,10 +418,27 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       <SelectContent>
                         <SelectItem value="correlation">Correlation</SelectItem>
                         <SelectItem value="image">Image</SelectItem>
+                        <SelectItem value="window_mean">Window Mean</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      {"Correlation: R = <A*B> - <A>*<B> (single-pass, memory efficient). Image: R = <(A-mean(A))*(B-mean(B))> (two-pass, more numerically stable for k-space fitting)."}
+                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation."}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">Per-Pair Normalization</Label>
+                      <Button
+                        variant={(config?.ensemble_piv?.per_pair_normalization ?? false) ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => updateConfigValue(['ensemble_piv', 'per_pair_normalization'], !(config?.ensemble_piv?.per_pair_normalization ?? false))}
+                      >
+                        {(config?.ensemble_piv?.per_pair_normalization ?? false) ? "Enabled" : "Disabled"}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Normalize each pair&apos;s correlation planes by its zero-lag auto energies so every pair carries equal weight to the stress. Requires Window Mean background subtraction.
                     </p>
                   </div>
                 </div>
@@ -465,6 +493,22 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 </div>
 
                 <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Predictor Rounding</Label>
+                    <Button
+                      variant={(config?.ensemble_piv?.predictor_rounding ?? false) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'predictor_rounding'], !(config?.ensemble_piv?.predictor_rounding ?? false))}
+                    >
+                      {(config?.ensemble_piv?.predictor_rounding ?? false) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Round the predictor to the nearest 2 px so warp shifts are integer per frame — no sub-pixel interpolation, no interpolation attenuation of the noise floor. Costs unremoved sub-pixel shear near strong gradients.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
                   <Label className="text-sm">Image Warp Interpolation</Label>
                   <Select
                     value={config?.ensemble_piv?.image_warp_interpolation || 'cubic'}
@@ -503,34 +547,53 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
             {correlationFittingOpen && (
               <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-sm">Fit Offset</Label>
-                    <Button
-                      variant={(config?.ensemble_piv?.fit_offset ?? true) ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => updateConfigValue(['ensemble_piv', 'fit_offset'], !(config?.ensemble_piv?.fit_offset ?? true))}
-                    >
-                      {(config?.ensemble_piv?.fit_offset ?? true) ? "Enabled" : "Disabled"}
-                    </Button>
-                  </div>
+                  <Label className="text-sm">Fit Method</Label>
+                  <Select
+                    value={config?.ensemble_piv?.fit_method || 'kspace'}
+                    onValueChange={(value) => updateConfigValue(['ensemble_piv', 'fit_method'], value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="kspace">K-Space LM (nonlinear)</SelectItem>
+                      <SelectItem value="kspace_linear">K-Space Linear (closed-form)</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground">
-                    Include a constant offset in the Gaussian sub-pixel fit. Accounts for correlation plane background level.
+                    LM: two-stage nonlinear fit — most accurate when the Gaussian model holds. Linear: closed-form fit with hard trust fences — cannot fail to converge, robust on hostile experimental data.
                   </p>
                 </div>
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label className="text-sm">Mask Center Pixel</Label>
+                    <Label className="text-sm">LM Soft Weighting</Label>
                     <Button
-                      variant={(config?.ensemble_piv?.mask_center_pixel ?? true) ? "default" : "outline"}
+                      variant={(config?.ensemble_piv?.lm_soft_weighting ?? true) ? "default" : "outline"}
                       size="sm"
-                      onClick={() => updateConfigValue(['ensemble_piv', 'mask_center_pixel'], !(config?.ensemble_piv?.mask_center_pixel ?? true))}
+                      onClick={() => updateConfigValue(['ensemble_piv', 'lm_soft_weighting'], !(config?.ensemble_piv?.lm_soft_weighting ?? true))}
                     >
-                      {(config?.ensemble_piv?.mask_center_pixel ?? true) ? "Enabled" : "Disabled"}
+                      {(config?.ensemble_piv?.lm_soft_weighting ?? true) ? "Enabled" : "Disabled"}
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Mask the autocorrelation center pixel before peak fitting. Prevents the zero-lag spike from biasing displacement estimates.
+                    SNR-adaptive soft weighting in the LM main fit (the validated recipe). Disable as a diagnostic ablation — flat weights inside the trust ellipse. LM fitter only.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm">LM K-Max Cap (cycles/px)</Label>
+                  <Input
+                    type="number"
+                    value={lmKmaxCap.value}
+                    onChange={lmKmaxCap.onChange}
+                    onFocus={lmKmaxCap.onFocus}
+                    onBlur={lmKmaxCap.onBlur}
+                    className="h-8"
+                    step={0.05}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Cap on the LM fitter&apos;s trust radius. 0.35 = the fitter&apos;s own profile-scan default; 0.15–0.2 restricts the fit to the low-k band where the Gaussian model is safest. LM fitter only.
                   </p>
                 </div>
 

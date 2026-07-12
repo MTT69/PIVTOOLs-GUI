@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 
 export type FilterType =
   | "time" | "pod"  // Batch filters
-  | "lmax" | "maxnorm" | "median" | "norm" | "norm2" | "ssmin" | "gaussian" | "invert" | "clahe";  // Spatial filters
+  | "lmax" | "maxnorm" | "meannorm" | "median" | "norm" | "norm2" | "ssmin" | "gaussian" | "invert" | "clahe";  // Spatial filters
 
 export interface ImageFilter {
   type: FilterType;
@@ -244,6 +244,7 @@ export function useImageFilters(backendUrl: string) {
       pod: {},
       lmax: { size: [7, 7] },
       maxnorm: { size: [7, 7], max_gain: 1.0 },
+      meannorm: {},
       median: { size: [5, 5] },
       norm: { size: [7, 7], max_gain: 1.0 },
       norm2: { size: [7, 7], max_gain: 1.0 },

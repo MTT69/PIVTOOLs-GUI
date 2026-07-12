@@ -68,8 +68,8 @@ export function useEnsemblePivConfig(
 
   // Sum window state - sumWindow[0] is X (width), sumWindow[1] is Y (height)
   const [sumWindow, setSumWindow] = useState<[number | string, number | string]>([
-    config.sum_window?.[1] ?? 16,  // sum_window[1] is width (X) in backend (height, width) convention
-    config.sum_window?.[0] ?? 16   // sum_window[0] is height (Y) in backend (height, width) convention
+    config.sum_window?.[1] ?? 32,  // sum_window[1] is width (X) in backend (height, width) convention
+    config.sum_window?.[0] ?? 32   // sum_window[0] is height (Y) in backend (height, width) convention
   ]);
 
   // Additional ensemble options
