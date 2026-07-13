@@ -391,7 +391,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Full saves all 11 fields per pass. Minimal saves only ux, uy, and mask — sufficient for calibration, statistics, and most post-processing. Minimal is significantly faster.
+                    Full saves all 12 fields per pass (including nan_reason invalidation codes). Minimal saves only ux, uy, and mask — sufficient for calibration, statistics, and most post-processing. Minimal is significantly faster.
                   </p>
                 </div>
 
@@ -408,6 +408,22 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Zlib compression reduces file size but adds CPU overhead per frame. Disable for faster saves when disk space is not a concern.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">Correlation-Plane Dump (debug)</Label>
+                    <Button
+                      variant={(config?.instantaneous_piv?.dump_correlation_planes ?? false) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['instantaneous_piv', 'dump_correlation_planes'], !(config?.instantaneous_piv?.dump_correlation_planes ?? false))}
+                    >
+                      {(config?.instantaneous_piv?.dump_correlation_planes ?? false) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Debug only: dumps every pair&apos;s correlation planes to debug_corr_planes/*.npz next to the .mat files, for inspection with manual_tools/inspect_corr_planes.py. Large output — gigabytes on a full run; restrict the dataset to the pair(s) of interest. CPU backend only.
                   </p>
                 </div>
               </div>
