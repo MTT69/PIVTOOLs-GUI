@@ -135,17 +135,6 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
     min: 1,
   });
 
-  const lmKmaxCap = useNumericInput({
-    configValue: config?.ensemble_piv?.lm_k_max_cap ?? undefined,
-    defaultValue: 0.35,
-    onCommit: (val) => {
-      updateConfigValue(['ensemble_piv', 'lm_k_max_cap'], val);
-    },
-    mode: 'float',
-    min: 0.05,
-    max: 0.5,
-  });
-
   const sumFitWidth = useNumericInput({
     configValue: config?.ensemble_piv?.sum_fitting_window?.[1],
     defaultValue: 32,
@@ -561,39 +550,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    LM: two-stage nonlinear fit — most accurate when the Gaussian model holds. Linear: closed-form fit with hard trust fences — cannot fail to converge, robust on hostile experimental data.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-sm">LM Soft Weighting</Label>
-                    <Button
-                      variant={(config?.ensemble_piv?.lm_soft_weighting ?? true) ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => updateConfigValue(['ensemble_piv', 'lm_soft_weighting'], !(config?.ensemble_piv?.lm_soft_weighting ?? true))}
-                    >
-                      {(config?.ensemble_piv?.lm_soft_weighting ?? true) ? "Enabled" : "Disabled"}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    SNR-adaptive soft weighting in the LM main fit (the validated recipe). Disable as a diagnostic ablation — flat weights inside the trust ellipse. LM fitter only.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-sm">LM K-Max Cap (cycles/px)</Label>
-                  <Input
-                    type="number"
-                    value={lmKmaxCap.value}
-                    onChange={lmKmaxCap.onChange}
-                    onFocus={lmKmaxCap.onFocus}
-                    onBlur={lmKmaxCap.onBlur}
-                    className="h-8"
-                    step={0.05}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Cap on the LM fitter&apos;s trust radius. 0.35 = the fitter&apos;s own profile-scan default; 0.15–0.2 restricts the fit to the low-k band where the Gaussian model is safest. LM fitter only.
+                    LM: one-stage joint nonlinear fit (displacement, stresses, gain, noise floor) — most accurate when the Gaussian model holds. Linear: closed-form fit with hard trust fences — cannot fail to converge, robust on hostile experimental data.
                   </p>
                 </div>
 
