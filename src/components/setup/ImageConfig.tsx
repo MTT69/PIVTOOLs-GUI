@@ -981,6 +981,11 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                       setCameraSubfolders(newSubfolders);
                       saveConfig({ cameraSubfolders: newSubfolders });
                     }}
+                    onApplySuggestedCameraCount={(n) => {
+                      setNumCameras(String(n));
+                      setCameraSubfolders([]);
+                      saveConfig({ numCameras: String(n), cameraSubfolders: [] });
+                    }}
                   />
                   {pairingPreset !== "ab_format" && (
                     <Button

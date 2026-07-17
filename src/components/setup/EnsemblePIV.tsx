@@ -399,7 +399,15 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     <Label className="text-sm">Background Subtraction</Label>
                     <Select
                       value={config?.ensemble_piv?.background_subtraction_method || 'correlation'}
-                      onValueChange={(value) => updateConfigValue(['ensemble_piv', 'background_subtraction_method'], value)}
+                      onValueChange={(value) => {
+                        updateConfigValue(['ensemble_piv', 'background_subtraction_method'], value);
+                        // Per-pair normalization only composes with pure window_mean:
+                        // any ensemble-level background term is built from raw mean
+                        // images, inconsistent with normalized sums.
+                        if (value !== 'window_mean' && (config?.ensemble_piv?.per_pair_normalization ?? false)) {
+                          updateConfigValue(['ensemble_piv', 'per_pair_normalization'], false);
+                        }
+                      }}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -408,10 +416,12 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                         <SelectItem value="correlation">Correlation</SelectItem>
                         <SelectItem value="image">Image</SelectItem>
                         <SelectItem value="window_mean">Window Mean</SelectItem>
+                        <SelectItem value="correlation+window_mean">Correlation + Window Mean</SelectItem>
+                        <SelectItem value="image+window_mean">Image + Window Mean</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation."}
+                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level — removes stationary reflections). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation. The combined modes do both: stationary-background removal plus per-pair window-mean removal."}
                     </p>
                   </div>
 
@@ -421,13 +431,14 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       <Button
                         variant={(config?.ensemble_piv?.per_pair_normalization ?? false) ? "default" : "outline"}
                         size="sm"
+                        disabled={(config?.ensemble_piv?.background_subtraction_method || 'correlation') !== 'window_mean'}
                         onClick={() => updateConfigValue(['ensemble_piv', 'per_pair_normalization'], !(config?.ensemble_piv?.per_pair_normalization ?? false))}
                       >
                         {(config?.ensemble_piv?.per_pair_normalization ?? false) ? "Enabled" : "Disabled"}
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Normalize each pair&apos;s correlation planes by its zero-lag auto energies so every pair carries equal weight to the stress. Requires Window Mean background subtraction.
+                      Normalize each pair&apos;s correlation planes by its zero-lag auto energies so every pair carries equal weight to the stress. Requires Window Mean background subtraction (exactly — not the combined modes).
                     </p>
                   </div>
                 </div>

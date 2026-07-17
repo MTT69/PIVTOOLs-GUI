@@ -24,6 +24,10 @@ export interface ValidationState {
   suggested_subfolder?: string | null;
   /** Per-camera suggested subfolders (camera key → suggestion) */
   suggested_subfolders?: Record<string, string>;
+  /** Suggested camera count when files match directly in the source folder (stale multi-camera config) */
+  suggestedCameraCount?: number | null;
+  /** Sample files backing the camera-count suggestion */
+  suggestedCameraCountFiles?: string[];
   /** Warning if memory per worker may be insufficient for image resolution */
   memoryWarning?: string | null;
   /** Auto-detected frame/file count from container metadata or glob */
@@ -249,6 +253,8 @@ export function useAutoValidation(config: any) {
               sampleFiles,
               suggested_subfolder: suggestedSubfolder,
               suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
+              suggestedCameraCount: typeof json.suggested_camera_count === 'number' ? json.suggested_camera_count : null,
+              suggestedCameraCountFiles: Array.isArray(json.suggested_camera_count_files) ? json.suggested_camera_count_files : undefined,
               // Legacy fields
               suggested_pattern: suggestedPattern,
               suggested_pattern_b: suggestedPatternB,

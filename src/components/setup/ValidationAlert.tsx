@@ -16,6 +16,7 @@ interface BaseValidationState {
   suggested_pattern_b?: string | null;
   suggested_mode?: 'ab_format' | 'skip_frames' | null;
   suggested_subfolder?: string | null;
+  suggestedCameraCount?: number | null;
   patternValidations?: PatternValidation[];
   abCountWarning?: string | null;
   sampleFiles?: string[];
@@ -34,9 +35,11 @@ interface ValidationAlertProps {
   onApplySuggestedPattern?: (pattern: string, patternB?: string | null, mode?: string | null) => void;
   /** Callback when user clicks to apply a suggested camera subfolder */
   onApplySuggestedSubfolder?: (subfolder: string) => void;
+  /** Callback when user clicks to apply a suggested camera count (stale multi-camera config) */
+  onApplySuggestedCameraCount?: (count: number) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern, onApplySuggestedSubfolder }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount }: ValidationAlertProps) {
   // Checking state
   if (!validation.checked && validation.error) {
     return (
@@ -160,6 +163,21 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
                 className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
               >
                 {validation.suggested_subfolder}
+              </Button>
+            </div>
+          )}
+          {validation.suggestedCameraCount != null && onApplySuggestedCameraCount && (
+            <div className="mt-2">
+              <p className="text-muted-foreground">
+                Image files matching your pattern were found directly in the source folder — this looks like a single-camera dataset.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onApplySuggestedCameraCount(validation.suggestedCameraCount!)}
+                className="mt-1 text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Switch to {validation.suggestedCameraCount} camera{validation.suggestedCameraCount !== 1 ? 's' : ''}
               </Button>
             </div>
           )}

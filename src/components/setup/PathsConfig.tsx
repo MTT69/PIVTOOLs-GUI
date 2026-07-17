@@ -36,7 +36,6 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
       paths: {
         base_paths: nextBaseDirs.filter(Boolean).map(sanitizePath),
         source_paths: nextSourceDirs.filter(Boolean).map(sanitizePath),
-        camera_numbers: config.paths?.camera_numbers,
       },
     };
 
@@ -48,6 +47,41 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
     } else {
       setSaveStatus('error');
     }
+  };
+
+  const postUpdateCameraPaths = async (cameraPaths: {
+    camera_count?: number;
+    camera_numbers?: number[];
+    camera_subfolders?: string[];
+  }) => {
+    setSaveStatus('saving');
+    const result = await updateConfigBackend({ paths: cameraPaths });
+
+    if (result.success && result.data?.updated?.paths) {
+      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
+      setSaveStatus('success');
+    } else {
+      setSaveStatus('error');
+    }
+  };
+
+  const applySuggestedCameraCount = (n: number) => {
+    postUpdateCameraPaths({
+      camera_count: n,
+      camera_numbers: Array.from({ length: n }, (_, i) => i + 1),
+      camera_subfolders: [],
+    });
+  };
+
+  const applySuggestedSubfolder = (subfolder: string) => {
+    // Derive subfolders for all cameras by replacing the numeric portion
+    const camCount = config.paths?.camera_count
+      ?? (Array.isArray(config.paths?.camera_numbers) ? config.paths.camera_numbers.length : 1);
+    const newSubfolders = Array.from(
+      { length: camCount },
+      (_, i) => subfolder.replace(/\d+/, String(i + 1))
+    );
+    postUpdateCameraPaths({ camera_subfolders: newSubfolders });
   };
 
   const SaveStatusIcon = () => {
@@ -70,7 +104,11 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
       </div>
 
       {/* Validation Status */}
-      <ValidationAlert validation={validation} />
+      <ValidationAlert
+        validation={validation}
+        onApplySuggestedCameraCount={applySuggestedCameraCount}
+        onApplySuggestedSubfolder={applySuggestedSubfolder}
+      />
       <div className="space-y-6">
         <Card>
           <CardHeader>
