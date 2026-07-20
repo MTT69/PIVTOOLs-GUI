@@ -57,6 +57,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>(
     () => config?.calibration?.camera_subfolders || []);
   const [frameIdx, setFrameIdx] = useState(1);
+  // Image-less mode: a CLI-made model (or one whose images moved) can be loaded,
+  // edited numerically and re-generated without any calibration images on disk —
+  // the backend takes the image size from the existing model (explicit use_image flag).
+  const [useImages, setUseImages] = useState(true);
 
   // --- Scale-factor params ------------------------------------------------------
   const [pxPerMm, setPxPerMm] = useState<string>(
@@ -203,10 +207,24 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   // Debounced past the 500 ms config persist above: source dir + subfolders are resolved
   // from config on the backend, so validation must run after the persist lands.
+  // With images off there is nothing to validate — clearing the result also drops the
+  // alert and makes `dims` fall back to the model's stored image size.
   useEffect(() => {
+    if (!useImages) { setValidation(null); return; }
     const t = setTimeout(validate, 800);
     return () => clearTimeout(t);
-  }, [validate, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+  }, [validate, useImages, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+
+  // Image-driven interactions cannot survive the viewer unmounting.
+  useEffect(() => {
+    if (!useImages) {
+      setPickMode("none");
+      setMeasureP1(null);
+      setMeasureP2(null);
+      gc.setSelectionMode("none");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useImages]);
 
   // Image dimensions for overlay geometry: validation reports [W, H]; a restored/generated
   // model carries image_width/height as a fallback before validation completes.
@@ -316,7 +334,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   // --- Generate -----------------------------------------------------------------
   const generate = useCallback(async () => {
-    if (!originPx) { c2.setError("Pick the origin on the image first."); return; }
+    if (!originPx) {
+      c2.setError(useImages
+        ? "Pick the origin on the image first."
+        : "Enter the origin pixel coordinates first.");
+      return;
+    }
     const data = await c2.generateScaleFactor({
       ...locator(),
       px_per_mm: parseFloat(pxPerMm) || 1.0,
@@ -325,12 +348,13 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       origin_mm: [parseFloat(originMmX) || 0, parseFloat(originMmY) || 0],
       x_dir: xDir, y_dir: yDir, swap_axes: swapAxes,
       frame_idx: frameIdx, image_format: imageFormat, image_type: imageType,
+      use_image: useImages,
     });
     if (data) {
       setResult(data);
     }
   }, [originPx, originMmX, originMmY, pxPerMm, dt, xDir, yDir, swapAxes, frameIdx,
-      imageFormat, imageType, locator]);
+      imageFormat, imageType, useImages, locator]);
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
   const runApply = useCallback(async () => {
@@ -379,7 +403,21 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {/* Use-images toggle: off = image-less mode, model is edited numerically */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Switch id="sf-use-images" checked={useImages} onCheckedChange={setUseImages} />
+              <Label htmlFor="sf-use-images" className="text-sm">Use calibration images</Label>
+            </div>
+            <p className="text-xs text-muted-foreground ml-10">
+              {useImages
+                ? "Pick the origin and measure scale on calibration images."
+                : "No images required — edit the saved model numerically; image size is taken from the existing model."}
+            </p>
+          </div>
+
           {/* Section 1: Calibration Source Path (primary input) */}
+          {useImages && (
           <div className="space-y-2">
             <Label className="text-sm font-medium">Calibration Images Location</Label>
             <Input
@@ -397,6 +435,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
             </p>
           </div>
+          )}
 
           {/* Section 2: Base path + camera */}
           <div className="grid md:grid-cols-2 gap-4">
@@ -427,6 +466,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           </div>
 
           {/* Section 3: Image configuration */}
+          {useImages && (<>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <Label className="text-sm font-medium">Image Type</Label>
@@ -557,7 +597,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             );
           })()}
 
-          {/* Image viewer with origin/measure picking (shared component — same as other tabs) */}
+          {/* Image viewer with origin/measure picking (shared component — same as other tabs).
+              Gated on a valid source (Dotboard pattern) so a missing-image 404 never
+              reaches the canvas overlay. */}
+          {validation?.valid && (
           <CalibrationImageViewer
             backendUrl="/backend"
             sourcePathIdx={sourcePathIdx}
@@ -604,6 +647,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               </div>
             }
           />
+          )}
 
           {measureDistPx && pickMode === "measure" && (
             <div className="flex items-center gap-2 text-sm bg-muted/40 p-2 rounded">
@@ -617,6 +661,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               </Button>
             </div>
           )}
+          </>)}
 
           {/* Origin + scale + axes */}
           <div className="border-t pt-4 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -698,7 +743,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           <div className="border-t pt-4 flex gap-2 items-center flex-wrap">
             <Button onClick={generate} disabled={c2.busy || !originPx}
                     className="bg-blue-600 hover:bg-blue-700 text-white"
-                    title={!originPx ? "Pick the origin first" : undefined}>
+                    title={!originPx
+                      ? (useImages ? "Pick the origin first" : "Enter the origin pixel coordinates first")
+                      : undefined}>
               {c2.busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating…</> : "Generate Model"}
             </Button>
 
