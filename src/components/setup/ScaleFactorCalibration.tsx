@@ -731,6 +731,29 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </Button>
           </div>
 
+          {/* Apply progress (same bar as the board tabs; backend reports % across frames) */}
+          {applyJob && (applyJob.status === "running" || applyJob.status === "starting") && (
+            <div className="p-3 border rounded bg-blue-50">
+              <div className="flex items-center gap-2 text-sm mb-2">
+                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                <strong>Vector Calibration:</strong>
+                <span className="capitalize">{applyJob.status}</span>
+              </div>
+              <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
+                <div
+                  className="h-2 bg-blue-600 transition-all"
+                  style={{ width: `${applyJob.progress || 0}%` }}
+                />
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Progress: {Math.round(applyJob.progress || 0)}%
+                {applyJob.total !== undefined && applyJob.total > 1 && (
+                  <span> | Datasets: {applyJob.processed ?? 0}/{applyJob.total}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {applyJob?.status === "completed" && (
             <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
               <CheckCircle2 className="h-4 w-4 inline mr-2" />Vector calibration completed.
