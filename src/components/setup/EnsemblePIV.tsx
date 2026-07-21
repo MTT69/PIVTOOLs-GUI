@@ -547,37 +547,10 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
             {correlationFittingOpen && (
               <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
                 <div className="space-y-2">
-                  <Label className="text-sm">Fit Method</Label>
-                  <Select
-                    value={config?.ensemble_piv?.fit_method || 'kspace'}
-                    onValueChange={(value) => {
-                      updateConfigValue(['ensemble_piv', 'fit_method'], value);
-                      // Quartic shape terms exist only in the LM fitter; reset so a
-                      // stale non-gaussian shape can't fail validation later.
-                      if (value !== 'kspace' && (config?.ensemble_piv?.kspace_shape || 'gaussian') !== 'gaussian') {
-                        updateConfigValue(['ensemble_piv', 'kspace_shape'], 'gaussian');
-                      }
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="kspace">K-Space LM (nonlinear)</SelectItem>
-                      <SelectItem value="kspace_linear">K-Space Linear (closed-form)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    LM: one-stage joint nonlinear fit (displacement, stresses, gain, noise floor) — most accurate when the Gaussian model holds. Linear: closed-form fit with hard trust fences — cannot fail to converge, robust on hostile experimental data.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
                   <Label className="text-sm">Fitter Shape</Label>
                   <Select
                     value={config?.ensemble_piv?.kspace_shape || 'gaussian'}
                     onValueChange={(value) => updateConfigValue(['ensemble_piv', 'kspace_shape'], value)}
-                    disabled={(config?.ensemble_piv?.fit_method || 'kspace') !== 'kspace'}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -590,7 +563,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Optional quartic terms in the k-space decay absorb displacement-PDF kurtosis, which otherwise biases the fitted stresses (a sub-Gaussian PDF curves the log-spectrum and the pure Gaussian over-reads &Sigma;). Each term self-extinguishes where the flow is Gaussian, so the combined kx&#8308; + ky&#8308; mode is orientation-agnostic and safe throughout the profile. K-Space LM only.
+                    Optional quartic terms in the k-space decay absorb displacement-PDF kurtosis, which otherwise biases the fitted stresses (a sub-Gaussian PDF curves the log-spectrum and the pure Gaussian over-reads &Sigma;). Each term self-extinguishes where the flow is Gaussian, so the combined kx&#8308; + ky&#8308; mode is orientation-agnostic and safe throughout the profile.
                   </p>
                 </div>
 

@@ -312,6 +312,26 @@ export function useStereoCharucoCalibration(
     saveConfig();
   }, [saveConfig]);
 
+  // Clear stale validation/detection errors the instant a validation-relevant input changes,
+  // and enter a pending state. Validation is resolved by the backend from the PERSISTED config
+  // (by index, not the request), so without this the error from a PREVIOUS source / format /
+  // subfolder lingers on screen until the debounced re-validate returns — and `detectError`
+  // (only ever touched by a detect call) would otherwise never clear at all.
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    setValidating(true);
+    setValidation(v => (v ? {
+      ...v,
+      valid: false,
+      error: undefined,
+      cam1: v.cam1 ? { ...v.cam1, valid: false, error: undefined } : v.cam1,
+      cam2: v.cam2 ? { ...v.cam2, valid: false, error: undefined } : v.cam2,
+    } : v));
+    setDetectError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx, imageFormat, imageType, numImages, cam1, cam2,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
+
   const toStereoModel = (d: any): StereoCharucoModel => ({
     intrinsics1: d.intrinsics1,
     intrinsics2: d.intrinsics2,

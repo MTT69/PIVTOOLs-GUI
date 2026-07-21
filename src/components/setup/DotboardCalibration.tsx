@@ -393,6 +393,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 checked: !validating,
                 error: validation.error || null,
               }}
+              pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
                   ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
@@ -402,7 +403,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
           )}
 
           {/* Suggested Pattern Button */}
-          {validation && !validation.valid && validation.suggested_pattern && (
+          {validation && !validating && !validation.valid && validation.suggested_pattern && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Suggestion:</span>
               <Button
@@ -417,7 +418,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
           )}
 
           {/* Suggested Subfolder Button */}
-          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+          {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
             const cams: number[] = config?.paths?.camera_numbers || [1, 2];
             // Infer per-camera subfolders by replacing the camera number in the suggestion

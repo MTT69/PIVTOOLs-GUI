@@ -215,6 +215,17 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     return () => clearTimeout(t);
   }, [validate, useImages, calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
+  // Clear a stale validation error the instant an input changes and enter a pending state; the
+  // debounced re-validate above then refreshes it. Validation is resolved by the backend from
+  // the PERSISTED config (by index, not the request), so without this the error from a PREVIOUS
+  // source / format / subfolder lingers on screen through the persist + re-validate window.
+  useEffect(() => {
+    if (!hydrated.current || !useImages) return;
+    setValidating(true);
+    setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camera, sourcePathIdx, imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+
   // Image-driven interactions cannot survive the viewer unmounting.
   useEffect(() => {
     if (!useImages) {
@@ -553,6 +564,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 checked: !validating,
                 error: validation.error || null,
               }}
+              pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
                   ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
@@ -561,7 +573,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             />
           )}
 
-          {validation && !validation.valid && validation.suggested_pattern && (
+          {validation && !validating && !validation.valid && validation.suggested_pattern && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Suggestion:</span>
               <Button
@@ -575,7 +587,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </div>
           )}
 
-          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+          {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
             const perCam = cameraOptions.map(c => sub.replace(/\d+/, String(c)));
             const label = [...new Set(perCam)].join('" / "');

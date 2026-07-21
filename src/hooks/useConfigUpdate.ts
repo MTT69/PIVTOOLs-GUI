@@ -95,6 +95,11 @@ export function useAutoValidation(config: any) {
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const lastValidatedRef = useRef<string>('');
+  // Monotonic sequence for validation requests: only the latest request may
+  // write results. The debounce timer stops queued requests, but a fetch
+  // already in flight can resolve AFTER a newer one and overwrite fresh
+  // results with stale ones without this guard.
+  const requestSeqRef = useRef(0);
 
   useEffect(() => {
     // Create a validation key from critical config
@@ -118,11 +123,13 @@ export function useAutoValidation(config: any) {
     // Skip if no meaningful config
     const hasConfig = config?.paths?.source_paths?.length > 0;
     if (!hasConfig) {
+      requestSeqRef.current++; // invalidate any in-flight validation
       setValidation({ valid: false, checked: false, error: 'No configuration loaded' });
       return;
     }
 
     lastValidatedRef.current = validationKey;
+    const seq = ++requestSeqRef.current;
 
     // Clear any pending validation
     if (timerRef.current) {
@@ -148,6 +155,7 @@ export function useAutoValidation(config: any) {
 
         if (res.ok) {
           const json = await res.json();
+          if (seq !== requestSeqRef.current) return; // stale response — a newer validation superseded this one
           const details = json.details || {};
 
           // Extract per-pattern validations, A/B count warning, and sample files from first camera
@@ -263,10 +271,12 @@ export function useAutoValidation(config: any) {
           }
         } else {
           const json = await res.json();
+          if (seq !== requestSeqRef.current) return; // stale response
           const errorMsg = json.error || 'Validation failed';
           setValidation({ valid: false, checked: true, error: errorMsg });
         }
       } catch (e: any) {
+        if (seq !== requestSeqRef.current) return; // stale response
         setValidation({ valid: false, checked: true, error: `Validation failed: ${e.message}` });
       }
     }, 500);

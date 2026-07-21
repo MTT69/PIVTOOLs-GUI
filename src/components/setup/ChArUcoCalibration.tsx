@@ -379,6 +379,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 checked: !validating,
                 error: validation.error || null,
               }}
+              pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
                   ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
@@ -388,7 +389,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           )}
 
           {/* Suggested Pattern Button */}
-          {validation && !validation.valid && validation.suggested_pattern && (
+          {validation && !validating && !validation.valid && validation.suggested_pattern && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Suggestion:</span>
               <Button
@@ -403,7 +404,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
           )}
 
           {/* Suggested Subfolder Button */}
-          {validation && !validation.valid && validation.suggested_subfolder && (() => {
+          {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
             const cams: number[] = config?.paths?.camera_numbers || [1, 2];
             const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));

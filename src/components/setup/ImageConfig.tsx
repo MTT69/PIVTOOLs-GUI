@@ -66,7 +66,6 @@ const computeNumPairs = (numImages: number, fs: number, ps: number): number => {
 
 interface SaveOverrides {
   numImages?: string;
-  numCameras?: string;
   pairingPreset?: string;
   startIndex?: number;
   frameStride?: number;
@@ -203,7 +202,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     if (!configLoadedRef.current) return;
     setSavingMeta("Saving...");
     const ni = overrides.numImages ?? numImages;
-    const nc = overrides.numCameras ?? numCameras;
     const preset = overrides.pairingPreset ?? pairingPreset;
     const si = overrides.startIndex ?? startIndex;
     const fs = overrides.frameStride ?? frameStride;
@@ -224,7 +222,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     // the good pattern. Skip the key when empty so the existing value survives.
     const vpTrimmed = vp.trim();
 
-    const camCount = Number(nc) || 1;
+    const camCount = Number(numCameras) || 1;
     const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
     const payload = {
@@ -240,11 +238,21 @@ export default function ImageConfig({ config, updateConfig, validation, sections
         use_camera_subfolders: ucsfIM7,
         num_loops: Number(numLoops) || 1,
       },
-      paths: {
-        camera_count: camCount,
-        camera_numbers: cameraNumbers,
-        camera_subfolders: csf,
-      },
+      // Only the instance that renders the camera-count input ('core') may
+      // persist camera state. Two ImageConfig instances are mounted (core +
+      // patterns, see page.tsx); a save from the patterns instance sending
+      // camera fields from its own local state can resurrect stale values the
+      // core instance just cleared (same clobber class as the num_images
+      // guard above).
+      ...(sectionsToShow.includes('core')
+        ? {
+            paths: {
+              camera_count: camCount,
+              camera_numbers: cameraNumbers,
+              camera_subfolders: csf,
+            },
+          }
+        : {}),
     };
 
     const result = await updateConfigBackend(payload);
@@ -256,6 +264,28 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       if (result.data.updated.paths) {
         updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
       }
+      setSavingMeta("Saved successfully!");
+    } else {
+      setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
+    }
+
+    setTimeout(() => setSavingMeta(""), 2000);
+  };
+
+  // Targeted camera-state update for callers outside the 'core' section
+  // (saveConfig excludes paths there — see the payload gating above). Sends
+  // only the changed keys and merges the server-reconciled paths back into
+  // the context, mirroring PathsConfig.postUpdateCameraPaths.
+  const postUpdateCameraPaths = async (cameraPaths: {
+    camera_count?: number;
+    camera_numbers?: number[];
+    camera_subfolders?: string[];
+  }) => {
+    setSavingMeta("Saving...");
+    const result = await updateConfigBackend({ paths: cameraPaths });
+
+    if (result.success && result.data?.updated?.paths) {
+      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
       setSavingMeta("Saved successfully!");
     } else {
       setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
@@ -979,12 +1009,16 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                         (_, i) => subfolder.replace(/\d+/, String(i + 1))
                       );
                       setCameraSubfolders(newSubfolders);
-                      saveConfig({ cameraSubfolders: newSubfolders });
+                      postUpdateCameraPaths({ camera_subfolders: newSubfolders });
                     }}
                     onApplySuggestedCameraCount={(n) => {
                       setNumCameras(String(n));
                       setCameraSubfolders([]);
-                      saveConfig({ numCameras: String(n), cameraSubfolders: [] });
+                      postUpdateCameraPaths({
+                        camera_count: n,
+                        camera_numbers: Array.from({ length: n }, (_, i) => i + 1),
+                        camera_subfolders: [],
+                      });
                     }}
                   />
                   {pairingPreset !== "ab_format" && (

@@ -424,6 +424,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   checked: !validating,
                   error: validation.error || null,
                 }}
+                pendingLabel="Validating…"
                 customSuccessMessage={
                   validation.valid
                     ? `Found ${validation.matching_count === 'container' ? 'container files' : `${validation.matching_count} matching calibration image pairs`}`
@@ -431,7 +432,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 }
               />
               {/* Per-camera details */}
-              {validation.cam1 && validation.cam2 && (
+              {!validating && validation.cam1 && validation.cam2 && (
                 <div className="flex gap-4 text-xs text-muted-foreground">
                   <span className={validation.cam1.valid ? "text-green-600" : "text-red-500"}>
                     Cam {cam1}: {validation.cam1.found_count === 'container' ? 'container' : `${validation.cam1.found_count} images`}
@@ -447,7 +448,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           )}
 
           {/* Suggested Pattern Button */}
-          {validation && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
+          {validation && !validating && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Suggestion:</span>
               <Button
@@ -462,7 +463,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           )}
 
           {/* Suggested Subfolder Button */}
-          {validation && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+          {validation && !validating && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-600">Subfolder suggestion:</span>
               <Button

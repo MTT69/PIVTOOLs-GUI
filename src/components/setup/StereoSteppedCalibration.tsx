@@ -610,6 +610,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   checked: !validating,
                   error: validation.cam1?.error || validation.cam2?.error || null,
                 }}
+                pendingLabel="Validating…"
                 customSuccessMessage={
                   validation.valid
                     ? `Both cameras validated (Cam ${cam1}, Cam ${cam2})`
@@ -619,7 +620,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             )}
 
             {/* Suggested file pattern (Did you mean) */}
-            {validation && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
+            {validation && !validating && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-gray-600">Suggestion:</span>
                 <Button
@@ -634,7 +635,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             )}
 
             {/* Suggested camera subfolder (Did you mean) */}
-            {validation && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
+            {validation && !validating && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-gray-600">Subfolder suggestion:</span>
                 <Button

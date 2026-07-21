@@ -266,7 +266,10 @@ export function useStatisticsCalculation(
         body: JSON.stringify({
           base_path_idx: basePathIdx,
           workflow: workflow,
-          type_name: dataSource?.includes('ensemble') ? 'ensemble' : 'instantaneous',
+          // Always instantaneous: the Statistics panel is gated on !isEnsemble
+          // (useVectorViewer canCalculateStatistics), so an ensemble dataSource
+          // can never reach here.
+          type_name: 'instantaneous',
           source_endpoint: dataSource ? (dataSource.includes('stereo') ? 'stereo' : (dataSource.includes('merged') ? 'merged' : 'regular')) : sourceEndpoint,
           requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
         }),

@@ -483,6 +483,24 @@ export function useStereoSteppedCalibration(
     saveConfig();
   }, [saveConfig]);
 
+  // Clear stale validation errors the instant a validation-relevant input changes, and enter a
+  // pending state. Validation is resolved by the backend from the PERSISTED config (by index,
+  // not the request), so without this the error from a PREVIOUS source / format / subfolder
+  // lingers on screen until the debounced re-validate returns. (Detection/sequence state is
+  // reset separately by resetSourceState below.)
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    setValidating(true);
+    setValidation(v => (v ? {
+      ...v,
+      valid: false,
+      cam1: v.cam1 ? { ...v.cam1, valid: false, error: undefined } : v.cam1,
+      cam2: v.cam2 ? { ...v.cam2, valid: false, error: undefined } : v.cam2,
+    } : v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx, imageFormat, imageType, numImages, cam1, cam2,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
+
   // Clear the sequence state when source index or the pair changes (stale pixels).
   useEffect(() => {
     if (!configLoadedRef.current) return;

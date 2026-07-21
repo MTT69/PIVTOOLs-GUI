@@ -27,6 +27,14 @@ interface ValidationAlertProps {
   validation: BaseValidationState;
   /** Custom success message to display instead of default */
   customSuccessMessage?: string;
+  /**
+   * Opt-in label for the pending (re-validating) state. When set and the validation is
+   * not yet `checked` with no current error, a neutral spinner with this label is shown
+   * instead of nothing. Calibration tabs pass "Validating…" so a previous source/format
+   * error is replaced by a spinner the instant an input changes (stale errors never linger).
+   * Callers that omit it keep the original behaviour (nothing shown until an error/result).
+   */
+  pendingLabel?: string;
   /** Optional count of found items to display */
   foundCount?: number | string;
   /** Current pairing mode from config (used to preserve mode when applying suggestions) */
@@ -39,14 +47,16 @@ interface ValidationAlertProps {
   onApplySuggestedCameraCount?: (count: number) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount }: ValidationAlertProps) {
-  // Checking state
-  if (!validation.checked && validation.error) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, pendingLabel, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount }: ValidationAlertProps) {
+  // Checking / re-validating state: show the in-flight error if one is present, else the
+  // opt-in pending label. Callers that pass `pendingLabel` get a neutral spinner while a
+  // fresh check runs; callers that don't keep the original "nothing until error" behaviour.
+  if (!validation.checked && (validation.error || pendingLabel)) {
     return (
       <Alert className="border-blue-500 bg-blue-50">
         <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
         <AlertDescription className="text-sm text-blue-800">
-          {validation.error}
+          {validation.error || pendingLabel}
         </AlertDescription>
       </Alert>
     );
