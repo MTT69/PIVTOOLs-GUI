@@ -47,7 +47,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
   const { updateConfig: updateConfigBackend } = useConfigUpdate();
 
   // Valid FFT window sizes (served by backend; codelet engine only supports these)
-  const { sizes: fftSizes } = useFftSizes();
+  const { sizes: fftSizes, singleModeSizes, singleModeError } = useFftSizes();
 
   // Camera selection state
   const cameraCount = config?.paths?.camera_count || 1;
@@ -191,16 +191,19 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
               const isLastPass = i === passes.length - 1;
               return (
                 <div key={i} className="grid grid-cols-12 gap-x-2 items-center bg-gray-50 p-2 rounded-md">
+                  {/* Single passes admit the small Frame-A sizes (4, 6): their
+                      window_size is the Frame-A mask support, not an FFT length
+                      (the FFT runs at sum_window). Std passes stay FFT-only. */}
                   <WindowSizeSelect
                     className="col-span-2"
                     value={p.windowX}
-                    sizes={fftSizes}
+                    sizes={p.type === 'single' ? singleModeSizes : fftSizes}
                     onChange={v => updatePassField(i, 'windowX', v)}
                   />
                   <WindowSizeSelect
                     className="col-span-2"
                     value={p.windowY}
-                    sizes={fftSizes}
+                    sizes={p.type === 'single' ? singleModeSizes : fftSizes}
                     onChange={v => updatePassField(i, 'windowY', v)}
                   />
                   <Input
@@ -249,6 +252,13 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
           {/* Sum Window - shown when any pass has type 'single' */}
           {hasSinglePass && (
             <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-4">
+              {/* Make a stale backend visible: without single_mode_sizes the
+                  Frame-A dropdown is empty and the reason is otherwise invisible. */}
+              {singleModeError && (
+                <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                  {singleModeError}
+                </p>
+              )}
               <div>
                 <Label className="text-sm font-semibold text-blue-800">Sum Window (for single-type passes)</Label>
                 <p className="text-xs text-blue-600 mb-2">
@@ -564,6 +574,25 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     Optional quartic terms in the k-space decay absorb displacement-PDF kurtosis, which otherwise biases the fitted stresses (a sub-Gaussian PDF curves the log-spectrum and the pure Gaussian over-reads &Sigma;). Each term self-extinguishes where the flow is Gaussian, so the combined kx&#8308; + ky&#8308; mode is orientation-agnostic and safe throughout the profile.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm">Noise Floor Model</Label>
+                  <Select
+                    value={config?.ensemble_piv?.kspace_floor || 'coloured'}
+                    onValueChange={(value) => updateConfigValue(['ensemble_piv', 'kspace_floor'], value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="coloured">Coloured (analytic pipeline floor)</SelectItem>
+                      <SelectItem value="flat">Flat (legacy)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Sensor noise reaches the fit coloured by the processing chain (warp interpolation, window-mean removal, envelope divide). The coloured model fits the floor with its true analytic shape P(k) per window; the flat model assumes a constant floor, which inflates the wall-normal stresses on noisy data. Use flat only to reproduce runs from before the coloured floor existed.
                   </p>
                 </div>
 
