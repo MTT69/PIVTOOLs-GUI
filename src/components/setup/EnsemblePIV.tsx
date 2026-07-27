@@ -428,10 +428,12 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                         <SelectItem value="window_mean">Window Mean</SelectItem>
                         <SelectItem value="correlation+window_mean">Correlation + Window Mean</SelectItem>
                         <SelectItem value="image+window_mean">Image + Window Mean</SelectItem>
+                        <SelectItem value="correlation+dc_zero">Correlation + DC Zero</SelectItem>
+                        <SelectItem value="image+dc_zero">Image + DC Zero</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level — removes stationary reflections). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation. The combined modes do both: stationary-background removal plus per-pair window-mean removal."}
+                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level — removes stationary reflections). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation. The + Window Mean modes do both: stationary-background removal plus per-pair window-mean removal. The + DC Zero modes instead zero each window's accumulated plane mean at finalize (no per-pair machinery) — for clean or gain-normalised data."}
                     </p>
                   </div>
 
