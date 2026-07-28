@@ -301,21 +301,11 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                   Extract a central sub-region from the summed correlation plane before peak fitting. Reduces memory and speeds up fitting.
                 </p>
                 {(config?.ensemble_piv?.sum_fitting_window_enabled ?? true) && (
+                  /* Displayed X-then-Y to match the pass table and Sum Window above;
+                     storage stays backend-native [height, width] = [Y, X]. */
                   <div className="grid grid-cols-2 gap-4 mt-2">
                     <div className="space-y-1">
-                      <Label className="text-xs">Height</Label>
-                      <Input
-                        type="text"
-                        inputMode="numeric"
-                        value={sumFitHeight.value}
-                        onChange={sumFitHeight.onChange}
-                        onFocus={sumFitHeight.onFocus}
-                        onBlur={sumFitHeight.onBlur}
-                        className="h-8"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Width</Label>
+                      <Label className="text-xs">Width (X)</Label>
                       <Input
                         type="text"
                         inputMode="numeric"
@@ -323,6 +313,18 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                         onChange={sumFitWidth.onChange}
                         onFocus={sumFitWidth.onFocus}
                         onBlur={sumFitWidth.onBlur}
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Height (Y)</Label>
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        value={sumFitHeight.value}
+                        onChange={sumFitHeight.onChange}
+                        onFocus={sumFitHeight.onFocus}
+                        onBlur={sumFitHeight.onBlur}
                         className="h-8"
                       />
                     </div>
