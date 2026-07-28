@@ -600,6 +600,22 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
+                    <Label className="text-sm">Envelope Divide</Label>
+                    <Button
+                      variant={(config?.ensemble_piv?.envelope_divide ?? false) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => updateConfigValue(['ensemble_piv', 'envelope_divide'], !(config?.ensemble_piv?.envelope_divide ?? false))}
+                    >
+                      {(config?.ensemble_piv?.envelope_divide ?? false) ? "Enabled" : "Disabled"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Divide the ensemble correlation planes (AA, AB, BB) by the pair-count envelope before fitting. Applies to both std and single passes. Disabled leaves the planes with their natural tent attenuation (Westerweel-style); the coloured noise floor follows this setting automatically. Enable only to reproduce runs from before 2026-07-27.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
                     <Label className="text-sm">Persist Images in RAM</Label>
                     <Button
                       variant={config?.ensemble_piv?.persist_images ? "default" : "outline"}
