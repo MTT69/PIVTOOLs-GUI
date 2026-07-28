@@ -19,6 +19,7 @@ const AVAILABLE_STATISTICS = {
     { id: "mean_stresses", label: "Stresses" },  // Full stress tensor (uu, vv, uv + ww, uw, vw for stereo)
     { id: "mean_tke", label: "Mean TKE" },
     { id: "mean_peak_height", label: "Mean Peak Height" },
+    { id: "correlation_quality", label: "Correlation Quality" },  // NaN%/peak_ratio maps + time-series figures
   ],
   instantaneous: [
     { id: "inst_velocity", label: "Inst. Velocity" },
@@ -30,7 +31,7 @@ const AVAILABLE_STATISTICS = {
 };
 
 // Variable label formatting helpers
-const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' | 'ens'): string => {
+const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' | 'ens' | 'corrq'): string => {
   // Special formatting for known variables
   const specialLabels: Record<string, Record<string, string>> = {
     inst_stat: {
@@ -64,6 +65,12 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' |
       tke: "TKE",
       vorticity: "Mean ω",
       divergence: "Mean ∇·u",
+      nan_pct: "NaN % map",
+      peak_ratio_median: "Median peak ratio map",
+    },
+    corrq: {
+      timeseries: "Quality time series",
+      nan_reasons: "NaN reasons vs frame",
     },
     ens: {
       ux: "Ensemble ux",
@@ -87,6 +94,9 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' |
   if (source === 'mean' && specialLabels.mean[varName]) {
     return specialLabels.mean[varName];
   }
+  if (source === 'corrq' && specialLabels.corrq[varName]) {
+    return specialLabels.corrq[varName];
+  }
   if (source === 'ens' && specialLabels.ens[varName]) {
     return specialLabels.ens[varName];
   }
@@ -94,8 +104,8 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' |
 };
 
 // Check if any grouped vars are available
-const hasGroupedVars = (allVars: { instantaneous: string[]; instantaneous_stats: string[]; mean_stats: string[]; ensemble: string[] }): boolean => {
-  return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0 || allVars.ensemble.length > 0);
+const hasGroupedVars = (allVars: GroupedVariables): boolean => {
+  return (allVars.instantaneous.length > 0 || allVars.instantaneous_stats.length > 0 || allVars.mean_stats.length > 0 || allVars.ensemble.length > 0 || allVars.corr_quality.length > 0);
 };
 
 // Filter allVars based on current data source
@@ -113,16 +123,18 @@ const getFilteredVars = (
       instantaneous_stats: [],
       mean_stats: [],
       ensemble: allVars.ensemble,
+      corr_quality: [],
     };
   }
 
   if (isStatisticsSource) {
-    // Statistics mode: only show mean stats
+    // Statistics mode: mean stats + correlation-quality figures
     return {
       instantaneous: [],
       instantaneous_stats: [],
       mean_stats: allVars.mean_stats,
       ensemble: [],
+      corr_quality: allVars.corr_quality,
     };
   }
 
@@ -132,6 +144,7 @@ const getFilteredVars = (
     instantaneous_stats: allVars.instantaneous_stats,
     mean_stats: allVars.mean_stats,
     ensemble: [],
+    corr_quality: [],
   };
 };
 
@@ -826,6 +839,21 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               {filteredVars.ensemble.map(v => (
                                 <SelectItem key={`ens:${v}`} value={`ens:${v}`}>
                                   {formatVarLabel(v, 'ens')}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </>
+                        )}
+
+                        {/* Correlation-quality figures (server-rendered, not per-frame) */}
+                        {filteredVars.corr_quality.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectLabel className="text-xs text-gray-500 px-2">Correlation Quality</SelectLabel>
+                              {filteredVars.corr_quality.map(v => (
+                                <SelectItem key={`corrq:${v}`} value={`corrq:${v}`}>
+                                  {formatVarLabel(v, 'corrq')}
                                 </SelectItem>
                               ))}
                             </SelectGroup>

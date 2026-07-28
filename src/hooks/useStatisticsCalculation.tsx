@@ -5,6 +5,7 @@ import type { DataSourceType } from './useVectorViewer';
 const ALL_STAT_KEYS = [
   "mean_velocity", "mean_stresses", "mean_tke",
   "mean_vorticity", "mean_divergence", "mean_peak_height",
+  "correlation_quality",
   "inst_velocity", "inst_stresses",
   "inst_vorticity", "inst_divergence", "inst_gamma"
 ];

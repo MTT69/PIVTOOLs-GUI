@@ -66,6 +66,7 @@ export interface GroupedVariables {
   instantaneous_stats: string[]; // From instantaneous_stats folder
   mean_stats: string[];         // From mean_stats.mat
   ensemble: string[];           // From ensemble_result.mat
+  corr_quality: string[];       // Server-rendered figures from corr_quality_timeseries.mat
 }
 
 const defaultGroupedVars: GroupedVariables = {
@@ -73,6 +74,7 @@ const defaultGroupedVars: GroupedVariables = {
   instantaneous_stats: [],
   mean_stats: [],
   ensemble: [],
+  corr_quality: [],
 };
 
 // Default empty availability
@@ -896,6 +898,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
         mean_stats: Array.isArray(json.mean_stats) ? json.mean_stats : [],
         ensemble: Array.isArray(json.ensemble) ? json.ensemble : [],
+        corr_quality: Array.isArray(json.corr_quality) ? json.corr_quality : [],
       };
       setAllVars(grouped);
     } catch (e: any) {
@@ -1048,6 +1051,39 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setStatsLoading(false);
     }
   }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isStereoData, availableDataSources, parseVarType, appendWallUnitsParams]);
+
+  // Fetch a correlation-quality time-series figure (server-rendered PNG).
+  // These are not per-frame or cursor-mapped: no frame param, and the
+  // response meta carries no axes_bbox, which disables hover/zoom overlays.
+  const fetchCorrQualityImage = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const basePath = effectiveDir;
+      if (!basePath) throw new Error("Please provide a base path");
+
+      const { varName } = parseVarType(type);
+
+      const params = new URLSearchParams();
+      params.set("base_path", basePath);
+      params.set("which", varName);
+      params.set("camera", String(camera));
+      params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      if (run && run > 0) params.set("run", String(run));
+
+      const url = `${backendUrl}/plot/plot_corr_quality?${params.toString()}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `Failed to fetch correlation-quality plot (${res.status})`);
+      setImageSrc(json.image ?? null);
+      setMeta(json.meta ?? null);
+    } catch (e: any) {
+      setError(e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }, [effectiveDir, type, run, backendUrl, camera, merged, isUncalibrated, parseVarType]);
 
   // Auto-fetch stat vars when configuration changes in mean mode
   useEffect(() => {
@@ -1703,8 +1739,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       // after switching to instantaneous) - wait for the auto-correction
       return;
     }
-    if (isStatisticsSource && varSource !== 'mean') {
-      // Wait for type to be updated to mean: prefix
+    if (isStatisticsSource && varSource !== 'mean' && varSource !== 'corrq') {
+      // Wait for type to be updated to mean: (or corrq:) prefix
       return;
     }
     if (isUncalibratedSource && varSource === 'inst_stat') {
@@ -1712,7 +1748,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       return;
     }
 
-    if (meanMode) {
+    if (varSource === 'corrq') {
+      void fetchCorrQualityImage();
+    } else if (meanMode) {
       void fetchStatsImage();
     } else if (isEnsemble) {
       void fetchEnsembleImage();
@@ -1738,6 +1776,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     fetchImage,
     fetchStatsImage,
     fetchEnsembleImage,
+    fetchCorrQualityImage,
     xOffset,
     yOffset,
     xlimMin,

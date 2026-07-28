@@ -19,6 +19,8 @@ const CAL_UNITS: Record<string, string> = {
   // Dimensionless
   gamma1: "", gamma2: "",
   peak_mag: "", peakheight: "", mean_peak_height: "",
+  peak_ratio: "", peak_ratio_median: "",
+  nan_pct: "%",
   nan_reason: "", b_mask: "",
   c_a: "", c_b: "", c_ab: "",
   // Pixel-space diagnostics
