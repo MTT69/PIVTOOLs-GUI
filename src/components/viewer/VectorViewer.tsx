@@ -9,6 +9,8 @@ import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
 import ColormapSelect from "@/components/shared/ColormapSelect";
 import { unitsForVar, wallScaleDivisor } from "@/lib/plotUnits";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { isNanReasonVar, nanReasonEntries, nanReasonLabel, NanReasonPipeline } from "@/lib/nanReasonCodes";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -34,6 +36,10 @@ const AVAILABLE_STATISTICS = {
 const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' | 'ens' | 'corrq'): string => {
   // Special formatting for known variables
   const specialLabels: Record<string, Record<string, string>> = {
+    inst: {
+      // Diagnostic channel: bare "nan_reason" gives no hint that it is categorical.
+      nan_reason: "NaN reason (code)",
+    },
     inst_stat: {
       // Instantaneous stress tensor components
       uu_inst: "u'u'",
@@ -85,9 +91,13 @@ const formatVarLabel = (varName: string, source: 'inst' | 'inst_stat' | 'mean' |
       tke: "TKE",
       vorticity: "Ensemble ω",
       divergence: "Ensemble ∇·u",
+      nan_reason: "NaN reason (code)",
     },
   };
 
+  if (source === 'inst' && specialLabels.inst[varName]) {
+    return specialLabels.inst[varName];
+  }
   if (source === 'inst_stat' && specialLabels.inst_stat[varName]) {
     return specialLabels.inst_stat[varName];
   }
@@ -444,6 +454,19 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   const [showStatistics, setShowStatistics] = useState(false);
   const [showTransforms, setShowTransforms] = useState(false);
   const [showMerging, setShowMerging] = useState(false);
+
+  // nan_reason is a categorical diagnostic, and its code meanings differ between the
+  // instantaneous and ensemble pipelines. Derived live from `dataSource` on every render:
+  // switching source keeps `nan_reason` selected (findEquivalent in useVectorViewer matches
+  // on the normalized name) while the taxonomy underneath it swaps.
+  const selectedVarName = useMemo(
+    () => (type.includes(':') ? type.split(':').slice(1).join(':') : type),
+    [type]
+  );
+  const nanReasonPipeline: NanReasonPipeline = dataSource.includes('ensemble')
+    ? 'ensemble'
+    : 'instantaneous';
+  const showNanReasonLegend = isNanReasonVar(selectedVarName);
 
   // Sync frame input value with index
   useEffect(() => {
@@ -1127,7 +1150,21 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </span>
                         </div>
                         {varVal != null && (() => {
-                          const varName = type.includes(':') ? type.split(':').slice(1).join(':') : type;
+                          const varName = selectedVarName;
+                          // Categorical diagnostic: decode the integer rather than
+                          // printing "10.000". Dimensionless, so no unit suffix.
+                          if (isNanReasonVar(varName)) {
+                            return (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-gray-600 uppercase">
+                                  {varName}:
+                                </span>
+                                <span className="text-sm font-semibold text-white bg-blue-600 px-2 py-1 rounded border whitespace-nowrap">
+                                  {nanReasonLabel(varVal, nanReasonPipeline)}
+                                </span>
+                              </div>
+                            );
+                          }
                           // Wall-units view: value divided by u_tau (velocities) or
                           // u_tau^2 (stresses) to match the rendered plot.
                           const divisor = wallUnitsActive ? wallScaleDivisor(varName, Number(uTau)) : null;
@@ -1152,6 +1189,37 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   {isMeanVar ? "Mean Statistics Mode" : isUncalibrated ? `Frame ${index} (Uncalibrated)` : `Frame ${index}`}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ========== SECTION 3b: NAN REASON CODE LEGEND ========== */}
+          {showNanReasonLegend && imageSrc && !error && (
+            <div className="p-3 bg-white border rounded-lg">
+              <h4 className="text-sm font-semibold text-gray-700 mb-1">
+                NaN reason codes — {nanReasonPipeline === 'ensemble' ? 'Ensemble' : 'Instantaneous'}
+              </h4>
+              <p className="text-xs text-muted-foreground mb-2">
+                Why each vector was invalidated. These codes are pipeline-specific — the
+                instantaneous and ensemble taxonomies agree only on -1, 0 and 10.
+              </p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-16">Code</TableHead>
+                    <TableHead className="w-48">Stage</TableHead>
+                    <TableHead>Meaning</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {nanReasonEntries(nanReasonPipeline).map(({ code, stage, meaning }) => (
+                    <TableRow key={code}>
+                      <TableCell className="font-mono font-semibold">{code}</TableCell>
+                      <TableCell className="text-muted-foreground">{stage}</TableCell>
+                      <TableCell>{meaning}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           )}
 
