@@ -103,14 +103,23 @@ export interface MultiCameraJobStatus {
 
 const BOARD = 'dotboard';
 
+/** Parse a numeric form field; null when empty/invalid (the field is unset). */
+const numOrNull = (s: string): number | null => {
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : null;
+};
+
 /**
  * Dotboard calibration on the calibration (pinhole, no-coordinate-flip) backend.
  *
  * The return interface is preserved from the v1 hook so the original
  * DotboardCalibration card UI renders unchanged. calibration's `generate_model`
  * is synchronous, so we synthesise the v1 `JobStatus` around the awaited call.
- * Image-source config persists to `config.calibration`; board params to
- * `config.calibration.dotboard`. The optional world frame is passed as `clicks`.
+ * Only the source list + active method persist to `config.calibration` (the
+ * pointer); image config, rig (dt/datum/piv_type) and board params persist to
+ * the per-source settings sidecar via GET/POST `/calibration/settings`. The
+ * optional world frame is passed as `clicks`. dt and board geometry have NO
+ * frontend defaults — empty fields stay empty and generate fails loudly.
  */
 export function useDotboardCalibration(
   cameraOptions: number[],
@@ -120,20 +129,27 @@ export function useDotboardCalibration(
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(1);
 
-  // Image config (persists to config.calibration)
-  const [imageFormat, setImageFormat] = useState('calib%05d.tif');
+  // Image config (persists to the per-source settings sidecar; hydrated from the
+  // server-seeded GET, so initial values here are pre-hydration placeholders only)
+  const [imageFormat, setImageFormat] = useState('');
   const [imageType, setImageType] = useState('standard');
-  const [numImages, setNumImages] = useState<string>("10");
+  // '' = unset: n_views is optional (backend frame-count auto-detect), so a
+  // count the user never entered must not be persisted. frameTotal() falls
+  // back to 10 for UI-only consumers (validation preview, frame nav).
+  const [numImages, setNumImages] = useState<string>('');
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration)
-  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
-  const [dt, setDt] = useState(1.0);
+  // Board params + rig (persist to the settings sidecar). dt and dot spacing are
+  // strings with NO default — empty means unset and generate fails loudly.
+  const [dotSpacingMm, setDotSpacingMm] = useState<string>('');
+  const [dt, setDt] = useState<string>('');
   const [datumFrame, setDatumFrame] = useState(1);
   // Camera-model type: pinhole (3D) or polynomial (single-plane). Planar tabs only.
   const [modelType, setModelType] = useState<'pinhole' | 'polynomial'>('pinhole');
+  // PIV result type the apply step targets (rig.piv_type, shared across tabs).
+  const [pivType, setPivType] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // Validation
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -166,8 +182,19 @@ export function useDotboardCalibration(
   // Latest loadModel — the debounced saveConfig reloads through this ref because
   // loadModel is defined below it (can't be a saveConfig dependency).
   const loadModelRef = useRef<(() => Promise<unknown>) | null>(null);
+  // False while the form is (re)hydrating from a source's sidecar. The debounced
+  // save must never write the form into a source it wasn't hydrated from.
+  const settingsReadyRef = useRef(false);
+  // Monotonic settings-load sequence; a stale response must not overwrite a newer load.
+  const settingsSeqRef = useRef(0);
 
-  const boardParams = useCallback(() => ({ dot_spacing_mm: dotSpacingMm }), [dotSpacingMm]);
+  // Request-level board params: only fields the user has actually set. An empty
+  // field is OMITTED so the backend falls through to the sidecar value, and a
+  // missing value everywhere raises the actionable geometry error.
+  const boardParams = useCallback(() => {
+    const v = numOrNull(dotSpacingMm);
+    return v == null ? {} : { dot_spacing_mm: v };
+  }, [dotSpacingMm]);
 
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
@@ -191,29 +218,66 @@ export function useDotboardCalibration(
     }
   }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal]);
 
-  // Load config on mount, then validate.
+  // Hydrate the form from a loaded (or server-seeded) settings dict. Every field
+  // is present in the response (template + seed), so this sets unconditionally —
+  // there are no frontend fallback defaults. Null dt/geometry stay empty.
+  const applySettings = useCallback((s: any) => {
+    const img = s.image || {};
+    setImageFormat(img.image_format ?? '');
+    if (img.image_type) setImageType(img.image_type);
+    setNumImages(img.n_views == null ? '' : String(img.n_views));
+    setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
+    if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
+    const rig = s.rig || {};
+    setDt(rig.dt == null ? '' : String(rig.dt));
+    if (rig.datum_frame != null) setDatumFrame(Number(rig.datum_frame));
+    if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setPivType(rig.piv_type);
+    const dot = s.methods?.dotboard || {};
+    setDotSpacingMm(dot.dot_spacing_mm == null ? '' : String(dot.dot_spacing_mm));
+    if (dot.model_type === 'pinhole' || dot.model_type === 'polynomial') setModelType(dot.model_type);
+  }, []);
+
+  // Fetch the per-source settings sidecar (server seeds from model records when
+  // absent; nothing is written on GET) and hydrate the form.
+  const loadSettings = useCallback(async (idx: number) => {
+    settingsReadyRef.current = false;
+    const seq = ++settingsSeqRef.current;
+    try {
+      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
+      const data = await res.json();
+      if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+      if (!res.ok || !data.settings) {
+        // Guard stays CLOSED: the form still holds another source's values and
+        // an open guard would let the debounced save write them into THIS
+        // source's sidecar. Surface the failure instead of console-only.
+        setModelLoadError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        return;
+      }
+      applySettings(data.settings);
+      // A save scheduled before/during hydration captured the OLD form —
+      // cancel it; the hydrated state commit reschedules a fresh one.
+      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+      settingsReadyRef.current = true;
+    } catch (e) {
+      if (seq !== settingsSeqRef.current) return;
+      setModelLoadError(`Failed to load calibration settings: ${String(e)}`);
+    }
+  }, [applySettings]);
+
+  // Load the source list (config pointer) + the initial source's settings on mount,
+  // then validate.
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch('/backend/config');
         if (res.ok) {
-          const cfg = await res.json();
-          const cal = cfg.calibration || {};
-          if (cal.image_format) setImageFormat(cal.image_format);
-          if (cal.image_type) setImageType(cal.image_type);
-          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
+          const cal = (await res.json()).calibration || {};
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
-          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-          const c2 = cfg.calibration || {};
-          if (c2.dotboard?.dot_spacing_mm) setDotSpacingMm(c2.dotboard.dot_spacing_mm);
-          if (c2.dotboard?.model_type === 'polynomial' || c2.dotboard?.model_type === 'pinhole') setModelType(c2.dotboard.model_type);
-          if (c2.dt) setDt(c2.dt);
-          if (c2.datum_frame) setDatumFrame(c2.datum_frame);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      await loadSettings(0);
       configLoadedRef.current = true;
       setConfigLoaded(true);
       validateImages();
@@ -222,7 +286,15 @@ export function useDotboardCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist config (debounced), then validate.
+  // Rehydrate from the newly selected source's sidecar (settings are per-source).
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    loadSettings(sourcePathIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx]);
+
+  // Persist (debounced): pointer keys to config.yaml, everything else to the
+  // per-source settings sidecar. Then validate.
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
@@ -231,34 +303,59 @@ export function useDotboardCalibration(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            calibration: {
-              image_format: imageFormat,
-              image_type: imageType,
-              n_views: frameTotal(),
-              calibration_sources: calibrationSources,
-              use_camera_subfolders: useCameraSubfolders,
-              camera_subfolders: cameraSubfolders,
-              active: BOARD, dt, datum_frame: datumFrame,
-              dotboard: { dot_spacing_mm: dotSpacingMm, model_type: modelType },
-            },
+            calibration: { calibration_sources: calibrationSources, active: BOARD },
           }),
         });
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-      // The path is now persisted; if it was an in-place edit of the current source
-      // directory, clear the stale model/overlay and reload for the new directory.
       const currentPath = calibrationSources[sourcePathIdx] ?? '';
-      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+      const pathEdited = configLoadedRef.current && currentPath !== loadedSourcePathRef.current;
+      // Sidecars are per-source: never write the form into a source it wasn't
+      // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
+      if (!pathEdited && settingsReadyRef.current) {
+        try {
+          await fetch('/backend/calibration/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source_path_idx: sourcePathIdx,
+              settings: {
+                image: {
+                  image_format: imageFormat,
+                  image_type: imageType,
+                  // null when unset (dt idiom) — persisting frameTotal()'s UI
+                  // fallback would silently bake 10 into the sidecar
+                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                  use_camera_subfolders: useCameraSubfolders,
+                  camera_subfolders: cameraSubfolders,
+                },
+                rig: { camera, dt: numOrNull(dt), datum_frame: datumFrame, piv_type: pivType },
+                methods: {
+                  dotboard: { dot_spacing_mm: numOrNull(dotSpacingMm), model_type: modelType },
+                },
+              },
+            }),
+          });
+        } catch (e) {
+          console.error('Failed to save calibration settings:', e);
+        }
+      }
+      if (pathEdited) {
+        // In-place edit of the current source path: the persisted sources list now
+        // points elsewhere — clear the stale model/overlay and rehydrate model +
+        // settings from the new directory.
         loadedSourcePathRef.current = currentPath;
         setCameraModel(null);
         setDetections({});
         setModelLoadError(null);
         loadModelRef.current?.();
+        loadSettings(sourcePathIdx);
       }
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrame, dotSpacingMm, modelType, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders,
+      camera, dt, datumFrame, pivType, dotSpacingMm, modelType, sourcePathIdx, loadSettings, validateImages]);
 
   useEffect(() => {
     if (!configLoadedRef.current) return;
@@ -323,11 +420,14 @@ export function useDotboardCalibration(
         model_type: modelType,
         board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
         image_format: imageFormat, image_type: imageType,
+        // Generate stamps dt into the model record; empty is omitted so the
+        // backend falls to the saved rig.dt or fails loudly (never a default).
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
         clicks: clicks || undefined,
       }),
     });
     return res.json();
-  }, [sourcePathIdx, modelType, boardParams, datumFrame, frameTotal, imageFormat, imageType]);
+  }, [sourcePathIdx, modelType, boardParams, datumFrame, frameTotal, imageFormat, imageType, dt]);
 
   // Single-camera generate.
   const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
@@ -386,7 +486,7 @@ export function useDotboardCalibration(
         // what produced the model rather than config. Absent on legacy records -> keep current.
         const geo = data.geometry;
         if (geo) {
-          if (geo.dot_spacing_mm) setDotSpacingMm(geo.dot_spacing_mm);
+          if (geo.dot_spacing_mm) setDotSpacingMm(String(geo.dot_spacing_mm));
           if (geo.model_type === 'pinhole' || geo.model_type === 'polynomial') setModelType(geo.model_type);
         }
         return data;
@@ -488,7 +588,9 @@ export function useDotboardCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
-          type_name: typeName, dt,
+          type_name: typeName,
+          // Empty dt is omitted: apply falls back to the model-stamped dt.
+          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
           // Omit active_paths → backend applies to all configured base paths.
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
@@ -547,7 +649,7 @@ export function useDotboardCalibration(
     calibrationSources, setCalibrationSources, useCameraSubfolders, setUseCameraSubfolders,
     cameraSubfolders, setCameraSubfolders,
     dotSpacingMm, setDotSpacingMm, dt, setDt, datumFrame, setDatumFrame,
-    modelType, setModelType,
+    modelType, setModelType, pivType, setPivType,
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',

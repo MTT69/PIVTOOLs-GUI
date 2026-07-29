@@ -282,7 +282,12 @@ export function useJointGridSpec({
     if (cameras.length > 0 && !cameras.includes(datumCamera)) setDatumCameraRaw(cameras[0]);
   }, [cameras, datumCamera]);
 
-  const boardParams = useCallback(() => ({ dot_spacing_mm: dotSpacingMm }), [dotSpacingMm]);
+  // 0 means "unset" (the parent passes parseFloat(...) || 0): omit it so the
+  // backend falls to the sidecar value or raises the actionable geometry error.
+  const boardParams = useCallback(
+    () => (dotSpacingMm ? { dot_spacing_mm: dotSpacingMm } : {}),
+    [dotSpacingMm],
+  );
   const wf = useWorldFrame({
     board: "dotboard",
     camera: datumCamera,

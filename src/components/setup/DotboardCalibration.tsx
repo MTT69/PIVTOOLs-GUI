@@ -129,7 +129,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   // World-frame (coordinate-system x,y) picker — datum frame only (single-camera mono solve).
   const wf = useWorldFrame({
     board: "dotboard", camera, sourcePathIdx, datumFrame,
-    boardParams: () => ({ dot_spacing_mm: dotSpacingMm }),
+    // Empty spacing is omitted — the backend falls to the sidecar value or errors.
+    boardParams: () => {
+      const v = parseFloat(dotSpacingMm);
+      return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
+    },
     imageFormat, imageType,
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
@@ -146,36 +150,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
-  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
-
-  // Load piv_type from config on mount
-  React.useEffect(() => {
-    const pivType = config.calibration?.piv_type;
-    if (pivType === 'instantaneous' || pivType === 'ensemble') {
-      setVectorTypeName(pivType);
-    }
-  }, [config.calibration?.piv_type]);
-
-  // Save piv_type when changed
-  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
-    setVectorTypeName(value);
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { piv_type: value }
-        })
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        // Sync parent config state so other tabs see the update
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) {
-      console.error('Failed to save piv_type:', e);
-    }
-  };
+  // PIV result type for the apply step — rig.piv_type in the per-source settings
+  // sidecar, hydrated and persisted (debounced) by the calibration hook.
+  const vectorTypeName = calibration.pivType;
+  const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
+    calibration.setPivType(value);
 
   // Local input state for debouncing
   const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
@@ -472,7 +451,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   min={0}
                   value={dotSpacingMmInput}
                   onChange={e => setDotSpacingMmInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 15.0)}
+                  onBlur={() => setDotSpacingMm(dotSpacingMmInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
@@ -484,7 +463,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   min={0.001}
                   value={dtInput}
                   onChange={e => setDtInput(e.target.value)}
-                  onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
+                  onBlur={() => setDt(dtInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>
@@ -515,7 +494,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               modelType={modelType}
               validationValid={!!validation?.valid}
               datumFrame={Number(datumFrame) || 1}
-              dotSpacingMm={dotSpacingMm}
+              dotSpacingMm={parseFloat(dotSpacingMm) || 0}
+              dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
               vectorJobStatus={vectorJobStatus}
               isVectorCalibrating={isVectorCalibrating}

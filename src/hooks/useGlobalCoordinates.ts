@@ -9,14 +9,6 @@ export interface OverlapPair {
   frame_b: number;
 }
 
-/** @deprecated Use OverlapPair instead */
-export interface OverlapPoint {
-  target_camera: number;
-  pixel_on_datum_cam: [number, number] | null;
-  pixel_on_target: [number, number] | null;
-  target_frame: number;
-}
-
 export type SelectionMode =
   | 'none'
   | 'datum'
@@ -49,17 +41,18 @@ function generatePairs(cameras: number[]): OverlapPair[] {
  * Multi-camera global coordinates: a datum (one camera's pixel -> physical mm) plus
  * an overlap-pair chain that places every camera in one shared rig frame.
  *
- * This hook owns the datum + overlap state and persists it to
- * config.calibration.global_coordinates. The shared frame is BAKED INTO each camera's
- * model.mat (world_offset_mm) by saveGlobalFrame() -> POST /calibration/global/save;
- * the calibrate step then reads it. The mirror (a camera whose image x runs opposite
- * the global +x) is handled by that camera's calibration axis choice, not a flag here.
+ * This hook owns the datum + overlap state and persists it to the per-source
+ * settings sidecar (`global_coordinates` block) via GET/POST
+ * `/calibration/settings`. Storage is per-source, so switching source swaps the
+ * whole form — there is no reset-on-source-change bookkeeping. The shared frame
+ * is BAKED INTO each camera's model.mat (world_offset_mm) by saveGlobalFrame()
+ * -> POST /calibration/global/save; the calibrate step then reads it. The mirror
+ * (a camera whose image x runs opposite the global +x) is handled by that
+ * camera's calibration axis choice, not a flag here.
  */
 export function useGlobalCoordinates(
-  config: any,
-  updateConfig: (path: string[], value: any) => void,
   cameraOptions: number[],
-  calibrationSources?: string[]
+  sourcePathIdx: number,
 ) {
   const [enabled, setEnabled] = useState(false);
   const [datumPixel, setDatumPixel] = useState<[number, number] | null>(null);
@@ -69,6 +62,10 @@ export function useGlobalCoordinates(
   const [overlapPairs, setOverlapPairs] = useState<OverlapPair[]>([]);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('none');
 
+  // The last-loaded sidecar block, kept so the pair merge below can re-run when
+  // the configured camera set changes without re-fetching.
+  const [loadedGC, setLoadedGC] = useState<any>(null);
+
   // Result of the last "Compute + Save Global Frame" action (per-camera mm shifts).
   const [savedShifts, setSavedShifts] = useState<GlobalShiftResult | null>(null);
   const [savingGlobal, setSavingGlobal] = useState(false);
@@ -76,101 +73,79 @@ export function useGlobalCoordinates(
 
   // Debounce timer ref
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // False while (re)hydrating from a source's sidecar — a pending save must never
+  // write one source's picks into another source's sidecar.
+  const readyRef = useRef(false);
+  // Monotonic load sequence; a stale response must not overwrite a newer load.
+  const seqRef = useRef(0);
 
-  // Track calibration sources to clear stale feature data on source change.
-  // Pixel-dependent data (datum_pixel, overlap pairs) becomes invalid when the
-  // calibration images change.
-  const prevCalibSourcesRef = useRef<string | null>(null);
-
+  // Load the per-source global_coordinates block (server seeds when absent; GET
+  // never writes) on mount and whenever the selected source changes.
   useEffect(() => {
-    if (!calibrationSources || calibrationSources.length === 0) return;
-
-    const currentKey = JSON.stringify(calibrationSources);
-
-    if (prevCalibSourcesRef.current === null) {
-      // First non-empty value after mount — just record, don't reset
-      prevCalibSourcesRef.current = currentKey;
-      return;
-    }
-
-    if (currentKey !== prevCalibSourcesRef.current) {
-      prevCalibSourcesRef.current = currentKey;
-
-      // Source changed — clear pixel-dependent feature data
-      setDatumPixel(null);
-      setOverlapPairs(generatePairs(cameraOptions));
-      setSavedShifts(null);
-
-      // Persist reset to backend (direct fetch to avoid saveToConfig dependency issues)
-      const gc = config?.calibration?.global_coordinates;
-      const resetPayload = {
-        enabled: gc?.enabled ?? false,
-        datum_camera: 1,
-        datum_pixel: null,
-        datum_physical: gc?.datum_physical ?? [0, 0],
-        datum_frame: gc?.datum_frame ?? 1,
-        overlap_pairs: [],
-      };
-
-      fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { global_coordinates: resetPayload }
-        })
-      }).catch(e => console.error('Failed to reset global coordinates:', e));
-
-      updateConfig(["calibration", "global_coordinates"], resetPayload);
-    }
-  }, [calibrationSources, cameraOptions, updateConfig]);
-
-  // Load from config on mount — always generate pairs for adjacent cameras, merging saved values
-  useEffect(() => {
-    const gc = config?.calibration?.global_coordinates;
-
-    // Generate pairs from camera list
-    const generated = generatePairs(cameraOptions);
-
-    // Try to merge from saved overlap_pairs first, then fall back to old overlap_points
-    const savedPairs: OverlapPair[] | undefined = gc?.overlap_pairs;
-    const savedOldPoints: OverlapPoint[] | undefined = gc?.overlap_points;
-
-    const merged = generated.map(gp => {
-      // Try new format first
-      if (Array.isArray(savedPairs)) {
-        const saved = savedPairs.find(
-          sp => sp.camera_a === gp.camera_a && sp.camera_b === gp.camera_b
-        );
-        if (saved) return { ...gp, ...saved };
-      }
-      // Fall back to old format: overlap_points were cam1→target
-      if (Array.isArray(savedOldPoints) && gp.camera_a === 1) {
-        const oldPoint = savedOldPoints.find(
-          op => op.target_camera === gp.camera_b
-        );
-        if (oldPoint) {
-          return {
-            ...gp,
-            pixel_on_a: oldPoint.pixel_on_datum_cam,
-            pixel_on_b: oldPoint.pixel_on_target,
-            frame_a: gc?.datum_frame ?? 1,
-            frame_b: oldPoint.target_frame ?? 1,
-          };
+    const seq = ++seqRef.current;
+    readyRef.current = false;
+    (async () => {
+      try {
+        const res = await fetch(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
+        const data = await res.json();
+        if (seq !== seqRef.current) return;  // superseded by a newer load
+        if (!res.ok || !data.settings) {
+          // Guard stays CLOSED: the form still holds another source's picks and
+          // an open guard would let the debounced save write them into THIS
+          // source's sidecar. Surface the failure instead of console-only.
+          setGlobalError(`Failed to load global coordinates: ${data.error ?? res.status}`);
+          return;
         }
+        const gc = data.settings.global_coordinates || {};
+        setLoadedGC(gc);
+        setEnabled(gc.enabled ?? false);
+        setDatumPixel(
+          gc.datum_pixel && gc.datum_pixel[0] != null && gc.datum_pixel[1] != null
+            ? gc.datum_pixel : null,
+        );
+        setDatumPhysicalX(String(gc.datum_physical?.[0] ?? 0));
+        setDatumPhysicalY(String(gc.datum_physical?.[1] ?? 0));
+        setDatumFrame(gc.datum_frame ?? 1);
+        // Drop the previous source's live picks so the pair merge below rebuilds
+        // purely from this source's saved pairs (live-wins must not leak across
+        // sources).
+        setOverlapPairs([]);
+        setSavedShifts(null);  // shifts shown belonged to the previous source
+        setGlobalError(null);
+        // A save scheduled before/during hydration captured the OLD picks —
+        // cancel it; user actions after hydration reschedule.
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        readyRef.current = true;
+      } catch (e) {
+        if (seq !== seqRef.current) return;
+        setGlobalError(`Failed to load global coordinates: ${String(e)}`);
       }
-      return gp;
-    });
-    setOverlapPairs(merged);
+    })();
+  }, [sourcePathIdx]);
 
-    if (!gc) return;
-    setEnabled(gc.enabled ?? false);
-    setDatumPixel(gc.datum_pixel && gc.datum_pixel[0] != null && gc.datum_pixel[1] != null ? gc.datum_pixel : null);
-    setDatumPhysicalX(String(gc.datum_physical?.[0] ?? 0));
-    setDatumPhysicalY(String(gc.datum_physical?.[1] ?? 0));
-    setDatumFrame(gc.datum_frame ?? 1);
-  }, [config?.calibration?.global_coordinates, cameraOptions]);
+  // Always generate pairs for adjacent cameras, merging saved values in. LIVE
+  // picks win over the loaded snapshot: the parent re-renders with a fresh
+  // cameraOptions identity, and rebuilding purely from loadedGC (a hydration-time
+  // snapshot) would silently revert every pair picked since.
+  useEffect(() => {
+    const savedPairs: OverlapPair[] | undefined = loadedGC?.overlap_pairs;
+    setOverlapPairs(prev =>
+      generatePairs(cameraOptions).map(gp => {
+        const live = prev.find(
+          p => p.camera_a === gp.camera_a && p.camera_b === gp.camera_b
+        );
+        if (live && (live.pixel_on_a || live.pixel_on_b)) return live;
+        const saved = Array.isArray(savedPairs)
+          ? savedPairs.find(
+              sp => sp.camera_a === gp.camera_a && sp.camera_b === gp.camera_b
+            )
+          : undefined;
+        return saved ? { ...gp, ...saved } : gp;
+      })
+    );
+  }, [loadedGC, cameraOptions]);
 
-  // Save to config (debounced)
+  // Save the block to the source's sidecar (debounced).
   const saveToConfig = useCallback(
     (overrides?: Partial<{
       enabled: boolean;
@@ -182,6 +157,9 @@ export function useGlobalCoordinates(
       if (saveTimer.current) clearTimeout(saveTimer.current);
 
       saveTimer.current = setTimeout(async () => {
+        // Mid-hydration there is nothing user-driven to save, and writing would
+        // put stale form state into the newly selected source's sidecar.
+        if (!readyRef.current) return;
         const physX = overrides?.datum_physical?.[0] ?? (parseFloat(datumPhysicalX) || 0);
         const physY = overrides?.datum_physical?.[1] ?? (parseFloat(datumPhysicalY) || 0);
 
@@ -197,21 +175,20 @@ export function useGlobalCoordinates(
         };
 
         try {
-          await fetch('/backend/update_config', {
+          await fetch('/backend/calibration/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              calibration: { global_coordinates: payload }
-            })
+              source_path_idx: sourcePathIdx,
+              settings: { global_coordinates: payload },
+            }),
           });
         } catch (e) {
-          console.error('Failed to save global coordinates config:', e);
+          console.error('Failed to save global coordinates:', e);
         }
-
-        updateConfig(["calibration", "global_coordinates"], payload);
       }, 300);
     },
-    [enabled, datumPixel, datumPhysicalX, datumPhysicalY, datumFrame, overlapPairs, updateConfig]
+    [enabled, datumPixel, datumPhysicalX, datumPhysicalY, datumFrame, overlapPairs, sourcePathIdx]
   );
 
   // Toggle enabled
@@ -279,7 +256,7 @@ export function useGlobalCoordinates(
   // Compute the datum-chain shifts AND bake them into each camera's model.mat, so the
   // calibrate step reads them. The board + source identify which models to update.
   const saveGlobalFrame = useCallback(
-    async (board: string, sourcePathIdx: number): Promise<GlobalShiftResult | null> => {
+    async (board: string, srcIdx: number): Promise<GlobalShiftResult | null> => {
       if (!datumPixel) {
         setGlobalError('Set the datum point on the datum camera first.');
         return null;
@@ -292,7 +269,7 @@ export function useGlobalCoordinates(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             board,
-            source_path_idx: sourcePathIdx,
+            source_path_idx: srcIdx,
             datum_camera: 1,
             datum_pixel: datumPixel,
             datum_physical: [parseFloat(datumPhysicalX) || 0, parseFloat(datumPhysicalY) || 0],

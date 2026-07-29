@@ -127,14 +127,17 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
   const wf = useWorldFrame({
     board: "charuco", camera: cam1, sourcePathIdx, datumFrame,
-    boardParams: () => ({
-      squares_h: parseInt(squaresH) || 10,
-      squares_v: parseInt(squaresV) || 9,
-      square_size: parseFloat(squareSize) || 0.03,
-      marker_ratio: parseFloat(markerRatio) || 0.5,
-      aruco_dict: arucoDict,
-      min_corners: parseInt(minCorners) || 6,
-    }),
+    // Empty fields are omitted — the backend falls to the sidecar value or errors.
+    boardParams: () => {
+      const p: Record<string, unknown> = {};
+      const sh = parseInt(squaresH); if (Number.isFinite(sh)) p.squares_h = sh;
+      const sv = parseInt(squaresV); if (Number.isFinite(sv)) p.squares_v = sv;
+      const ss = parseFloat(squareSize); if (Number.isFinite(ss)) p.square_size = ss;
+      const mr = parseFloat(markerRatio); if (Number.isFinite(mr)) p.marker_ratio = mr;
+      if (arucoDict) p.aruco_dict = arucoDict;
+      const mc = parseInt(minCorners); if (Number.isFinite(mc)) p.min_corners = mc;
+      return p;
+    },
     imageFormat, imageType,
   });
   const wfActive = activeCam === cam1;
@@ -153,35 +156,11 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
-  const [reconstructTypeName, setReconstructTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
-
-  // Load piv_type from config on mount
-  useEffect(() => {
-    const pivType = config.calibration?.piv_type;
-    if (pivType === 'instantaneous' || pivType === 'ensemble') {
-      setReconstructTypeName(pivType);
-    }
-  }, [config.calibration?.piv_type]);
-
-  // Save piv_type when changed
-  const handleReconstructTypeChange = async (value: 'instantaneous' | 'ensemble') => {
-    setReconstructTypeName(value);
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { piv_type: value }
-        })
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) {
-      console.error('Failed to save piv_type:', e);
-    }
-  };
+  // PIV result type for the apply step — rig.piv_type in the per-source settings
+  // sidecar, hydrated and persisted (debounced) by the calibration hook.
+  const reconstructTypeName = calibration.pivType;
+  const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
+    calibration.setPivType(value);
 
   // Set as active calibration method
   const setAsActiveMethod = async () => {
@@ -517,7 +496,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   min={0.001}
                   value={dtInput}
                   onChange={e => setDtInput(e.target.value)}
-                  onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
+                  onBlur={() => setDt(dtInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>

@@ -120,7 +120,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
   const wf = useWorldFrame({
     board: "dotboard", camera: cam1, sourcePathIdx, datumFrame,
-    boardParams: () => ({ dot_spacing_mm: dotSpacingMm }),
+    // Empty spacing is omitted — the backend falls to the sidecar value or errors.
+    boardParams: () => {
+      const v = parseFloat(dotSpacingMm);
+      return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
+    },
     imageFormat, imageType,
   });
   const wfActive = activeCam === cam1;
@@ -139,35 +143,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
-  const [reconstructTypeName, setReconstructTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
-
-  // Load piv_type from config on mount
-  useEffect(() => {
-    const pivType = config.calibration?.piv_type;
-    if (pivType === 'instantaneous' || pivType === 'ensemble') {
-      setReconstructTypeName(pivType);
-    }
-  }, [config.calibration?.piv_type]);
-
-  // Save piv_type when changed
-  const handleReconstructTypeChange = async (value: 'instantaneous' | 'ensemble') => {
-    setReconstructTypeName(value);
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { piv_type: value }
-        })
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) {
-      console.error('Failed to save piv_type:', e);
-    }
-  };
+  // PIV result type for the apply step — rig.piv_type in the per-source settings
+  // sidecar, hydrated and persisted (debounced) by the calibration hook.
+  const reconstructTypeName = calibration.pivType;
+  const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
+    calibration.setPivType(value);
 
   // Set as active calibration method
   const setAsActiveMethod = async () => {
@@ -499,7 +479,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   min={0}
                   value={dotSpacingMmInput}
                   onChange={e => setDotSpacingMmInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingMmInput) || 15.0)}
+                  onBlur={() => setDotSpacingMm(dotSpacingMmInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
@@ -511,7 +491,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   min={0.001}
                   value={dtInput}
                   onChange={e => setDtInput(e.target.value)}
-                  onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
+                  onBlur={() => setDt(dtInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>

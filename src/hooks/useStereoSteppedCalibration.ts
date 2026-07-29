@@ -14,11 +14,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * stereo-dotboard tab uses (the stereo model dir is board-agnostic, so
  * `board="stepped"` is inert on those routes but kept for consistency).
  *
- * Shared physical board geometry persists under `config.calibration.stepped`
- * (read by both stepped tabs). Stereo-only operator state (per-camera fiducials,
- * clicked level, pose labels, stereo_config) persists under a SEPARATE
- * `config.calibration.stepped_stereo` block so the mono and stereo tabs never
- * clobber each other's per-camera maps (`update_config` deep-merges).
+ * Shared physical board geometry persists under `methods.stepped` in the
+ * per-source settings sidecar. Stereo-only selections (stereo_config,
+ * model_type, fix_k2) persist under the separate `methods.stepped_stereo`
+ * block; per-camera clicks (fiducials, clicked level, pose labels) live in the
+ * detection sidecar inputs.mat and restore via restoreSequence.
  *
  * Flow:
  *  1. POST /calibration/stepped/detect_sequence       (cameras:[cam1,cam2]) -> sequence_id + job
@@ -173,6 +173,12 @@ export type StereoConfig = 'auto' | 'same_side' | 'transmission';
 const BOARD = 'stepped';
 const EMPTY_FIDUCIALS: FiducialSet = { origin: null, x_axis: null, y_axis: null };
 
+/** Parse a numeric form field; null when empty/invalid (the field is unset). */
+const numOrNull = (s: string): number | null => {
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : null;
+};
+
 export function useStereoSteppedCalibration(
   cameraOptions: number[],
   sourcePaths: string[],
@@ -183,20 +189,26 @@ export function useStereoSteppedCalibration(
   const [cam2, setCam2] = useState(2);
   const [activeCam, setActiveCam] = useState(1);
 
-  // ---------- Image config (persists to config.calibration) ----------
-  const [imageFormat, setImageFormat] = useState('calib%05d.tif');
+  // ---------- Image config (persists to the per-source settings sidecar) ----------
+  // Initial values are pre-hydration placeholders — the server-seeded GET is authoritative.
+  const [imageFormat, setImageFormat] = useState('');
   const [imageType, setImageType] = useState('standard');
-  const [numImages, setNumImages] = useState<string>('10');
+  // '' = unset: n_views is optional (backend frame-count auto-detect); the
+  // frameTotal() 10-fallback is UI-only and never persisted.
+  const [numImages, setNumImages] = useState<string>('');
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // ---------- Board geometry + dt (persists to config.calibration.stepped) ----------
-  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
-  const [stepHeightMm, setStepHeightMm] = useState(3.0);
-  const [boardThicknessMm, setBoardThicknessMm] = useState(14.8);
-  const [dt, setDt] = useState(1.0);
+  // ---------- Board geometry + dt (persist to methods.stepped / rig in the sidecar) ----------
+  // Strings with NO default — empty means unset and detect/generate fail loudly.
+  const [dotSpacingMm, setDotSpacingMm] = useState<string>('');
+  const [stepHeightMm, setStepHeightMm] = useState<string>('');
+  const [boardThicknessMm, setBoardThicknessMm] = useState<string>('');
+  const [dt, setDt] = useState<string>('');
   const [interpolator, setInterpolator] = useState<'cubic' | 'lanczos'>('lanczos');
+  // PIV result type the apply step targets (rig.piv_type, shared across tabs).
+  const [pivType, setPivType] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // ---------- Sequence-mode controls ----------
   // The stepped sequence length IS the image count (numImages / frameTotal) — there is no
@@ -287,12 +299,16 @@ export function useStereoSteppedCalibration(
 
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
-  // Board geometry overrides sent to the stepped detector.
-  const boardParams = useCallback(() => ({
-    dot_spacing_mm: dotSpacingMm,
-    step_height_mm: stepHeightMm,
-    board_thickness_mm: boardThicknessMm,
-  }), [dotSpacingMm, stepHeightMm, boardThicknessMm]);
+  // Board geometry overrides sent to the stepped detector: only fields the user
+  // has set. Empty fields are OMITTED so the backend falls through to the sidecar
+  // value; missing everywhere raises the actionable geometry error.
+  const boardParams = useCallback(() => {
+    const p: Record<string, unknown> = {};
+    const ds = numOrNull(dotSpacingMm); if (ds != null) p.dot_spacing_mm = ds;
+    const sh = numOrNull(stepHeightMm); if (sh != null) p.step_height_mm = sh;
+    const bt = numOrNull(boardThicknessMm); if (bt != null) p.board_thickness_mm = bt;
+    return p;
+  }, [dotSpacingMm, stepHeightMm, boardThicknessMm]);
 
   // ---------- Generic job poller (detect + fit) ----------
   const pollJob = useCallback(
@@ -352,47 +368,85 @@ export function useStereoSteppedCalibration(
     }
   }, [validateOne, cam1, cam2]);
 
-  // ---------- Load config on mount ----------
+  // False while the form is (re)hydrating from a source's sidecar. The debounced
+  // save must never write the form into a source it wasn't hydrated from.
+  const settingsReadyRef = useRef(false);
+  // Monotonic settings-load sequence; a stale response must not overwrite a newer load.
+  const settingsSeqRef = useRef(0);
+
+  // Hydrate the form from a loaded (or server-seeded) settings dict. Clicks
+  // (fiducials/clicked_level/pose_levels) are NOT settings — restoreSequence
+  // restores them per-source from the sidecar inputs.mat. fix_k2 is hydrated
+  // only when explicitly stored — its default is contextual (ON here).
+  const applySettings = useCallback((s: any) => {
+    const img = s.image || {};
+    setImageFormat(img.image_format ?? '');
+    if (img.image_type) setImageType(img.image_type);
+    setNumImages(img.n_views == null ? '' : String(img.n_views));
+    setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
+    if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
+    const rig = s.rig || {};
+    setDt(rig.dt == null ? '' : String(rig.dt));
+    if (rig.datum_frame != null) setDatumFrame(Number(rig.datum_frame));
+    if (rig.interpolator === 'cubic' || rig.interpolator === 'lanczos') setInterpolator(rig.interpolator);
+    if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setPivType(rig.piv_type);
+    if (Array.isArray(rig.camera_pair) && rig.camera_pair.length >= 2) {
+      setCam1(Number(rig.camera_pair[0]));
+      setCam2(Number(rig.camera_pair[1]));
+      setActiveCam(Number(rig.camera_pair[0]));
+    }
+    const sp = s.methods?.stepped || {};
+    setDotSpacingMm(sp.dot_spacing_mm == null ? '' : String(sp.dot_spacing_mm));
+    setStepHeightMm(sp.step_height_mm == null ? '' : String(sp.step_height_mm));
+    setBoardThicknessMm(sp.board_thickness_mm == null ? '' : String(sp.board_thickness_mm));
+    const ss = s.methods?.stepped_stereo || {};
+    if (ss.stereo_config === 'auto' || ss.stereo_config === 'same_side' || ss.stereo_config === 'transmission') {
+      setStereoConfig(ss.stereo_config);
+    }
+    if (ss.model_type === 'pinhole' || ss.model_type === 'polynomial3d') setModelType(ss.model_type);
+    if (ss.fix_k2 !== undefined && ss.fix_k2 !== null) setFixK2(Boolean(ss.fix_k2));
+  }, []);
+
+  // Fetch the per-source settings sidecar (server seeds when absent; GET never
+  // writes) and hydrate the form.
+  const loadSettings = useCallback(async (idx: number) => {
+    settingsReadyRef.current = false;
+    const seq = ++settingsSeqRef.current;
+    try {
+      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
+      const data = await res.json();
+      if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+      if (!res.ok || !data.settings) {
+        // Guard stays CLOSED: the form still holds another source's values and
+        // an open guard would let the debounced save write them into THIS
+        // source's sidecar. Surface the failure instead of console-only.
+        setModelLoadError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        return;
+      }
+      applySettings(data.settings);
+      // A save scheduled before/during hydration captured the OLD form —
+      // cancel it; the hydrated state commit reschedules a fresh one.
+      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+      settingsReadyRef.current = true;
+    } catch (e) {
+      if (seq !== settingsSeqRef.current) return;
+      setModelLoadError(`Failed to load calibration settings: ${String(e)}`);
+    }
+  }, [applySettings]);
+
+  // ---------- Load the source list + initial source's settings on mount ----------
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch('/backend/config');
         if (res.ok) {
-          const cfg = await res.json();
-          const cal = cfg.calibration || {};
-          if (cal.image_format) setImageFormat(cal.image_format);
-          if (cal.image_type) setImageType(cal.image_type);
-          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
+          const cal = (await res.json()).calibration || {};
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
-          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-
-          const c2 = cfg.calibration || {};
-          const sp = c2.stepped || {};
-          if (sp.dot_spacing_mm) setDotSpacingMm(sp.dot_spacing_mm);
-          if (sp.step_height_mm) setStepHeightMm(sp.step_height_mm);
-          if (sp.board_thickness_mm) setBoardThicknessMm(sp.board_thickness_mm);
-          if (c2.dt) setDt(c2.dt);
-          if (c2.datum_frame) setDatumFrame(c2.datum_frame);
-          if (Array.isArray(c2.camera_pair) && c2.camera_pair.length >= 2) {
-            setCam1(Number(c2.camera_pair[0]));
-            setCam2(Number(c2.camera_pair[1]));
-            setActiveCam(Number(c2.camera_pair[0]));
-          }
-
-          // Stereo-only SELECTIONS lives in its own block (no mono clobber). Clicks
-          // (fiducials/clicked_level/pose_levels) are NOT read from config — restoreSequence
-          // restores them per-source from the sidecar inputs.mat.
-          const ss = c2.stepped_stereo || {};
-          if (ss.stereo_config === 'auto' || ss.stereo_config === 'same_side' || ss.stereo_config === 'transmission') {
-            setStereoConfig(ss.stereo_config);
-          }
-          if (ss.model_type === 'pinhole' || ss.model_type === 'polynomial3d') setModelType(ss.model_type);
-          if (ss.fix_k2 !== undefined) setFixK2(ss.fix_k2);
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      await loadSettings(0);
       configLoadedRef.current = true;
       setConfigLoaded(true);
       validateImages();
@@ -400,6 +454,13 @@ export function useStereoSteppedCalibration(
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Rehydrate from the newly selected source's sidecar (settings are per-source).
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    loadSettings(sourcePathIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx]);
 
   // The source directory the displayed model/overlay belongs to. Lets saveConfig
   // detect an in-place path edit (same index, new string) and reload after persist.
@@ -422,7 +483,7 @@ export function useStereoSteppedCalibration(
     pollHandles.current.clear();
   }, []);
 
-  // ---------- Save config (debounced) ----------
+  // ---------- Save (debounced): pointer keys to config.yaml, the rest to the sidecar ----------
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
@@ -431,51 +492,78 @@ export function useStereoSteppedCalibration(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            calibration: {
-              image_format: imageFormat,
-              image_type: imageType,
-              n_views: frameTotal(),
-              calibration_sources: calibrationSources,
-              use_camera_subfolders: useCameraSubfolders,
-              camera_subfolders: cameraSubfolders,
-              active: 'stereo_stepped', dt, datum_frame: datumFrame,
-              camera_pair: [cam1, cam2],
-              // Shared physical board geometry (read by both stepped tabs).
-              stepped: {
-                dot_spacing_mm: dotSpacingMm,
-                step_height_mm: stepHeightMm,
-                board_thickness_mm: boardThicknessMm,
-              },
-              // Stereo-only SELECTIONS. Clicks (fiducials/clicked_level/pose_levels) are NOT
-              // persisted here — they live in the sidecar inputs.mat and restore via
-              // restoreSequence (config holds only what you type/select before detecting).
-              stepped_stereo: {
-                stereo_config: stereoConfig,
-                model_type: modelType,
-                fix_k2: fixK2,
-              },
-            },
+            calibration: { calibration_sources: calibrationSources, active: 'stereo_stepped' },
           }),
         });
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-      // The path is now persisted; if it was an in-place edit of the current source
-      // directory, clear stale sequence/overlay state and reload for the new directory
-      // (mirrors the source/pair-change effects above).
       const currentPath = calibrationSources[sourcePathIdx] ?? '';
-      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+      const pathEdited = configLoadedRef.current && currentPath !== loadedSourcePathRef.current;
+      // Sidecars are per-source: never write the form into a source it wasn't
+      // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
+      if (!pathEdited && settingsReadyRef.current) {
+        try {
+          await fetch('/backend/calibration/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source_path_idx: sourcePathIdx,
+              settings: {
+                image: {
+                  image_format: imageFormat,
+                  image_type: imageType,
+                  // null when unset (dt idiom) — never persist the UI fallback
+                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                  use_camera_subfolders: useCameraSubfolders,
+                  camera_subfolders: cameraSubfolders,
+                },
+                rig: {
+                  camera_pair: [cam1, cam2],
+                  dt: numOrNull(dt),
+                  datum_frame: datumFrame,
+                  interpolator,
+                  piv_type: pivType,
+                },
+                methods: {
+                  // Shared physical board geometry (read by both stepped tabs).
+                  stepped: {
+                    dot_spacing_mm: numOrNull(dotSpacingMm),
+                    step_height_mm: numOrNull(stepHeightMm),
+                    board_thickness_mm: numOrNull(boardThicknessMm),
+                  },
+                  // Stereo-only SELECTIONS. Clicks (fiducials/clicked_level/pose_levels)
+                  // are NOT settings — they live in the sidecar inputs.mat and restore
+                  // via restoreSequence.
+                  stepped_stereo: {
+                    stereo_config: stereoConfig,
+                    model_type: modelType,
+                    fix_k2: fixK2,
+                  },
+                },
+              },
+            }),
+          });
+        } catch (e) {
+          console.error('Failed to save calibration settings:', e);
+        }
+      }
+      if (pathEdited) {
+        // In-place edit of the current source path: clear stale sequence/overlay
+        // state and rehydrate model + settings from the new directory (mirrors the
+        // source/pair-change effects above).
         loadedSourcePathRef.current = currentPath;
         resetSourceState();
         loadModelRef.current?.();
+        loadSettings(sourcePathIdx);
       }
       validateImages();
     }, 500);
   }, [
     imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders,
     cameraSubfolders, dotSpacingMm, stepHeightMm, boardThicknessMm, dt, datumFrame,
-    cam1, cam2, stereoConfig, modelType, fixK2,
-    validateImages, resetSourceState,
+    interpolator, pivType, cam1, cam2, stereoConfig, modelType, fixK2, sourcePathIdx,
+    loadSettings, validateImages, resetSourceState,
   ]);
 
   useEffect(() => {
@@ -698,6 +786,9 @@ export function useStereoSteppedCalibration(
         stereo_config: stereoConfig,
         model_type: modelType,
         fix_k2: fixK2 && frameTotal() < 3 && modelType === 'pinhole',
+        // Generate stamps dt into the model record; empty is omitted so the
+        // backend falls to the saved rig.dt or fails loudly (never a default).
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
         cameras: {
           [String(cam1)]: {
             fiducials: fiducials[cam1],
@@ -719,6 +810,7 @@ export function useStereoSteppedCalibration(
         stereo_config: stereoConfig,
         model_type: modelType,
         fix_k2: fixK2 && frameTotal() < 3 && modelType === 'pinhole',
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
       };
     }
 
@@ -761,14 +853,15 @@ export function useStereoSteppedCalibration(
           model_path: done.model_path,
         });
         setHasSidecar(true);
-        loadModel(done.stereo_config);
+        // via the ref: loadModel is declared below this callback
+        loadModelRef.current?.(done.stereo_config);
       }
     } catch (e) {
       setFitJobStatus({ status: 'failed', error: String(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sequenceId, hasSidecar, cam1, cam2, sourcePathIdx, fiducials, clickedLevel, poseLevels,
-      sequencePoses, stereoConfig, modelType, fixK2, frameTotal, buildPoseLevels, pollJob]);
+      sequencePoses, stereoConfig, modelType, fixK2, frameTotal, dt, buildPoseLevels, pollJob]);
 
   // ---------- Load the saved stereo model (generic calibration route) ----------
   // `resolvedConfig` (if given) carries the resolved same-side/transmission from a
@@ -805,9 +898,9 @@ export function useStereoSteppedCalibration(
         // Seed geometry from the model (self-describing sidecar) rather than config.
         const geo = data.geometry;
         if (geo) {
-          if (geo.dot_spacing_mm) setDotSpacingMm(geo.dot_spacing_mm);
-          if (geo.step_height_mm) setStepHeightMm(geo.step_height_mm);
-          if (geo.board_thickness_mm) setBoardThicknessMm(geo.board_thickness_mm);
+          if (geo.dot_spacing_mm) setDotSpacingMm(String(geo.dot_spacing_mm));
+          if (geo.step_height_mm) setStepHeightMm(String(geo.step_height_mm));
+          if (geo.board_thickness_mm) setBoardThicknessMm(String(geo.board_thickness_mm));
         }
       } else {
         // No model yet is the normal first-use state — not an error.
@@ -940,7 +1033,9 @@ export function useStereoSteppedCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, dt, interpolator,
+          camera_pair: [cam1, cam2], type_name: typeName, interpolator,
+          // Empty dt is omitted: apply falls back to the model-stamped dt.
+          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
       });
@@ -1073,6 +1168,7 @@ export function useStereoSteppedCalibration(
     // Board geometry
     dotSpacingMm, setDotSpacingMm, stepHeightMm, setStepHeightMm,
     boardThicknessMm, setBoardThicknessMm, dt, setDt,
+    pivType, setPivType,
 
     // Sequence controls
     datumFrame, setDatumFrame,
