@@ -118,13 +118,21 @@ export const ARUCO_DICTS = [
 
 const BOARD = 'charuco';
 
+/** Parse a numeric form field; null when empty/invalid (the field is unset). */
+const numOrNull = (s: string): number | null => {
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : null;
+};
+
 /**
  * ChArUco calibration on the calibration (pinhole, no-coordinate-flip) backend.
  *
  * Mirrors `useDotboardCalibration`: the calibration `generate_model` is synchronous,
  * so we synthesise the v1 `JobStatus`/`MultiCameraJobStatus` around the awaited call.
- * Image-source config persists to `config.calibration`; board params to
- * `config.calibration.charuco`. The optional world frame is passed as `clicks`.
+ * Only the source list + active method persist to `config.calibration`; image
+ * config, rig (dt/datum/piv_type) and board params persist to the per-source
+ * settings sidecar via GET/POST `/calibration/settings`. The optional world
+ * frame is passed as `clicks`. dt and board geometry have NO frontend defaults.
  */
 export function useChArUcoCalibration(
   cameraOptions: number[],
@@ -134,25 +142,31 @@ export function useChArUcoCalibration(
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(1);
 
-  // Image config (persists to config.calibration)
-  const [imageFormat, setImageFormat] = useState('calib%05d.tif');
+  // Image config (persists to the per-source settings sidecar; initial values are
+  // pre-hydration placeholders only — the server-seeded GET is authoritative)
+  const [imageFormat, setImageFormat] = useState('');
   const [imageType, setImageType] = useState('standard');
-  const [numImages, setNumImages] = useState<string>("10");
+  // '' = unset: n_views is optional (backend frame-count auto-detect); the
+  // frameTotal() 10-fallback is UI-only and never persisted.
+  const [numImages, setNumImages] = useState<string>('');
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration.charuco) — kept as strings for inputs.
-  const [squaresH, setSquaresH] = useState<string>("10");
-  const [squaresV, setSquaresV] = useState<string>("7");
-  const [squareSize, setSquareSize] = useState<string>("0.03");  // meters
-  const [markerRatio, setMarkerRatio] = useState<string>("0.5");
+  // Board params (persist to the settings sidecar) — strings for inputs; board
+  // geometry (squares/size) and dt have NO default: empty = unset, fail loud.
+  const [squaresH, setSquaresH] = useState<string>('');
+  const [squaresV, setSquaresV] = useState<string>('');
+  const [squareSize, setSquareSize] = useState<string>('');  // meters
+  const [markerRatio, setMarkerRatio] = useState<string>('');
   const [arucoDict, setArucoDict] = useState<string>("DICT_4X4_1000");
-  const [minCorners, setMinCorners] = useState<string>("6");
-  const [dt, setDt] = useState<string>("1.0");
+  const [minCorners, setMinCorners] = useState<string>('');
+  const [dt, setDt] = useState<string>('');
   const [datumFrame, setDatumFrame] = useState<string>("1");
   // Camera-model type: pinhole (3D) or polynomial (single-plane). Planar tabs only.
   const [modelType, setModelType] = useState<'pinhole' | 'polynomial'>('pinhole');
+  // PIV result type the apply step targets (rig.piv_type, shared across tabs).
+  const [pivType, setPivType] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // Validation
   const [validation, setValidation] = useState<CharucoValidationResult | null>(null);
@@ -184,15 +198,25 @@ export function useChArUcoCalibration(
   // Latest loadModel — the debounced saveConfig reloads through this ref because
   // loadModel is defined below it (can't be a saveConfig dependency).
   const loadModelRef = useRef<(() => Promise<unknown>) | null>(null);
+  // False while the form is (re)hydrating from a source's sidecar. The debounced
+  // save must never write the form into a source it wasn't hydrated from.
+  const settingsReadyRef = useRef(false);
+  // Monotonic settings-load sequence; a stale response must not overwrite a newer load.
+  const settingsSeqRef = useRef(0);
 
-  const boardParams = useCallback(() => ({
-    squares_h: parseInt(squaresH) || 10,
-    squares_v: parseInt(squaresV) || 7,
-    square_size: parseFloat(squareSize) || 0.03,
-    marker_ratio: parseFloat(markerRatio) || 0.5,
-    aruco_dict: arucoDict,
-    min_corners: parseInt(minCorners) || 6,
-  }), [squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
+  // Request-level board params: only fields the user has actually set. Empty
+  // fields are OMITTED so the backend falls through to the sidecar value, and a
+  // missing value everywhere raises the actionable geometry error.
+  const boardParams = useCallback(() => {
+    const p: Record<string, unknown> = {};
+    const sh = numOrNull(squaresH); if (sh != null) p.squares_h = sh;
+    const sv = numOrNull(squaresV); if (sv != null) p.squares_v = sv;
+    const ss = numOrNull(squareSize); if (ss != null) p.square_size = ss;
+    const mr = numOrNull(markerRatio); if (mr != null) p.marker_ratio = mr;
+    if (arucoDict) p.aruco_dict = arucoDict;
+    const mc = numOrNull(minCorners); if (mc != null) p.min_corners = mc;
+    return p;
+  }, [squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
 
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
   const datumFrameNum = useCallback(() => parseInt(datumFrame) || 1, [datumFrame]);
@@ -217,35 +241,70 @@ export function useChArUcoCalibration(
     }
   }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal]);
 
-  // Load config on mount, then validate.
+  // Hydrate the form from a loaded (or server-seeded) settings dict. Every field
+  // is present in the response (template + seed) — no frontend fallback defaults.
+  const applySettings = useCallback((s: any) => {
+    const img = s.image || {};
+    setImageFormat(img.image_format ?? '');
+    if (img.image_type) setImageType(img.image_type);
+    setNumImages(img.n_views == null ? '' : String(img.n_views));
+    setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
+    if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
+    const rig = s.rig || {};
+    setDt(rig.dt == null ? '' : String(rig.dt));
+    if (rig.datum_frame != null) setDatumFrame(String(rig.datum_frame));
+    if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setPivType(rig.piv_type);
+    const ch = s.methods?.charuco || {};
+    setSquaresH(ch.squares_h == null ? '' : String(ch.squares_h));
+    setSquaresV(ch.squares_v == null ? '' : String(ch.squares_v));
+    setSquareSize(ch.square_size == null ? '' : String(ch.square_size));
+    setMarkerRatio(ch.marker_ratio == null ? '' : String(ch.marker_ratio));
+    if (ch.aruco_dict) setArucoDict(ch.aruco_dict);
+    setMinCorners(ch.min_corners == null ? '' : String(ch.min_corners));
+    if (ch.model_type === 'pinhole' || ch.model_type === 'polynomial') setModelType(ch.model_type);
+  }, []);
+
+  // Fetch the per-source settings sidecar (server seeds when absent; GET never
+  // writes) and hydrate the form.
+  const loadSettings = useCallback(async (idx: number) => {
+    settingsReadyRef.current = false;
+    const seq = ++settingsSeqRef.current;
+    try {
+      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
+      const data = await res.json();
+      if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+      if (!res.ok || !data.settings) {
+        // Guard stays CLOSED: the form still holds another source's values and
+        // an open guard would let the debounced save write them into THIS
+        // source's sidecar. Surface the failure instead of console-only.
+        setModelLoadError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        return;
+      }
+      applySettings(data.settings);
+      // A save scheduled before/during hydration captured the OLD form —
+      // cancel it; the hydrated state commit reschedules a fresh one.
+      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+      settingsReadyRef.current = true;
+    } catch (e) {
+      if (seq !== settingsSeqRef.current) return;
+      setModelLoadError(`Failed to load calibration settings: ${String(e)}`);
+    }
+  }, [applySettings]);
+
+  // Load the source list (config pointer) + the initial source's settings on mount,
+  // then validate.
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch('/backend/config');
         if (res.ok) {
-          const cfg = await res.json();
-          const cal = cfg.calibration || {};
-          if (cal.image_format) setImageFormat(cal.image_format);
-          if (cal.image_type) setImageType(cal.image_type);
-          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
+          const cal = (await res.json()).calibration || {};
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
-          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-          const c2 = cfg.calibration || {};
-          const ch = c2.charuco || {};
-          if (ch.squares_h !== undefined) setSquaresH(String(ch.squares_h));
-          if (ch.squares_v !== undefined) setSquaresV(String(ch.squares_v));
-          if (ch.square_size !== undefined) setSquareSize(String(ch.square_size));
-          if (ch.marker_ratio !== undefined) setMarkerRatio(String(ch.marker_ratio));
-          if (ch.aruco_dict) setArucoDict(ch.aruco_dict);
-          if (ch.min_corners !== undefined) setMinCorners(String(ch.min_corners));
-          if (ch.model_type === 'polynomial' || ch.model_type === 'pinhole') setModelType(ch.model_type);
-          if (c2.dt) setDt(String(c2.dt));
-          if (c2.datum_frame) setDatumFrame(String(c2.datum_frame));
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      await loadSettings(0);
       configLoadedRef.current = true;
       setConfigLoaded(true);
       validateImages();
@@ -254,7 +313,15 @@ export function useChArUcoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist config (debounced), then validate.
+  // Rehydrate from the newly selected source's sidecar (settings are per-source).
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    loadSettings(sourcePathIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx]);
+
+  // Persist (debounced): pointer keys to config.yaml, everything else to the
+  // per-source settings sidecar. Then validate.
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
@@ -263,34 +330,66 @@ export function useChArUcoCalibration(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            calibration: {
-              image_format: imageFormat,
-              image_type: imageType,
-              n_views: frameTotal(),
-              calibration_sources: calibrationSources,
-              use_camera_subfolders: useCameraSubfolders,
-              camera_subfolders: cameraSubfolders,
-              active: BOARD, dt: parseFloat(dt) || 1.0, datum_frame: datumFrameNum(),
-              charuco: { ...boardParams(), model_type: modelType },
-            },
+            calibration: { calibration_sources: calibrationSources, active: BOARD },
           }),
         });
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-      // The path is now persisted; if it was an in-place edit of the current source
-      // directory, clear the stale model/overlay and reload for the new directory.
       const currentPath = calibrationSources[sourcePathIdx] ?? '';
-      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+      const pathEdited = configLoadedRef.current && currentPath !== loadedSourcePathRef.current;
+      // Sidecars are per-source: never write the form into a source it wasn't
+      // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
+      if (!pathEdited && settingsReadyRef.current) {
+        try {
+          await fetch('/backend/calibration/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source_path_idx: sourcePathIdx,
+              settings: {
+                image: {
+                  image_format: imageFormat,
+                  image_type: imageType,
+                  // null when unset (dt idiom) — never persist the UI fallback
+                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                  use_camera_subfolders: useCameraSubfolders,
+                  camera_subfolders: cameraSubfolders,
+                },
+                rig: { camera, dt: numOrNull(dt), datum_frame: datumFrameNum(), piv_type: pivType },
+                methods: {
+                  charuco: {
+                    squares_h: numOrNull(squaresH),
+                    squares_v: numOrNull(squaresV),
+                    square_size: numOrNull(squareSize),
+                    marker_ratio: numOrNull(markerRatio),
+                    aruco_dict: arucoDict,
+                    min_corners: numOrNull(minCorners),
+                    model_type: modelType,
+                  },
+                },
+              },
+            }),
+          });
+        } catch (e) {
+          console.error('Failed to save calibration settings:', e);
+        }
+      }
+      if (pathEdited) {
+        // In-place edit of the current source path: clear the stale model/overlay
+        // and rehydrate model + settings from the new directory.
         loadedSourcePathRef.current = currentPath;
         setCameraModel(null);
         setDetections({});
         setModelLoadError(null);
         loadModelRef.current?.();
+        loadSettings(sourcePathIdx);
       }
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrameNum, boardParams, modelType, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders,
+      camera, dt, datumFrameNum, pivType, squaresH, squaresV, squareSize, markerRatio, arucoDict,
+      minCorners, modelType, sourcePathIdx, loadSettings, validateImages]);
 
   useEffect(() => {
     if (!configLoadedRef.current) return;
@@ -352,11 +451,14 @@ export function useChArUcoCalibration(
         model_type: modelType,
         board_params: boardParams(), datum_frame: datumFrameNum(), frame_total: frameTotal(),
         image_format: imageFormat, image_type: imageType,
+        // Generate stamps dt into the model record; empty is omitted so the
+        // backend falls to the saved rig.dt or fails loudly (never a default).
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
         clicks: clicks || undefined,
       }),
     });
     return res.json();
-  }, [sourcePathIdx, modelType, boardParams, datumFrameNum, frameTotal, imageFormat, imageType]);
+  }, [sourcePathIdx, modelType, boardParams, datumFrameNum, frameTotal, imageFormat, imageType, dt]);
 
   // Single-camera generate.
   const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
@@ -521,7 +623,9 @@ export function useChArUcoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
-          type_name: typeName, dt: parseFloat(dt) || 1.0,
+          type_name: typeName,
+          // Empty dt is omitted: apply falls back to the model-stamped dt.
+          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
           // Omit active_paths → backend applies to all configured base paths.
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
@@ -582,7 +686,7 @@ export function useChArUcoCalibration(
     squaresH, setSquaresH, squaresV, setSquaresV, squareSize, setSquareSize,
     markerRatio, setMarkerRatio, arucoDict, setArucoDict, minCorners, setMinCorners,
     dt, setDt, datumFrame, setDatumFrame,
-    modelType, setModelType,
+    modelType, setModelType, pivType, setPivType,
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',

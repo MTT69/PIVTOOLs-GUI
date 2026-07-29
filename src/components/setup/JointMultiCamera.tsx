@@ -33,6 +33,9 @@ interface JointMultiCameraProps {
   // Datum frame (1-based) inherited from the page's "Datum Frame" setting — the joint wizard does
   // not re-ask for it.
   datumFrame?: number;
+  // Inter-frame dt (seconds) from the page's Δt field. Generate stamps it into the model
+  // record; null (unset) is omitted so the backend falls to the saved rig.dt or fails loudly.
+  dt?: number | null;
   // Dotboard-only: the global grid needs a clicked datum + per-view anchors, persisted to the
   // sidecar inputs.mat by useJointGridSpec. ChArUco needs none of this (corner ids give the grid).
   dotSpacingMm?: number;
@@ -125,6 +128,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   modelType,
   validationValid,
   datumFrame,
+  dt = null,
   dotSpacingMm = 0,
   calibrateVectors,
   vectorJobStatus,
@@ -254,6 +258,9 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
       image_format: imageFormat,
       image_type: imageType,
       model_type: modelType,
+      // Generate stamps dt into the model record; unset is omitted so the
+      // backend falls to the saved rig.dt or fails loudly (never a default).
+      ...(dt != null ? { dt } : {}),
     };
     if (isDotboard) {
       base.global_grid = grid.specBlock;
@@ -266,7 +273,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
       base.datum_view = charucoDatumView;
     }
     return base;
-  }, [board, sourcePathIdx, cameras, numImages, imageFormat, imageType, modelType, isDotboard,
+  }, [board, sourcePathIdx, cameras, numImages, imageFormat, imageType, modelType, dt, isDotboard,
       charucoDatumView, grid.specBlock, grid.datumCamera, grid.datumView]);
 
   // Preview = detect every image + resolve the live grid, AND cache the datum detection so

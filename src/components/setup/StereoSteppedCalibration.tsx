@@ -161,7 +161,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   } = calibration;
 
   // ---- Local state ----
-  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
   const [fiducialSelectMode, setFiducialSelectMode] = useState(false);
   const [fiducialStepIdx, setFiducialStepIdx] = useState(0);
 
@@ -205,30 +204,11 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fiducialSelectMode, fiducialStepIdx, cam1, cam2]);
 
-  // Sync piv_type from config
-  React.useEffect(() => {
-    const pivType = config.calibration?.piv_type;
-    if (pivType === 'instantaneous' || pivType === 'ensemble') {
-      setVectorTypeName(pivType);
-    }
-  }, [config.calibration?.piv_type]);
-
-  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
-    setVectorTypeName(value);
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ calibration: { piv_type: value } }),
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) {
-      console.error('Failed to save piv_type:', e);
-    }
-  };
+  // PIV result type for the apply step — rig.piv_type in the per-source settings
+  // sidecar, hydrated and persisted (debounced) by the calibration hook.
+  const vectorTypeName = calibration.pivType;
+  const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
+    calibration.setPivType(value);
 
   // ---- Active-camera slices ----
   const activeFiducials: FiducialSet = fiducials[activeCam] ?? { origin: null, x_axis: null, y_axis: null };
@@ -669,7 +649,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   type="text" inputMode="numeric"
                   value={dotSpacingInput}
                   onChange={e => setDotSpacingInput(e.target.value)}
-                  onBlur={() => setDotSpacingMm(parseFloat(dotSpacingInput) || 15.0)}
+                  onBlur={() => setDotSpacingMm(dotSpacingInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Physical spacing between dots</p>
               </div>
@@ -679,7 +659,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   type="text" inputMode="numeric"
                   value={stepHeightInput}
                   onChange={e => setStepHeightInput(e.target.value)}
-                  onBlur={() => setStepHeightMm(parseFloat(stepHeightInput) || 3.0)}
+                  onBlur={() => setStepHeightMm(stepHeightInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Height between peak and trough levels</p>
               </div>
@@ -689,7 +669,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   type="text" inputMode="numeric"
                   value={boardThicknessInput}
                   onChange={e => setBoardThicknessInput(e.target.value)}
-                  onBlur={() => setBoardThicknessMm(parseFloat(boardThicknessInput) || 14.8)}
+                  onBlur={() => setBoardThicknessMm(boardThicknessInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Total thickness of the board</p>
               </div>
@@ -699,7 +679,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   type="text" inputMode="numeric"
                   value={dtInput}
                   onChange={e => setDtInput(e.target.value)}
-                  onBlur={() => setDt(parseFloat(dtInput) || 1.0)}
+                  onBlur={() => setDt(dtInput)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Time step between frames</p>
               </div>

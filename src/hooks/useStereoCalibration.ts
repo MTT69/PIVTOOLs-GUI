@@ -113,11 +113,19 @@ export interface StereoReconstructJobStatus {
 
 const BOARD = 'dotboard';
 
+/** Parse a numeric form field; null when empty/invalid (the field is unset). */
+const numOrNull = (s: string): number | null => {
+  const v = parseFloat(s);
+  return Number.isFinite(v) ? v : null;
+};
+
 /**
  * Stereo dotboard calibration on the calibration (pinhole, no-coordinate-flip)
  * backend. Mirrors `useDotboardCalibration` (synchronous generate, on-demand
- * overlay, config split) for two cameras: each is fitted as DaVis pinhole and the
- * relative pose derived. The world frame is defined on camera 1 only (clicks).
+ * overlay, settings-sidecar persistence) for two cameras: each is fitted as
+ * DaVis pinhole and the relative pose derived. The world frame is defined on
+ * camera 1 only (clicks). Board geometry lives in the SHARED `methods.dotboard`
+ * block (one physical board, mono + stereo).
  */
 export function useStereoCalibration(
   cameraOptions: number[],
@@ -129,22 +137,30 @@ export function useStereoCalibration(
   const [cam2, setCam2] = useState(2);
   const [activeCam, setActiveCam] = useState<number>(1);
 
-  // Image config (persists to config.calibration)
-  const [imageFormat, setImageFormat] = useState('calib%05d.tif');
+  // Image config (persists to the per-source settings sidecar; initial values are
+  // pre-hydration placeholders only — the server-seeded GET is authoritative)
+  const [imageFormat, setImageFormat] = useState('');
   const [imageType, setImageType] = useState('standard');
-  const [numImages, setNumImages] = useState<string>("10");
+  // '' = unset: n_views is optional (backend frame-count auto-detect); the
+  // frameTotal() 10-fallback is UI-only and never persisted.
+  const [numImages, setNumImages] = useState<string>('');
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
 
-  // Board params (persist to config.calibration.dotboard)
-  const [dotSpacingMm, setDotSpacingMm] = useState(15.0);
-  const [dt, setDt] = useState(1.0);
+  // Board params + rig (persist to the settings sidecar). dt and dot spacing are
+  // strings with NO default — empty means unset and generate fails loudly.
+  const [dotSpacingMm, setDotSpacingMm] = useState<string>('');
+  const [dt, setDt] = useState<string>('');
   const [interpolator, setInterpolator] = useState<'cubic' | 'lanczos'>('lanczos');
   const [datumFrame, setDatumFrame] = useState(1);
   // Fix radial k2 = 0 for few-view (<3 frame) fits, where k2 is unconstrained and
   // runs away (degenerate focal/angle). Defaults ON; only sent when <3 frames.
+  // Context-dependent, so it is NOT templated server-side — hydrated only when a
+  // stored value exists, and pinned on the first save.
   const [fixK2, setFixK2] = useState(true);
+  // PIV result type the apply step targets (rig.piv_type, shared across tabs).
+  const [pivType, setPivType] = useState<'instantaneous' | 'ensemble'>('instantaneous');
 
   // Validation
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
@@ -177,8 +193,18 @@ export function useStereoCalibration(
   // Latest loadModel — the debounced saveConfig reloads through this ref because
   // loadModel is defined below it (can't be a saveConfig dependency).
   const loadModelRef = useRef<(() => Promise<unknown>) | null>(null);
+  // False while the form is (re)hydrating from a source's sidecar. The debounced
+  // save must never write the form into a source it wasn't hydrated from.
+  const settingsReadyRef = useRef(false);
+  // Monotonic settings-load sequence; a stale response must not overwrite a newer load.
+  const settingsSeqRef = useRef(0);
 
-  const boardParams = useCallback(() => ({ dot_spacing_mm: dotSpacingMm }), [dotSpacingMm]);
+  // Request-level board params: an empty field is OMITTED so the backend falls
+  // through to the sidecar value (missing everywhere raises the geometry error).
+  const boardParams = useCallback(() => {
+    const v = numOrNull(dotSpacingMm);
+    return v == null ? {} : { dot_spacing_mm: v };
+  }, [dotSpacingMm]);
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
   // Validate one camera via calibration (all formats).
@@ -218,32 +244,70 @@ export function useStereoCalibration(
     }
   }, [cam1, cam2, validateOne]);
 
-  // Load config on mount, then validate.
+  // Hydrate the form from a loaded (or server-seeded) settings dict. fix_k2 is
+  // hydrated only when explicitly stored — its default is contextual (ON here).
+  const applySettings = useCallback((s: any) => {
+    const img = s.image || {};
+    setImageFormat(img.image_format ?? '');
+    if (img.image_type) setImageType(img.image_type);
+    setNumImages(img.n_views == null ? '' : String(img.n_views));
+    setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
+    if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
+    const rig = s.rig || {};
+    setDt(rig.dt == null ? '' : String(rig.dt));
+    if (rig.datum_frame != null) setDatumFrame(Number(rig.datum_frame));
+    if (rig.interpolator === 'cubic' || rig.interpolator === 'lanczos') setInterpolator(rig.interpolator);
+    if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setPivType(rig.piv_type);
+    if (Array.isArray(rig.camera_pair) && rig.camera_pair.length >= 2) {
+      setCam1(Number(rig.camera_pair[0]));
+      setCam2(Number(rig.camera_pair[1]));
+    }
+    const dot = s.methods?.dotboard || {};
+    setDotSpacingMm(dot.dot_spacing_mm == null ? '' : String(dot.dot_spacing_mm));
+    if (dot.fix_k2 !== undefined && dot.fix_k2 !== null) setFixK2(Boolean(dot.fix_k2));
+  }, []);
+
+  // Fetch the per-source settings sidecar (server seeds when absent; GET never
+  // writes) and hydrate the form.
+  const loadSettings = useCallback(async (idx: number) => {
+    settingsReadyRef.current = false;
+    const seq = ++settingsSeqRef.current;
+    try {
+      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
+      const data = await res.json();
+      if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+      if (!res.ok || !data.settings) {
+        // Guard stays CLOSED: the form still holds another source's values and
+        // an open guard would let the debounced save write them into THIS
+        // source's sidecar. Surface the failure instead of console-only.
+        setDetectError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        return;
+      }
+      applySettings(data.settings);
+      // A save scheduled before/during hydration captured the OLD form —
+      // cancel it; the hydrated state commit reschedules a fresh one.
+      if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
+      settingsReadyRef.current = true;
+    } catch (e) {
+      if (seq !== settingsSeqRef.current) return;
+      setDetectError(`Failed to load calibration settings: ${String(e)}`);
+    }
+  }, [applySettings]);
+
+  // Load the source list (config pointer) + the initial source's settings on mount,
+  // then validate.
   useEffect(() => {
     const load = async () => {
       try {
         const res = await fetch('/backend/config');
         if (res.ok) {
-          const cfg = await res.json();
-          const cal = cfg.calibration || {};
-          if (cal.image_format) setImageFormat(cal.image_format);
-          if (cal.image_type) setImageType(cal.image_type);
-          if (cal.n_views ?? cal.num_images) setNumImages(String(cal.n_views ?? cal.num_images));
+          const cal = (await res.json()).calibration || {};
           if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-          if (cal.use_camera_subfolders !== undefined) setUseCameraSubfolders(cal.use_camera_subfolders);
-          if (cal.camera_subfolders !== undefined) setCameraSubfolders(cal.camera_subfolders);
-          const c2 = cfg.calibration || {};
-          if (c2.dotboard?.dot_spacing_mm) setDotSpacingMm(c2.dotboard.dot_spacing_mm);
-          if (c2.dotboard?.fix_k2 !== undefined) setFixK2(c2.dotboard.fix_k2);
-          if (c2.dt) setDt(c2.dt);
-          if (c2.datum_frame) setDatumFrame(c2.datum_frame);
-          if (c2.camera_pair && c2.camera_pair.length >= 2) {
-            setCam1(c2.camera_pair[0]); setCam2(c2.camera_pair[1]);
-          }
         }
       } catch (e) {
         console.error('Failed to load config:', e);
       }
+      await loadSettings(0);
       configLoadedRef.current = true;
       setConfigLoaded(true);
       validateImages();
@@ -252,7 +316,15 @@ export function useStereoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist config (debounced), then validate.
+  // Rehydrate from the newly selected source's sidecar (settings are per-source).
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    loadSettings(sourcePathIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx]);
+
+  // Persist (debounced): pointer keys to config.yaml, everything else to the
+  // per-source settings sidecar. Then validate.
   const saveConfig = useCallback(() => {
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
@@ -261,35 +333,64 @@ export function useStereoCalibration(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            calibration: {
-              image_format: imageFormat,
-              image_type: imageType,
-              n_views: frameTotal(),
-              calibration_sources: calibrationSources,
-              use_camera_subfolders: useCameraSubfolders,
-              camera_subfolders: cameraSubfolders,
-              active: 'stereo_dotboard', dt, datum_frame: datumFrame,
-              camera_pair: [cam1, cam2],
-              dotboard: { dot_spacing_mm: dotSpacingMm, fix_k2: fixK2 },
-            },
+            calibration: { calibration_sources: calibrationSources, active: 'stereo_dotboard' },
           }),
         });
       } catch (e) {
         console.error('Failed to save config:', e);
       }
-      // The path is now persisted; if it was an in-place edit of the current source
-      // directory, clear the stale model/overlay and reload for the new directory.
       const currentPath = calibrationSources[sourcePathIdx] ?? '';
-      if (configLoadedRef.current && currentPath !== loadedSourcePathRef.current) {
+      const pathEdited = configLoadedRef.current && currentPath !== loadedSourcePathRef.current;
+      // Sidecars are per-source: never write the form into a source it wasn't
+      // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
+      if (!pathEdited && settingsReadyRef.current) {
+        try {
+          await fetch('/backend/calibration/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source_path_idx: sourcePathIdx,
+              settings: {
+                image: {
+                  image_format: imageFormat,
+                  image_type: imageType,
+                  // null when unset (dt idiom) — never persist the UI fallback
+                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                  use_camera_subfolders: useCameraSubfolders,
+                  camera_subfolders: cameraSubfolders,
+                },
+                rig: {
+                  camera_pair: [cam1, cam2],
+                  dt: numOrNull(dt),
+                  datum_frame: datumFrame,
+                  interpolator,
+                  piv_type: pivType,
+                },
+                methods: {
+                  dotboard: { dot_spacing_mm: numOrNull(dotSpacingMm), fix_k2: fixK2 },
+                },
+              },
+            }),
+          });
+        } catch (e) {
+          console.error('Failed to save calibration settings:', e);
+        }
+      }
+      if (pathEdited) {
+        // In-place edit of the current source path: clear the stale model/overlay
+        // and rehydrate model + settings from the new directory.
         loadedSourcePathRef.current = currentPath;
         setStereoModel(null);
         setDetectionsCam1({});
         setDetectionsCam2({});
         loadModelRef.current?.();
+        loadSettings(sourcePathIdx);
       }
       validateImages();
     }, 500);
-  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders, dt, datumFrame, dotSpacingMm, fixK2, cam1, cam2, validateImages]);
+  }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders,
+      dt, datumFrame, interpolator, pivType, dotSpacingMm, fixK2, cam1, cam2, sourcePathIdx,
+      loadSettings, validateImages]);
 
   useEffect(() => {
     if (!configLoadedRef.current) return;
@@ -342,6 +443,9 @@ export function useStereoCalibration(
           board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
           image_format: imageFormat, image_type: imageType,
           fix_k2: fixK2 && frameTotal() < 3,
+          // Generate stamps dt into the model record; empty is omitted so the
+          // backend falls to the saved rig.dt or fails loudly (never a default).
+          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
           clicks: clicks || undefined,
           force_redetect: opts?.forceRedetect || undefined,
         }),
@@ -361,7 +465,7 @@ export function useStereoCalibration(
     } catch (e) {
       setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: String(e) });
     }
-  }, [cam1, cam2, sourcePathIdx, boardParams, datumFrame, frameTotal, imageFormat, imageType, fixK2]);
+  }, [cam1, cam2, sourcePathIdx, boardParams, datumFrame, frameTotal, imageFormat, imageType, fixK2, dt]);
 
   // Load the saved stereo model for the current pair (auto-called on mount/view change).
   const loadModel = useCallback(async () => {
@@ -373,7 +477,7 @@ export function useStereoCalibration(
         setStereoModel(toStereoModel(data));
         setLoadedWorldFrame(data.world_frame ?? null);
         // Seed geometry from the model (self-describing sidecar) rather than config.
-        if (data.geometry?.dot_spacing_mm) setDotSpacingMm(data.geometry.dot_spacing_mm);
+        if (data.geometry?.dot_spacing_mm) setDotSpacingMm(String(data.geometry.dot_spacing_mm));
         return data;
       }
       // Restore any world-frame picks the sidecar kept (inputs.mat) so a deleted model can be
@@ -477,7 +581,9 @@ export function useStereoCalibration(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, dt, interpolator,
+          camera_pair: [cam1, cam2], type_name: typeName, interpolator,
+          // Empty dt is omitted: apply falls back to the model-stamped dt.
+          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
           // Omit active_paths → backend applies to all configured base paths.
           ...(activePaths ? { active_paths: activePaths } : {}),
         }),
@@ -549,6 +655,7 @@ export function useStereoCalibration(
     cameraSubfolders, setCameraSubfolders,
     dotSpacingMm, setDotSpacingMm, dt, setDt, datumFrame, setDatumFrame,
     fixK2, setFixK2, showFixK2: frameTotal() < 3,
+    pivType, setPivType,
     validation, validating, validateImages,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     reconstructJobStatus, isReconstructing: reconstructJobStatus?.status === 'running' || reconstructJobStatus?.status === 'starting',

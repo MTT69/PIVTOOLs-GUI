@@ -130,14 +130,17 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   // World-frame (coordinate-system x,y) picker — datum frame only (single-camera mono solve).
   const wf = useWorldFrame({
     board: "charuco", camera, sourcePathIdx, datumFrame: parseInt(datumFrame) || 1,
-    boardParams: () => ({
-      squares_h: parseInt(squaresH) || 10,
-      squares_v: parseInt(squaresV) || 9,
-      square_size: parseFloat(squareSize) || 0.03,
-      marker_ratio: parseFloat(markerRatio) || 0.5,
-      aruco_dict: arucoDict,
-      min_corners: parseInt(minCorners) || 6,
-    }),
+    // Empty fields are omitted — the backend falls to the sidecar value or errors.
+    boardParams: () => {
+      const p: Record<string, unknown> = {};
+      const sh = parseInt(squaresH); if (Number.isFinite(sh)) p.squares_h = sh;
+      const sv = parseInt(squaresV); if (Number.isFinite(sv)) p.squares_v = sv;
+      const ss = parseFloat(squareSize); if (Number.isFinite(ss)) p.square_size = ss;
+      const mr = parseFloat(markerRatio); if (Number.isFinite(mr)) p.marker_ratio = mr;
+      if (arucoDict) p.aruco_dict = arucoDict;
+      const mc = parseInt(minCorners); if (Number.isFinite(mc)) p.min_corners = mc;
+      return p;
+    },
     imageFormat, imageType,
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
@@ -153,35 +156,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
   // Local state
   const [showImageViewer, setShowImageViewer] = useState(false);
-  const [vectorTypeName, setVectorTypeName] = useState<'instantaneous' | 'ensemble'>('instantaneous');
-
-  // Load piv_type from config on mount
-  React.useEffect(() => {
-    const pivType = config.calibration?.piv_type;
-    if (pivType === 'instantaneous' || pivType === 'ensemble') {
-      setVectorTypeName(pivType);
-    }
-  }, [config.calibration?.piv_type]);
-
-  // Save piv_type when changed
-  const handleVectorTypeChange = async (value: 'instantaneous' | 'ensemble') => {
-    setVectorTypeName(value);
-    try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          calibration: { piv_type: value }
-        })
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) {
-      console.error('Failed to save piv_type:', e);
-    }
-  };
+  // PIV result type for the apply step — rig.piv_type in the per-source settings
+  // sidecar, hydrated and persisted (debounced) by the calibration hook.
+  const vectorTypeName = calibration.pivType;
+  const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
+    calibration.setPivType(value);
 
   // Convert detections to format expected by CalibrationImageViewer
   const savedDetections = useMemo((): Record<number, FrameDetectionData> | undefined => {
@@ -549,6 +528,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               modelType={modelType}
               validationValid={!!validation?.valid}
               datumFrame={parseInt(datumFrame) || 1}
+              dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
               vectorJobStatus={vectorJobStatus}
               isVectorCalibrating={isVectorCalibrating}

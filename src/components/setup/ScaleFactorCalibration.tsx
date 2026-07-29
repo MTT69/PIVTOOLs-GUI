@@ -44,29 +44,25 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const c2 = useCalibrationApi();
 
   // --- Source + image selection -------------------------------------------------
+  // The source LIST is the config pointer; everything else hydrates from the
+  // per-source settings sidecar (GET /calibration/settings) below.
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(cameraOptions[0] || 1);
-  const [imageFormat, setImageFormat] = useState<string>(
-    config?.calibration?.image_format || "calib%05d.tif");
-  const [imageType, setImageType] = useState<string>(
-    config?.calibration?.image_type || "standard");
+  const [imageFormat, setImageFormat] = useState<string>('');
+  const [imageType, setImageType] = useState<string>('standard');
   const [calibrationSources, setCalibrationSources] = useState<string[]>(
     () => config?.calibration?.calibration_sources || []);
-  const [useCameraSubfolders, setUseCameraSubfolders] = useState<boolean>(
-    Boolean(config?.calibration?.use_camera_subfolders));
-  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>(
-    () => config?.calibration?.camera_subfolders || []);
+  const [useCameraSubfolders, setUseCameraSubfolders] = useState<boolean>(false);
+  const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [frameIdx, setFrameIdx] = useState(1);
   // Image-less mode: a CLI-made model (or one whose images moved) can be loaded,
   // edited numerically and re-generated without any calibration images on disk —
   // the backend takes the image size from the existing model (explicit use_image flag).
   const [useImages, setUseImages] = useState(true);
 
-  // --- Scale-factor params ------------------------------------------------------
-  const [pxPerMm, setPxPerMm] = useState<string>(
-    String(config?.calibration?.scale_factor?.px_per_mm ?? 1.0));
-  const [dt, setDt] = useState<string>(
-    String(config?.calibration?.scale_factor?.dt ?? 1.0));
+  // --- Scale-factor params (persist to the sidecar; NO frontend defaults) --------
+  const [pxPerMm, setPxPerMm] = useState<string>('');
+  const [dt, setDt] = useState<string>('');
   const [originPx, setOriginPx] = useState<[number, number] | null>(null);
   const [xDir, setXDir] = useState<AxisDirX>("right");
   const [yDir, setYDir] = useState<AxisDirY>("up");
@@ -101,28 +97,23 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [result, setResult] = useState<any>(null);
   const [applyJob, setApplyJob] = useState<any>(null);
 
-  // --- Vector calibration type (shared calibration.piv_type key) -----------------
+  // --- Vector calibration type (rig.piv_type in the settings sidecar) ------------
   const [vectorTypeName, setVectorTypeName] = useState<"instantaneous" | "ensemble">("instantaneous");
-  useEffect(() => {
-    const pivType = config?.calibration?.piv_type;
-    if (pivType === "instantaneous" || pivType === "ensemble") setVectorTypeName(pivType);
-  }, [config?.calibration?.piv_type]);
   const handleVectorTypeChange = useCallback(async (value: "instantaneous" | "ensemble") => {
     setVectorTypeName(value);
     try {
-      const res = await fetch("/backend/update_config", {
+      await fetch("/backend/calibration/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ calibration: { piv_type: value } }),
+        body: JSON.stringify({
+          source_path_idx: sourcePathIdx,
+          settings: { rig: { piv_type: value } },
+        }),
       });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
     } catch (e) {
       console.error("Failed to save piv_type:", e);
     }
-  }, [config, updateConfig]);
+  }, [sourcePathIdx]);
 
   // --- Source path validation (folder/pattern "Did you mean" suggestions) -------
   interface SFValidation {
@@ -137,9 +128,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [validation, setValidation] = useState<SFValidation | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // --- Multi-camera global coordinates (shared chain) ---------------------------
-  const gcSources = calibrationSources.length ? calibrationSources : sourcePaths;
-  const gc = useGlobalCoordinates(config, updateConfig, cameraOptions, gcSources);
+  // --- Multi-camera global coordinates (shared chain, per-source sidecar) -------
+  const gc = useGlobalCoordinates(cameraOptions, sourcePathIdx);
   const gcViewerTarget = getGlobalCoordViewerTarget(gc);
   const gcIsSelecting = gc.selectionMode !== "none";
 
@@ -151,39 +141,118 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     () => ({ board: "scale_factor", camera, source_path_idx: sourcePathIdx }),
     [camera, sourcePathIdx]);
 
-  // --- Persist image/source config (shared calibration.* keys the other tabs use) ---
-  // CalibrationImageViewer fetches frames WITHOUT image_format/image_type params — the
-  // backend reads them (and calibration_sources / camera subfolders) from config, so
-  // edits must land there before the viewer or validation can see them.
-  const hydrated = useRef(false);
+  // --- Hydrate from the per-source settings sidecar ------------------------------
+  // CalibrationImageViewer fetches frames WITHOUT image_format/image_type params —
+  // the backend reads them from the SIDECAR, so edits must land there before the
+  // viewer or validation can see them. Hydration is per-source; `settingsEpoch`
+  // bumps after each load so the persist effect below re-fires once (echo save
+  // persists a fresh seed), and `settingsReadyRef` blocks writes mid-hydration.
+  const settingsReadyRef = useRef(false);
+  const settingsSeqRef = useRef(0);
+  const [settingsEpoch, setSettingsEpoch] = useState(0);
+  // The source directory the displayed form/model belongs to — lets the persist
+  // effect detect an in-place path edit (same index, new string) and rehydrate
+  // instead of writing the old source's settings into the new directory.
+  const loadedSourcePathRef = useRef<string>('');
+  // Bumped to force a rehydrate + model reload after an in-place path edit
+  // (sourcePathIdx alone doesn't change in that case).
+  const [sourceReloadTick, setSourceReloadTick] = useState(0);
   useEffect(() => {
-    if (!hydrated.current) { hydrated.current = true; return; }
+    settingsReadyRef.current = false;
+    const seq = ++settingsSeqRef.current;
+    (async () => {
+      try {
+        const res = await fetch(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
+        const data = await res.json();
+        if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+        if (!res.ok || !data.settings) {
+          // Guard stays CLOSED: the form still holds another source's values
+          // and an open guard would let the debounced save write them into
+          // THIS source's sidecar. Surface the failure in the validation panel.
+          setValidation({ valid: false, error: `Failed to load calibration settings: ${data.error ?? res.status}` });
+          return;
+        }
+        const img = data.settings.image || {};
+        setImageFormat(img.image_format ?? '');
+        if (img.image_type) setImageType(img.image_type);
+        setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
+        if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
+        const rig = data.settings.rig || {};
+        setDt(rig.dt == null ? '' : String(rig.dt));
+        if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setVectorTypeName(rig.piv_type);
+        const sf = data.settings.methods?.scale_factor || {};
+        setPxPerMm(sf.px_per_mm == null ? '' : String(sf.px_per_mm));
+        loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
+        settingsReadyRef.current = true;
+        setSettingsEpoch(n => n + 1);
+      } catch (e) {
+        if (seq !== settingsSeqRef.current) return;
+        setValidation({ valid: false, error: `Failed to load calibration settings: ${String(e)}` });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePathIdx, sourceReloadTick]);
+
+  // --- Persist (debounced): source list to config.yaml, the rest to the sidecar ---
+  useEffect(() => {
+    if (!settingsEpoch) return;  // nothing hydrated yet
     const t = setTimeout(async () => {
       try {
-        const res = await fetch("/backend/update_config", {
+        await fetch("/backend/update_config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            calibration: {
-              image_format: imageFormat,
-              image_type: imageType,
-              calibration_sources: calibrationSources,
-              use_camera_subfolders: useCameraSubfolders,
-              camera_subfolders: cameraSubfolders,
-            },
+            calibration: { calibration_sources: calibrationSources },
           }),
         });
-        const json = await res.json();
-        if (res.ok && json.updated?.calibration) {
-          updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-        }
       } catch (e) {
-        console.error("persist calibration image config failed", e);
+        console.error("persist calibration sources failed", e);
+      }
+      // Sidecars are per-source: never write the form into a source it wasn't
+      // hydrated from — an in-place path edit repoints the index at a NEW
+      // directory while the form still shows the old one's values.
+      const currentPath = calibrationSources[sourcePathIdx] ?? '';
+      const pathEdited = currentPath !== loadedSourcePathRef.current;
+      if (!pathEdited && settingsReadyRef.current) {
+        try {
+          await fetch("/backend/calibration/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              source_path_idx: sourcePathIdx,
+              settings: {
+                image: {
+                  image_format: imageFormat,
+                  image_type: imageType,
+                  use_camera_subfolders: useCameraSubfolders,
+                  camera_subfolders: cameraSubfolders,
+                },
+                rig: { dt: (() => { const v = parseFloat(dt); return Number.isFinite(v) ? v : null; })() },
+                methods: {
+                  scale_factor: {
+                    px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
+                  },
+                },
+              },
+            }),
+          });
+        } catch (e) {
+          console.error("persist calibration settings failed", e);
+        }
+      }
+      if (pathEdited) {
+        // The persisted sources list now points elsewhere: drop the stale
+        // model/overlay and rehydrate settings + model from the new directory.
+        loadedSourcePathRef.current = currentPath;
+        setResult(null);
+        restoredFor.current = "";
+        setSourceReloadTick(n => n + 1);
       }
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+  }, [imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders,
+      pxPerMm, dt, settingsEpoch, sourcePathIdx]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
@@ -220,7 +289,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // the PERSISTED config (by index, not the request), so without this the error from a PREVIOUS
   // source / format / subfolder lingers on screen through the persist + re-validate window.
   useEffect(() => {
-    if (!hydrated.current || !useImages) return;
+    if (!settingsReadyRef.current || !useImages) return;
     setValidating(true);
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,7 +319,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pollTimer.current) clearTimeout(pollTimer.current); }, []);
 
-  // --- Restore saved model on camera/source change ------------------------------
+  // --- Restore saved model on camera/source change (or in-place path edit) ------
   const restoredFor = useRef<string>("");
   useEffect(() => {
     const key = `${sourcePathIdx}:${camera}`;
@@ -261,8 +330,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       if (m?.exists && m.model_type === "scale_factor" && Array.isArray(m.origin_px)) {
         setResult(m);
         setOriginPx([Number(m.origin_px[0]), Number(m.origin_px[1])]);
-        setPxPerMm(String(m.px_per_mm));
-        setDt(String(m.dt));
+        // guard: a malformed record must not render the literal "undefined"
+        setPxPerMm(m.px_per_mm == null ? "" : String(m.px_per_mm));
+        setDt(m.dt == null ? "" : String(m.dt));
         // Restore the frame the origin was picked on, so the overlay lands on the
         // same image rather than always frame 1.
         if (m.frame_idx) setFrameIdx(Number(m.frame_idx));
@@ -278,7 +348,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, camera]);
+  }, [sourcePathIdx, camera, sourceReloadTick]);
 
   // --- Click routing ------------------------------------------------------------
   // Receives the camera/frame the viewer attributed the click to (it may be driven to
@@ -351,10 +421,21 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         : "Enter the origin pixel coordinates first.");
       return;
     }
+    // px/mm and dt have no defaults — an unset field is an error, never a 1.0.
+    const px = parseFloat(pxPerMm);
+    const dtVal = parseFloat(dt);
+    if (!Number.isFinite(px) || px <= 0) {
+      c2.setError("Set the scale (px/mm) first.");
+      return;
+    }
+    if (!Number.isFinite(dtVal) || dtVal <= 0) {
+      c2.setError("Set Δt (seconds) first — it is stamped into the model.");
+      return;
+    }
     const data = await c2.generateScaleFactor({
       ...locator(),
-      px_per_mm: parseFloat(pxPerMm) || 1.0,
-      dt: parseFloat(dt) || 1.0,
+      px_per_mm: px,
+      dt: dtVal,
       origin_px: originPx,
       origin_mm: [parseFloat(originMmX) || 0, parseFloat(originMmY) || 0],
       x_dir: xDir, y_dir: yDir, swap_axes: swapAxes,
@@ -369,9 +450,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
   const runApply = useCallback(async () => {
+    const dtVal = parseFloat(dt);
     const started = await c2.startApply({
       board: "scale_factor", stereo: false, source_path_idx: sourcePathIdx,
-      type_name: vectorTypeName, dt: parseFloat(dt) || 1.0,
+      type_name: vectorTypeName,
+      // Empty dt is omitted: apply falls back to the model-stamped dt.
+      ...(Number.isFinite(dtVal) ? { dt: dtVal } : {}),
     });
     if (!started?.job_id) return;
     setApplyJob({ status: "running" });
