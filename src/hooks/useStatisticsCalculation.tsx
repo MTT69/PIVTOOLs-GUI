@@ -4,11 +4,16 @@ import type { DataSourceType } from './useVectorViewer';
 // All valid statistic keys (1:1 mapping with config)
 const ALL_STAT_KEYS = [
   "mean_velocity", "mean_stresses", "mean_tke",
-  "mean_vorticity", "mean_divergence", "mean_peak_height",
+  "mean_vorticity", "mean_divergence",
   "correlation_quality",
   "inst_velocity", "inst_stresses",
   "inst_vorticity", "inst_divergence", "inst_gamma"
 ];
+
+// Mirrors VectorStatisticsProcessor.DIAGNOSTIC_STATISTICS. The quality channels
+// these read survive only in uncalibrated vector files, so an uncalibrated run
+// may request nothing else — the backend rejects anything outside this set.
+const DIAGNOSTIC_STAT_KEYS = ["correlation_quality"];
 
 export interface StatisticsJobDetails {
   status: string;
@@ -260,6 +265,15 @@ export function useStatisticsCalculation(
   const calculateStatistics = async () => {
     setCalculating(true);
 
+    // An uncalibrated run computes diagnostics only. requestedStatistics is
+    // seeded from config and still carries the calibrated selection (whose
+    // checkboxes this panel hides), so send only what the source can produce
+    // rather than letting the backend reject the whole request.
+    const isUncalibratedSource = !!dataSource && dataSource.includes('uncalibrated');
+    const statsToSend = isUncalibratedSource
+      ? requestedStatistics.filter((id: string) => DIAGNOSTIC_STAT_KEYS.includes(id))
+      : requestedStatistics;
+
     try {
       const res = await fetch(`${backendUrl}/statistics/calculate`, {
         method: "POST",
@@ -271,8 +285,16 @@ export function useStatisticsCalculation(
           // (useVectorViewer canCalculateStatistics), so an ensemble dataSource
           // can never reach here.
           type_name: 'instantaneous',
-          source_endpoint: dataSource ? (dataSource.includes('stereo') ? 'stereo' : (dataSource.includes('merged') ? 'merged' : 'regular')) : sourceEndpoint,
-          requested_statistics: requestedStatistics.length > 0 ? requestedStatistics : undefined,
+          source_endpoint: dataSource
+            ? (isUncalibratedSource
+                ? 'uncalibrated'
+                : dataSource.includes('stereo')
+                  ? 'stereo'
+                  : dataSource.includes('merged')
+                    ? 'merged'
+                    : 'regular')
+            : sourceEndpoint,
+          requested_statistics: statsToSend.length > 0 ? statsToSend : undefined,
         }),
       });
 

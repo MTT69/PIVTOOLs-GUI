@@ -209,8 +209,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const canViewMerged = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
   // For unified dropdown: check if current variable is from mean_stats
   const isMeanVar = useMemo(() => type.startsWith('mean:'), [type]);
-  const canCalculateStatistics = useMemo(() => !isUncalibrated && !isEnsemble && !isStatistics && !isMeanVar, [isUncalibrated, isEnsemble, isStatistics, isMeanVar]);
-  const canViewStatistics = useMemo(() => !isUncalibrated && !isEnsemble, [isUncalibrated, isEnsemble]);
+  // Uncalibrated sources are allowed: they run the correlation-quality
+  // diagnostics, which can ONLY be computed there (calibration-apply writes
+  // just ux/uy/b_mask, dropping peak_mag/peak_ratio/nan_reason).
+  const canCalculateStatistics = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
   // hasFrameNavigation: hide frame controls for ensemble, statistics, AND mean variables
   const hasFrameNavigation = useMemo(() => !isEnsemble && !isStatistics && !isMeanVar, [isEnsemble, isStatistics, isMeanVar]);
 
@@ -2219,7 +2221,6 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     canMerge,
     canViewMerged,
     canCalculateStatistics,
-    canViewStatistics,
     hasFrameNavigation,
     // Unified variable dropdown support
     isMeanVar,

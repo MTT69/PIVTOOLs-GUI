@@ -20,8 +20,12 @@ const AVAILABLE_STATISTICS = {
     { id: "mean_divergence", label: "Mean Divergence" },
     { id: "mean_stresses", label: "Stresses" },  // Full stress tensor (uu, vv, uv + ww, uw, vw for stereo)
     { id: "mean_tke", label: "Mean TKE" },
-    { id: "mean_peak_height", label: "Mean Peak Height" },
-    { id: "correlation_quality", label: "Correlation Quality" },  // NaN%/peak_ratio maps + time-series figures
+  ],
+  // Uncalibrated-only: the quality channels (peak_mag, peak_ratio, nan_reason)
+  // exist only in uncalibrated vector files — calibration-apply writes just
+  // ux/uy/b_mask, so these cannot be computed on a calibrated source.
+  diagnostics: [
+    { id: "correlation_quality", label: "Correlation Quality" },  // NaN%/peak_ratio/peak_mag maps + time-series figures
   ],
   instantaneous: [
     { id: "inst_velocity", label: "Inst. Velocity" },
@@ -442,9 +446,18 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     canMerge,
     canViewMerged,
     canCalculateStatistics,
-    canViewStatistics,
     hasFrameNavigation,
   } = useVectorViewer({ backendUrl, config });
+
+  // Which checkbox groups the Statistics/Diagnostics panel offers. Uncalibrated
+  // runs compute correlation quality only — the quality channels exist in no
+  // other tree, and flow statistics in px/frame are not a product we offer.
+  const statGroups = isUncalibrated
+    ? [{ title: "Correlation", stats: AVAILABLE_STATISTICS.diagnostics }]
+    : [
+        { title: "Time-Averaged", stats: AVAILABLE_STATISTICS.timeAveraged },
+        { title: "Instantaneous", stats: AVAILABLE_STATISTICS.instantaneous },
+      ];
 
   // Additional UI state for improved controls
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
@@ -1486,14 +1499,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Statistics - Only for calibrated instantaneous */}
+              {/* Statistics (calibrated) / Diagnostics (uncalibrated) */}
               {canCalculateStatistics && (
                 <Button
                   variant={showStatistics ? "default" : "outline"}
                   onClick={() => setShowStatistics(!showStatistics)}
                   className="flex items-center gap-2"
                 >
-                  Statistics
+                  {isUncalibrated ? "Diagnostics" : "Statistics"}
                   <svg
                     className={`w-4 h-4 transition-transform ${showStatistics ? 'rotate-180' : ''}`}
                     fill="none"
@@ -1616,77 +1629,57 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
               </div>
             )}
 
-            {/* Statistics Panel - Only for calibrated instantaneous */}
+            {/* Statistics Panel (calibrated) / Correlation Diagnostics (uncalibrated) */}
             {showStatistics && canCalculateStatistics && (
               <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg space-y-3">
-                <h3 className="text-lg font-semibold text-blue-900">Statistics Calculation</h3>
+                <h3 className="text-lg font-semibold text-blue-900">
+                  {isUncalibrated ? "Correlation Diagnostics" : "Statistics Calculation"}
+                </h3>
                 <p className="text-xs text-blue-800">
-                  Calculate mean velocities and Reynolds stresses across all frames.
+                  {isUncalibrated
+                    ? "Correlation quality across all frames. Results are written to the uncalibrated statistics tree and are only visible in uncalibrated mode."
+                    : "Calculate mean velocities and Reynolds stresses across all frames."}
                 </p>
 
                 {!statisticsJobId && (
                   <div className="space-y-3">
                     {/* Statistics Selection */}
                     <div className="space-y-2 bg-white p-2 rounded border border-gray-200">
-                      <label className="text-xs font-medium text-gray-700 block mb-1">Select Statistics:</label>
+                      <label className="text-xs font-medium text-gray-700 block mb-1">
+                        {isUncalibrated ? "Select Diagnostics:" : "Select Statistics:"}
+                      </label>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        {/* Time Averaged */}
-                        <div className="space-y-1">
-                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Time-Averaged</p>
-                          <div className="space-y-1">
-                            {AVAILABLE_STATISTICS.timeAveraged.map((stat) => (
-                              <label key={stat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-0.5 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={requestedStatistics.includes(stat.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setRequestedStatistics([...requestedStatistics, stat.id]);
-                                    } else {
-                                      setRequestedStatistics(requestedStatistics.filter((id: string) => id !== stat.id));
-                                    }
-                                  }}
-                                  className="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                                />
-                                <span className="text-xs text-gray-700">{stat.label}</span>
-                              </label>
-                            ))}
+                      <div className={isUncalibrated ? "space-y-1" : "grid grid-cols-2 gap-4"}>
+                        {statGroups.map((group) => (
+                          <div key={group.title} className="space-y-1">
+                            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{group.title}</p>
+                            <div className="space-y-1">
+                              {group.stats.map((stat) => (
+                                <label key={stat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-0.5 rounded">
+                                  <input
+                                    type="checkbox"
+                                    checked={requestedStatistics.includes(stat.id)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setRequestedStatistics([...requestedStatistics, stat.id]);
+                                      } else {
+                                        setRequestedStatistics(requestedStatistics.filter((id: string) => id !== stat.id));
+                                      }
+                                    }}
+                                    className="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                  />
+                                  <span className="text-xs text-gray-700">{stat.label}</span>
+                                </label>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-
-                        {/* Instantaneous */}
-                        <div className="space-y-1">
-                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Instantaneous</p>
-                          <div className="space-y-1">
-                            {AVAILABLE_STATISTICS.instantaneous.map((stat) => (
-                              <label key={stat.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-0.5 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={requestedStatistics.includes(stat.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setRequestedStatistics([...requestedStatistics, stat.id]);
-                                    } else {
-                                      setRequestedStatistics(requestedStatistics.filter((id: string) => id !== stat.id));
-                                    }
-                                  }}
-                                  className="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                                />
-                                <span className="text-xs text-gray-700">{stat.label}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
+                        ))}
                       </div>
                       <div className="flex justify-end mt-2 pt-1 border-t border-gray-100">
                          <button
                             type="button"
                             className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
-                            onClick={() => setRequestedStatistics([
-                                ...AVAILABLE_STATISTICS.timeAveraged.map(s => s.id),
-                                ...AVAILABLE_STATISTICS.instantaneous.map(s => s.id)
-                            ])}
+                            onClick={() => setRequestedStatistics(statGroups.flatMap(g => g.stats.map(s => s.id)))}
                          >
                             Select All
                          </button>
@@ -1701,7 +1694,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       </div>
                     </div>
 
-                    {/* Gamma Radius Setting */}
+                    {/* Gamma Radius Setting - only affects inst_gamma, which an
+                        uncalibrated diagnostics run never computes */}
+                    {!isUncalibrated && (
                     <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
                       <label className="text-xs font-medium text-gray-700">Gamma Radius:</label>
                       <Input
@@ -1718,8 +1713,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       />
                       <span className="text-xs text-gray-500">(grid points for vortex detection)</span>
                     </div>
+                    )}
 
-                    {/* Data Source Selection */}
+                    {/* Data Source Selection - uncalibrated PIV output is
+                        per-camera only, so there is nothing to choose */}
+                    {!isUncalibrated && (
                     <DataSourceToggle
                       cameraCount={statsCameraCount}
                       hasMergedData={availableDataSources.merged_instantaneous?.exists ?? false}
@@ -1728,6 +1726,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       disabled={calculating}
                       isStereo={isStereoStats}
                     />
+                    )}
 
                     <Button
                       onClick={calculateStatistics}
@@ -1735,7 +1734,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                       size="sm"
                     >
-                      {calculating ? "Starting Calculation..." : "Calculate Statistics"}
+                      {calculating
+                        ? "Starting Calculation..."
+                        : isUncalibrated ? "Calculate Diagnostics" : "Calculate Statistics"}
                     </Button>
                   </div>
                 )}

@@ -18,7 +18,7 @@ const CAL_UNITS: Record<string, string> = {
   vorticity: "1/s", divergence: "1/s",
   // Dimensionless
   gamma1: "", gamma2: "",
-  peak_mag: "", peakheight: "", mean_peak_height: "",
+  peak_mag: "", peakheight: "", peak_mag_mean: "",
   peak_ratio: "", peak_ratio_median: "",
   nan_pct: "%",
   nan_reason: "", b_mask: "",
