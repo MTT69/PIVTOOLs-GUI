@@ -16,6 +16,7 @@ import RunPIV from "./RunPIV";
 import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettings";
 import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
+import GainNormalisationToggle from "@/components/shared/GainNormalisationToggle";
 import CameraSelector from "@/components/shared/CameraSelector";
 import { useNumericInput } from "@/hooks/useNumericInput";
 
@@ -215,6 +216,11 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 <PerformanceSettings config={config} updateConfigValue={updateConfigValue} />
               </div>
             )}
+          </div>
+
+          {/* Preprocessing: gain normalisation */}
+          <div className="p-4 bg-gray-50 rounded-lg">
+            <GainNormalisationToggle config={config} updateConfigValue={updateConfigValue} />
           </div>
 
           {/* Peak Finder Settings */}

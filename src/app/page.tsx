@@ -75,6 +75,7 @@ export default function Home() {
         calibration_format: json.calibration_format || {},
         calibration: json.calibration || {},
         filters: json.filters || [],
+        preprocessing: json.preprocessing || {},
       };
       setConfig(mapped);
       setConfigError(null);

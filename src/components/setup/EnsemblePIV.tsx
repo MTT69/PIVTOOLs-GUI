@@ -16,6 +16,7 @@ import RunPIV from "./RunPIV";
 import OutlierDetectionSettings from "@/components/shared/OutlierDetectionSettings";
 import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
+import GainNormalisationToggle from "@/components/shared/GainNormalisationToggle";
 import CameraSelector from "@/components/shared/CameraSelector";
 import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
 import { useNumericInput } from "@/hooks/useNumericInput";
@@ -474,6 +475,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </p>
                   </div>
 
+                  <GainNormalisationToggle config={config} updateConfigValue={updateConfigValue} />
                 </div>
               </div>
             )}
