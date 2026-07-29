@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 
 /**
  * Stepped (dual-level) board STEREO calibration on the calibration backend.
@@ -158,15 +159,6 @@ export interface JobStatus {
   error?: string;
 }
 
-/** Reconstruct (apply) job roll-up. */
-export interface ReconstructJobStatus {
-  status: 'starting' | 'running' | 'completed' | 'failed';
-  progress?: number;
-  processed_frames?: number;
-  total_frames?: number;
-  error?: string;
-}
-
 export type SequenceStatus = 'idle' | 'detecting' | 'ready' | 'error';
 export type StereoConfig = 'auto' | 'same_side' | 'transmission';
 
@@ -260,7 +252,7 @@ export function useStereoSteppedCalibration(
   const [hasSidecar, setHasSidecar] = useState(false);
 
   // ---------- Reconstruct (apply) job ----------
-  const [reconstructJobStatus, setReconstructJobStatus] = useState<ReconstructJobStatus | null>(null);
+  const [reconstructJobStatus, setReconstructJobStatus] = useState<ApplyJobStatus | null>(null);
   const [reconstructJobId, setReconstructJobId] = useState<string | null>(null);
 
   // ---------- Refs ----------
@@ -1026,7 +1018,7 @@ export function useStereoSteppedCalibration(
     typeName: string = 'instantaneous',
     activePaths?: number[],
   ) => {
-    setReconstructJobStatus({ status: 'starting', progress: 0 });
+    setReconstructJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
       const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
@@ -1041,9 +1033,9 @@ export function useStereoSteppedCalibration(
       });
       const data = await res.json();
       if (data.job_id) setReconstructJobId(data.job_id);
-      else setReconstructJobStatus({ status: 'failed', error: data.error || 'Failed to start reconstruction.' });
+      else setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error || 'Failed to start reconstruction.' });
     } catch (e) {
-      setReconstructJobStatus({ status: 'failed', error: String(e) });
+      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
     }
   }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
@@ -1058,10 +1050,7 @@ export function useStereoSteppedCalibration(
         const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
         const data = await res.json();
         if (res.ok) {
-          setReconstructJobStatus({
-            status: data.status, progress: data.progress,
-            processed_frames: data.processed, total_frames: data.total, error: data.error,
-          });
+          setReconstructJobStatus(readApplyJobStatus(data));
           if (data.status === 'completed' || data.status === 'failed') {
             if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
           }

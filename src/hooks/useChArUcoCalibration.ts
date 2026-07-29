@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 
 /**
  * Detection data for a single frame (on-demand overlay).
@@ -88,14 +89,12 @@ export interface MultiCameraJobStatus {
   processed_cameras: number;
   total_cameras: number;
   current_camera?: number;
-  current_camera_progress?: number;
   processed_images?: number;
   total_images?: number;
   valid_images?: number;
   camera_results?: Record<string, { status: string; rms_error?: number; num_images_used?: number; error?: string; warnings?: string[] }> & {
     global_alignment?: GlobalAlignmentResult;
   };
-  camera_progress?: Record<number, { current: number; total: number; message?: string }>;
   elapsed_time?: number;
   error?: string;
 }
@@ -175,7 +174,7 @@ export function useChArUcoCalibration(
   // Synchronous generate status (v1 shape)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);
-  const [vectorJobStatus, setVectorJobStatus] = useState<MultiCameraJobStatus | null>(null);
+  const [vectorJobStatus, setVectorJobStatus] = useState<ApplyJobStatus | null>(null);
   const [vectorJobId, setVectorJobId] = useState<string | null>(null);
 
   // Model + on-demand detections (overlay)
@@ -616,7 +615,7 @@ export function useChArUcoCalibration(
     typeName: string = 'instantaneous',
     activePaths?: number[],
   ) => {
-    setVectorJobStatus({ status: 'starting', processed_cameras: 0, total_cameras: cameraOptions.length || 1 });
+    setVectorJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
       const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
@@ -632,11 +631,11 @@ export function useChArUcoCalibration(
       });
       const data = await res.json();
       if (data.job_id) setVectorJobId(data.job_id);
-      else setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: data.error });
+      else setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error });
     } catch (e) {
-      setVectorJobStatus({ status: 'failed', processed_cameras: 0, total_cameras: 0, error: String(e) });
+      setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
     }
-  }, [sourcePathIdx, dt, cameraOptions]);
+  }, [sourcePathIdx, dt]);
 
   // Poll apply job.
   useEffect(() => {
@@ -649,10 +648,7 @@ export function useChArUcoCalibration(
         const res = await fetch(`/backend/calibration/apply/status/${vectorJobId}`);
         const data = await res.json();
         if (res.ok) {
-          setVectorJobStatus({
-            status: data.status, processed_cameras: data.processed ?? 0, total_cameras: data.total ?? 1,
-            error: data.error,
-          });
+          setVectorJobStatus(readApplyJobStatus(data));
           if (data.status === 'completed' || data.status === 'failed') {
             if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
           }

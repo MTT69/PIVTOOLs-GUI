@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 
 /**
  * Detection data for a single stereo ChArUco frame (on-demand overlay).
@@ -88,15 +89,6 @@ export interface StereoCharucoJobStatus {
   relative_angle_deg?: number;
 }
 
-export interface StereoCharucoReconstructJobStatus {
-  status: 'starting' | 'running' | 'completed' | 'failed';
-  progress: number;
-  processed_frames: number;
-  successful_frames: number;
-  total_frames: number;
-  error?: string;
-}
-
 // Available ArUco dictionaries
 export const ARUCO_DICTS = [
   "DICT_4X4_50",
@@ -171,7 +163,7 @@ export function useStereoCharucoCalibration(
 
   // Apply (reconstruct) job tracking
   const [reconstructJobId, setReconstructJobId] = useState<string | null>(null);
-  const [reconstructJobStatus, setReconstructJobStatus] = useState<StereoCharucoReconstructJobStatus | null>(null);
+  const [reconstructJobStatus, setReconstructJobStatus] = useState<ApplyJobStatus | null>(null);
 
   // Model + on-demand detections (overlay)
   const [stereoModel, setStereoModel] = useState<StereoCharucoModel | null>(null);
@@ -598,7 +590,7 @@ export function useStereoCharucoCalibration(
     typeName: string = 'instantaneous',
     activePaths?: number[],
   ) => {
-    setReconstructJobStatus({ status: 'starting', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0 });
+    setReconstructJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
       const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
@@ -614,9 +606,9 @@ export function useStereoCharucoCalibration(
       });
       const data = await res.json();
       if (data.job_id) setReconstructJobId(data.job_id);
-      else setReconstructJobStatus({ status: 'failed', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0, error: data.error });
+      else setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error });
     } catch (e) {
-      setReconstructJobStatus({ status: 'failed', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0, error: String(e) });
+      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
     }
   }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
@@ -631,11 +623,7 @@ export function useStereoCharucoCalibration(
         const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
         const data = await res.json();
         if (res.ok) {
-          setReconstructJobStatus({
-            status: data.status, progress: data.progress ?? 0,
-            processed_frames: data.processed ?? 0, successful_frames: data.processed ?? 0,
-            total_frames: data.total ?? 0, error: data.error,
-          });
+          setReconstructJobStatus(readApplyJobStatus(data));
           if (data.status === 'completed' || data.status === 'failed') {
             if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
           }

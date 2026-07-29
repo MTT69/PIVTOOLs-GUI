@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 
 /**
  * Detection data for a single stereo frame (on-demand overlay).
@@ -99,18 +100,6 @@ export interface StereoJobStatus {
   relative_angle_deg?: number;
 }
 
-/**
- * Apply/reconstruct job status (calibration apply job).
- */
-export interface StereoReconstructJobStatus {
-  status: 'starting' | 'running' | 'completed' | 'failed';
-  progress: number;
-  processed_frames: number;
-  successful_frames: number;
-  total_frames: number;
-  error?: string;
-}
-
 const BOARD = 'dotboard';
 
 /** Parse a numeric form field; null when empty/invalid (the field is unset). */
@@ -171,7 +160,7 @@ export function useStereoCalibration(
 
   // Apply (reconstruct) job tracking
   const [reconstructJobId, setReconstructJobId] = useState<string | null>(null);
-  const [reconstructJobStatus, setReconstructJobStatus] = useState<StereoReconstructJobStatus | null>(null);
+  const [reconstructJobStatus, setReconstructJobStatus] = useState<ApplyJobStatus | null>(null);
 
   // Model + on-demand detections (overlay)
   const [stereoModel, setStereoModel] = useState<StereoModel | null>(null);
@@ -574,7 +563,7 @@ export function useStereoCalibration(
     typeName: string = 'instantaneous',
     activePaths?: number[],
   ) => {
-    setReconstructJobStatus({ status: 'starting', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0 });
+    setReconstructJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
       const res = await fetch('/backend/calibration/apply', {
         method: 'POST',
@@ -590,9 +579,9 @@ export function useStereoCalibration(
       });
       const data = await res.json();
       if (data.job_id) setReconstructJobId(data.job_id);
-      else setReconstructJobStatus({ status: 'failed', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0, error: data.error });
+      else setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error });
     } catch (e) {
-      setReconstructJobStatus({ status: 'failed', progress: 0, processed_frames: 0, successful_frames: 0, total_frames: 0, error: String(e) });
+      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
     }
   }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
@@ -607,11 +596,7 @@ export function useStereoCalibration(
         const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
         const data = await res.json();
         if (res.ok) {
-          setReconstructJobStatus({
-            status: data.status, progress: data.progress ?? 0,
-            processed_frames: data.processed ?? 0, successful_frames: data.processed ?? 0,
-            total_frames: data.total ?? 0, error: data.error,
-          });
+          setReconstructJobStatus(readApplyJobStatus(data));
           if (data.status === 'completed' || data.status === 'failed') {
             if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
           }

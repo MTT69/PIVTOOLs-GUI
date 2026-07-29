@@ -12,6 +12,8 @@ import { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyJobStatus, readApplyJobStatus } from "@/lib/applyJob";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
   GCInlineControls,
@@ -95,7 +97,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // Figures are rendered by the shared CalibrationFigureGallery (keyed on `result`), so
   // there is no local figure-list state — it fetches the list for the model locator.
   const [result, setResult] = useState<any>(null);
-  const [applyJob, setApplyJob] = useState<any>(null);
+  const [applyJob, setApplyJob] = useState<ApplyJobStatus | null>(null);
 
   // --- Vector calibration type (rig.piv_type in the settings sidecar) ------------
   const [vectorTypeName, setVectorTypeName] = useState<"instantaneous" | "ensemble">("instantaneous");
@@ -458,10 +460,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       ...(Number.isFinite(dtVal) ? { dt: dtVal } : {}),
     });
     if (!started?.job_id) return;
-    setApplyJob({ status: "running" });
+    setApplyJob({ status: "running", progress: 0, processed_units: 0, total_units: 0 });
     const poll = async () => {
       const st = await c2.applyStatus(started.job_id);  // never throws (returns failed status)
-      setApplyJob(st);
+      setApplyJob(readApplyJobStatus(st));
       if (st.status === "running" || st.status === "starting") {
         pollTimer.current = setTimeout(poll, 1000);
       }
@@ -874,28 +876,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </Button>
           </div>
 
-          {/* Apply progress (same bar as the board tabs; backend reports % across frames) */}
-          {applyJob && (applyJob.status === "running" || applyJob.status === "starting") && (
-            <div className="p-3 border rounded bg-blue-50">
-              <div className="flex items-center gap-2 text-sm mb-2">
-                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                <strong>Vector Calibration:</strong>
-                <span className="capitalize">{applyJob.status}</span>
-              </div>
-              <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-                <div
-                  className="h-2 bg-blue-600 transition-all"
-                  style={{ width: `${applyJob.progress || 0}%` }}
-                />
-              </div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Progress: {Math.round(applyJob.progress || 0)}%
-                {applyJob.total !== undefined && applyJob.total > 1 && (
-                  <span> | Datasets: {applyJob.processed ?? 0}/{applyJob.total}</span>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Apply progress (shared with every other calibration tab) */}
+          <CalibrationJobProgress job={applyJob} title="Vector Calibration" />
 
           {applyJob?.status === "completed" && (
             <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">

@@ -12,6 +12,7 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
@@ -723,27 +724,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             )}
 
             {/* Reconstruction Job Progress */}
-            {reconstructJobStatus && (reconstructJobStatus.status === 'running' || reconstructJobStatus.status === 'starting') && (
-              <div className="mt-4 p-3 border rounded bg-green-50">
-                <div className="flex items-center gap-2 text-sm mb-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
-                  <strong>3D Reconstruction:</strong>
-                  <span className="capitalize">{reconstructJobStatus.status}</span>
-                </div>
-                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-                  <div
-                    className="h-2 bg-green-600 transition-all"
-                    style={{ width: `${reconstructJobStatus.progress || 0}%` }}
-                  />
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Progress: {reconstructJobStatus.progress?.toFixed(0) || 0}%
-                  {reconstructJobStatus.processed_frames !== undefined && (
-                    <span> | Frames: {reconstructJobStatus.processed_frames}/{reconstructJobStatus.total_frames}</span>
-                  )}
-                </div>
-              </div>
-            )}
+            <CalibrationJobProgress job={reconstructJobStatus} title="3D Reconstruction" />
 
             {/* Reconstruction Job Completed */}
             {reconstructJobStatus?.status === 'completed' && (

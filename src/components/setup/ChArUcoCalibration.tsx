@@ -9,7 +9,9 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
 import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
+import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
@@ -755,16 +757,15 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                   <strong>Multi-Camera Model Generation:</strong>
                   <span>Camera {multiCameraJobStatus.current_camera || '...'}</span>
                 </div>
-                <div className="w-full bg-gray-200 h-2 rounded overflow-hidden">
-                  <div
-                    className="h-2 bg-blue-600 transition-all"
-                    style={{ width: `${multiCameraJobStatus.current_camera_progress || 0}%` }}
-                  />
-                </div>
+                {/* Cameras-complete is the only real signal: generate_model is synchronous, so
+                    there is no within-camera progress to report. */}
+                <Progress
+                  value={multiCameraJobStatus.total_cameras > 0
+                    ? (multiCameraJobStatus.processed_cameras / multiCameraJobStatus.total_cameras) * 100
+                    : 0}
+                />
                 <div className="text-xs text-muted-foreground mt-1">
-                  {multiCameraJobStatus.total_cameras > 0 && (
-                    <span>Cameras: {multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras}</span>
-                  )}
+                  Cameras: {multiCameraJobStatus.processed_cameras}/{multiCameraJobStatus.total_cameras}
                 </div>
               </div>
             )}
@@ -789,56 +790,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             )}
 
             {/* Vector Calibration Progress */}
-            {vectorJobStatus && (vectorJobStatus.status === 'running' || vectorJobStatus.status === 'starting') && (
-              <div className="mt-4 p-3 border rounded bg-green-50">
-                <div className="flex items-center gap-2 text-sm mb-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
-                  <strong>Vector Calibration:</strong>
-                  <span className="capitalize">{vectorJobStatus.status}</span>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {vectorJobStatus.total_cameras > 0 && (
-                    <span>{vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed</span>
-                  )}
-                </div>
-              </div>
-            )}
+            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
 
             {/* Vector Calibration Completed */}
             {vectorJobStatus?.status === 'completed' && (
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
+                Vector calibration completed! ({vectorJobStatus.total_units} datasets)
               </div>
-            )}
-
-            {/* Global Alignment Result */}
-            {vectorJobStatus?.status === 'completed' && vectorJobStatus?.camera_results?.global_alignment && (
-              <>
-                {vectorJobStatus.camera_results.global_alignment.status === 'completed' && (
-                  <div className="mt-2 p-3 border rounded bg-blue-50 text-blue-700 text-sm">
-                    <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                    Global coordinate alignment applied
-                    {vectorJobStatus.camera_results.global_alignment.cameras && (
-                      <span> ({Object.keys(vectorJobStatus.camera_results.global_alignment.cameras).length} cameras)</span>
-                    )}
-                    {vectorJobStatus.camera_results.global_alignment.invert_ux && (
-                      <span> + invert_ux</span>
-                    )}
-                  </div>
-                )}
-                {vectorJobStatus.camera_results.global_alignment.status === 'failed' && (
-                  <div className="mt-2 p-3 border rounded bg-yellow-50 text-yellow-700 text-sm">
-                    <AlertTriangle className="h-4 w-4 inline mr-2" />
-                    Global alignment warning: {vectorJobStatus.camera_results.global_alignment.error}
-                  </div>
-                )}
-                {vectorJobStatus.camera_results.global_alignment.status === 'skipped' && (
-                  <div className="mt-2 p-2 text-xs text-muted-foreground">
-                    Global coordinate alignment skipped (disabled in config)
-                  </div>
-                )}
-              </>
             )}
 
             {/* Vector Calibration Failed */}

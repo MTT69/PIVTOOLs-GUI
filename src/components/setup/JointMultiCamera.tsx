@@ -17,8 +17,9 @@ import {
   OrientationCandidate,
 } from "@/hooks/useJointCalibration";
 import { useJointGridSpec, GuideAction, GuideStatus, MIN_LINK_PAIRS } from "@/hooks/useJointGridSpec";
-import { MultiCameraJobStatus } from "@/hooks/useDotboardCalibration";
+import { ApplyJobStatus } from "@/lib/applyJob";
 import { getWorldFrameMarkers } from "@/components/setup/WorldFrameSetup";
+import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 
 interface JointMultiCameraProps {
@@ -43,7 +44,7 @@ interface JointMultiCameraProps {
   // single-camera button). Applies each camera's joint 2D model to its PIV vectors — planar, not
   // 3C. Optional so the component is inert if a parent does not wire it.
   calibrateVectors?: (forAllCameras: boolean, typeName: string, activePaths?: number[]) => void;
-  vectorJobStatus?: MultiCameraJobStatus | null;
+  vectorJobStatus?: ApplyJobStatus | null;
   isVectorCalibrating?: boolean;
 }
 
@@ -974,30 +975,11 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
             </Select>
           </div>
 
-          {vectorJobStatus &&
-            (vectorJobStatus.status === "running" || vectorJobStatus.status === "starting") && (
-              <div className="p-3 border rounded bg-green-50">
-                <div className="flex items-center gap-2 text-sm mb-1">
-                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
-                  <strong>Vector Calibration:</strong>
-                  <span className="capitalize">{vectorJobStatus.status}</span>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {vectorJobStatus.current_camera ? (
-                    <>Processing camera {vectorJobStatus.current_camera} </>
-                  ) : null}
-                  {vectorJobStatus.total_cameras > 0 && (
-                    <span>
-                      ({vectorJobStatus.processed_cameras}/{vectorJobStatus.total_cameras} completed)
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
+          <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
           {vectorJobStatus?.status === "completed" && (
             <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
               <CheckCircle2 className="h-4 w-4 inline mr-2" />
-              Vector calibration completed! ({vectorJobStatus.processed_cameras} cameras)
+              Vector calibration completed! ({vectorJobStatus.total_units} datasets)
             </div>
           )}
           {vectorJobStatus?.status === "failed" && (

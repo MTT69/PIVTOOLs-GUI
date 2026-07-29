@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
+import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -1190,27 +1191,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             )}
 
             {/* Reconstruct progress + results */}
-            {reconstructJobStatus && (reconstructJobStatus.status === 'running' || reconstructJobStatus.status === 'starting') && (
-              <div className="p-3 border rounded bg-green-50">
-                <div className="flex items-center gap-2 text-sm mb-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-green-600" />
-                  <strong>3C Reconstruction:</strong>
-                  <span className="capitalize">{reconstructJobStatus.status}</span>
-                </div>
-                {reconstructJobStatus.total_frames != null && (
-                  <div className="text-xs text-muted-foreground">
-                    Frames: {reconstructJobStatus.processed_frames ?? 0}/{reconstructJobStatus.total_frames}
-                  </div>
-                )}
-                <Progress value={reconstructJobStatus.progress ?? 0} className="w-full mt-2" />
-              </div>
-            )}
+            <CalibrationJobProgress job={reconstructJobStatus} title="3C Reconstruction" />
 
             {reconstructJobStatus?.status === 'completed' && (
               <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                3C reconstruction completed
-                {reconstructJobStatus.processed_frames != null && ` (${reconstructJobStatus.processed_frames} frames)`}.
+                3C reconstruction completed ({reconstructJobStatus.total_units} datasets).
               </div>
             )}
 
