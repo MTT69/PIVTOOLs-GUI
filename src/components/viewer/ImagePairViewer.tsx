@@ -87,8 +87,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
 
   // Number of frame pairs (computed by backend from stride config)
   const maxFrames = useMemo(() => {
-    return config?.images?.num_frame_pairs || config?.images?.num_images || 100;
-  }, [config?.images?.num_frame_pairs, config?.images?.num_images]);
+    return config?.images?.num_images || 100;
+  }, [config?.images?.num_images]);
 
   const [isImageLoading, setIsImageLoading] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1); // FPS: 0.5, 1, 2, 5, 10

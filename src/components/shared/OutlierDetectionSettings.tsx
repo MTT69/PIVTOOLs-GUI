@@ -46,7 +46,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
 
     const locals: LocalOutlierMethod[] = methods.map((m: OutlierMethod) => ({
       ...m,
-      threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '2.0' : '0.4'),
+      threshold: m.threshold?.toString() ?? (m.type === 'median_2d' ? '2.0' : '0.2'),
       epsilon: m.epsilon?.toString() ?? '0.1',
       size: m.size?.toString() ?? '5',
       sigma_threshold: m.sigma_threshold?.toString() ?? '3.0'
@@ -55,7 +55,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
   }, [methods]);
 
   const addOutlierMethod = () => {
-    const newMethods = [...methods, { type: 'peak_mag', threshold: 0.4 }];
+    const newMethods = [...methods, { type: 'peak_mag', threshold: 0.2 }];
     updateConfigValue([configPath, 'methods'], newMethods);
   };
 
@@ -71,7 +71,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
       if (value === 'median_2d') {
         newMethods[index] = { type: 'median_2d', epsilon: 0.1, threshold: 2.0, size: 5 };
       } else if (value === 'peak_mag') {
-        newMethods[index] = { type: 'peak_mag', threshold: 0.4 };
+        newMethods[index] = { type: 'peak_mag', threshold: 0.2 };
       } else if (value === 'sigma') {
         newMethods[index] = { type: 'sigma', sigma_threshold: 3.0 };
       }
@@ -145,7 +145,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                       <Input
                         className="h-8 text-sm"
                         type="text"
-                        value={localMethods[i]?.threshold ?? '0.4'}
+                        value={localMethods[i]?.threshold ?? '0.2'}
                         onFocus={() => { isUserEditingRef.current = true; }}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -160,7 +160,7 @@ const OutlierDetectionSettings = memo(function OutlierDetectionSettings({
                           if (!isNaN(num) && val !== '' && val !== undefined) {
                             updateOutlierMethod(i, 'threshold', num);
                           } else {
-                            const defaultVal = 0.4;
+                            const defaultVal = 0.2;
                             const newLocal = [...localMethods];
                             newLocal[i] = { ...newLocal[i], threshold: defaultVal.toString() };
                             setLocalMethods(newLocal);

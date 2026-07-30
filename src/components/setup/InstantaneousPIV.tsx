@@ -237,7 +237,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 <div className="space-y-2">
                   <Label htmlFor="peak-finder">Peak Finder Algorithm</Label>
                   <Select
-                    value={config?.instantaneous_piv?.peak_finder || 'gauss3'}
+                    value={config?.instantaneous_piv?.peak_finder || 'gauss6'}
                     onValueChange={(value) => updateConfigValue(['instantaneous_piv', 'peak_finder'], value)}
                   >
                     <SelectTrigger id="peak-finder">
