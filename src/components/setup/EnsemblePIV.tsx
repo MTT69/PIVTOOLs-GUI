@@ -436,7 +436,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      {"Correlation: R = <A*B> - <A>*<B> (single sweep, ensemble-level — removes stationary reflections). Image: R = <(A-mean(A))*(B-mean(B))> (two sweeps over the data). Window Mean: each window's own mean subtracted per pair in C — robust to pair-to-pair brightness fluctuation. The + Window Mean modes do both: stationary-background removal plus per-pair window-mean removal. The + DC Zero modes instead zero each window's accumulated plane mean at finalize (no per-pair machinery) — for clean or gain-normalised data."}
+                      {"How background is removed before the stresses are fitted. Correlation and Image remove a stationary background such as reflections; Window Mean removes each window's own mean per pair and is robust to brightness fluctuation between pairs. The combined modes do both, and the DC Zero modes are a cheaper alternative for clean or gain-normalised data. See the manual for the formulae and when each applies."}
                     </p>
                   </div>
 
@@ -579,7 +579,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Optional quartic terms in the k-space decay absorb displacement-PDF kurtosis, which otherwise biases the fitted stresses (a sub-Gaussian PDF curves the log-spectrum and the pure Gaussian over-reads &Sigma;). Each term self-extinguishes where the flow is Gaussian, so the combined kx&#8308; + ky&#8308; mode is orientation-agnostic and safe throughout the profile.
+                    Shape used to fit the correlation peak. Gaussian is the standard choice. The quartic options absorb non-Gaussian velocity statistics that would otherwise bias the reported stresses, and they cost nothing where the flow is Gaussian, so kx&#8308; + ky&#8308; is the safe pick if you suspect kurtosis. See the manual for how to tell.
                   </p>
                 </div>
 
@@ -598,7 +598,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Sensor noise reaches the fit coloured by the processing chain (warp interpolation, window-mean removal, envelope divide). The coloured model fits the floor with its true analytic shape P(k) per window; the flat model assumes a constant floor, which inflates the wall-normal stresses on noisy data. Use flat only to reproduce runs from before the coloured floor existed.
+                    How the sensor-noise floor is modelled during fitting. Leave on Coloured &mdash; it matches the noise actually reaching the fitter, whereas Flat inflates the wall-normal stresses on noisy data. Flat is kept only for reproducing older runs.
                   </p>
                 </div>
 
@@ -614,7 +614,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Divide the ensemble correlation planes (AA, AB, BB) by the pair-count envelope before fitting. Applies to both std and single passes. Disabled leaves the planes with their natural tent attenuation (Westerweel-style); the coloured noise floor follows this setting automatically. Enable only to reproduce runs from before 2026-07-27.
+                    Divides the correlation planes by the pair-count envelope before fitting. Leave disabled &mdash; this is kept only for reproducing runs made before July 2026.
                   </p>
                 </div>
 
