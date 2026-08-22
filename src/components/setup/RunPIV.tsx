@@ -56,7 +56,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // Select the appropriate job and settings based on mode
   const job = mode === 'ensemble' ? ensembleJob : instantaneousJob;
   const settings = mode === 'ensemble' ? ensembleSettings : instantaneousSettings;
-  const { isLoading, isPolling, progress, statusImage, logs } = job;
+  const { isLoading, isPolling, progress, statusImage, logs, datasetNumber, datasetTotal, datasetLabel } = job;
 
   // --- UI State (local to component) ---
   const [varType, setVarType] = useState<string>(settings.varType);
@@ -417,6 +417,13 @@ const RunPIV: React.FC<RunPIVProps> = ({
             <p className="text-sm text-center font-medium text-gray-500">
               {isPolling ? `Processing... ${progress}%` : (progress === 100 ? "Completed!" : "Idle")}
             </p>
+            {/* Multi-dataset runs only. datasetLabel is null once every dataset is
+                complete, so a finished run never shows a stale name. */}
+            {isPolling && datasetTotal > 1 && datasetNumber !== null && datasetLabel && (
+              <p className="text-xs text-center text-gray-500">
+                Dataset {datasetNumber} of {datasetTotal} — {datasetLabel}
+              </p>
+            )}
           </div>
         )}
 
