@@ -101,9 +101,15 @@ interface PivJobProviderProps {
   children: ReactNode;
   config?: any;
   activeTab?: string;
+  /**
+   * Called once when a run finishes. A completed run can change num_images and the
+   * base paths on the backend, and the app-level config was only ever fetched on
+   * mount - so the Results tab read stale paths until the user reloaded the browser.
+   */
+  onJobComplete?: () => void;
 }
 
-export function PivJobProvider({ children, config, activeTab }: PivJobProviderProps) {
+export function PivJobProvider({ children, config, activeTab, onJobComplete }: PivJobProviderProps) {
   // Job state for both modes
   const [instantaneousJob, setInstantaneousJob] = useState<PivJobState>(defaultJobState);
   const [ensembleJob, setEnsembleJob] = useState<PivJobState>(defaultJobState);
@@ -124,6 +130,36 @@ export function PivJobProvider({ children, config, activeTab }: PivJobProviderPr
   // Track previous settings to detect changes and trigger immediate re-render
   const instantaneousPrevSettingsRef = useRef<string>('');
   const ensemblePrevSettingsRef = useRef<string>('');
+
+  // Job-settled notification.
+  //
+  // The completion condition (`shouldStopPolling`) is computed inside the
+  // setInstantaneousJob / setEnsembleJob updaters below. Calling out from there would
+  // be a side effect inside a state updater, which React may invoke twice under
+  // StrictMode - so watch the isPolling true -> false transition here instead.
+  //
+  // A cancel also lands here, which is intended: a cancelled run still wrote results,
+  // so the config is just as worth refetching as after a clean finish.
+  const onJobCompleteRef = useRef(onJobComplete);
+  useEffect(() => {
+    onJobCompleteRef.current = onJobComplete;
+  }, [onJobComplete]);
+
+  const instantaneousWasPollingRef = useRef(false);
+  useEffect(() => {
+    if (instantaneousWasPollingRef.current && !instantaneousJob.isPolling) {
+      onJobCompleteRef.current?.();
+    }
+    instantaneousWasPollingRef.current = instantaneousJob.isPolling;
+  }, [instantaneousJob.isPolling]);
+
+  const ensembleWasPollingRef = useRef(false);
+  useEffect(() => {
+    if (ensembleWasPollingRef.current && !ensembleJob.isPolling) {
+      onJobCompleteRef.current?.();
+    }
+    ensembleWasPollingRef.current = ensembleJob.isPolling;
+  }, [ensembleJob.isPolling]);
 
   // Keep refs updated
   useEffect(() => {

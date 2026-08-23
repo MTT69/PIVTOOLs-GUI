@@ -194,7 +194,7 @@ export default function Home() {
                 Configure your PIV processing pipeline with this intuitive interface. Changes are applied automatically.
               </p>
               
-              <PivJobProvider config={config} activeTab={activeTab}>
+              <PivJobProvider config={config} activeTab={activeTab} onJobComplete={fetchConfig}>
               <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
                 <TabsList className="grid grid-cols-7 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
