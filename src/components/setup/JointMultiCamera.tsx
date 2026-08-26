@@ -14,6 +14,7 @@ import {
   JointModel,
   JointCameraParams,
   JointPolynomialParams,
+  JointPoseDiversity,
   OrientationCandidate,
 } from "@/hooks/useJointCalibration";
 import { useJointGridSpec, GuideAction, GuideStatus, MIN_LINK_PAIRS } from "@/hooks/useJointGridSpec";
@@ -1407,6 +1408,13 @@ const JointModelResults: React.FC<{
               })}
             </div>
 
+            {/* Pose-diversity diagnostic (pinhole). A low RMS does not prove the intrinsics are
+                determined; this is the detector for the case the RMS cannot see. null = the
+                record predates it, in which case nothing is shown (no fabricated all-clear). */}
+            {model.pose_diversity && (
+              <PoseDiversityPanel pd={model.pose_diversity} />
+            )}
+
             {model.baselines_mm && Object.keys(model.baselines_mm).length > 0 && (
               <div className="text-sm">
                 <span className="text-muted-foreground">Baselines: </span>
@@ -1429,6 +1437,74 @@ const JointModelResults: React.FC<{
         />
       </CardContent>
     </Card>
+  );
+};
+
+const PoseDiversityPanel: React.FC<{ pd: JointPoseDiversity }> = ({ pd }) => {
+  const [open, setOpen] = useState(false);
+  const lowTilt = pd.cameras.filter((c) => pd.flag_low_tilt[String(c)]);
+  const hints = pd.cameras.filter(
+    (c) => pd.flag_single_azimuth[String(c)] || pd.flag_constant_standoff[String(c)]
+  );
+  const tone = pd.degenerate
+    ? "border-red-300 bg-red-50"
+    : pd.flagged_views.length > 0 || hints.length > 0
+      ? "border-amber-300 bg-amber-50"
+      : "border-gray-200 bg-gray-50";
+  return (
+    <Alert className={tone}>
+      <AlertDescription className="text-sm space-y-1">
+        {pd.degenerate ? (
+          <div className="flex items-start gap-2 text-red-800">
+            <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <span>
+              <strong>Pose set is DEGENERATE</strong> -- cam {lowTilt.join(", ")} never tilted
+              the board. The RMS above is not evidence that the intrinsics are identifiable;
+              every camera&apos;s focal length is suspect. Re-shoot with the board tilted 15&deg;
+              or more in several directions.
+            </span>
+          </div>
+        ) : (
+          <div className="text-muted-foreground">
+            Pose diversity: no degeneracy detected (absence of a flag is not a certificate of
+            quality).
+          </div>
+        )}
+        {hints.length > 0 && (
+          <div className="text-amber-800">
+            {hints.map((c) => {
+              const k = String(c);
+              const parts = [
+                pd.flag_single_azimuth[k] ? "tilted about one axis only" : null,
+                pd.flag_constant_standoff[k] ? "never moved in depth" : null,
+              ].filter(Boolean);
+              return `cam ${c}: ${parts.join(", ")}`;
+            }).join("; ")}
+            .
+          </div>
+        )}
+        {pd.flagged_views.length > 0 && (
+          <div className="text-amber-800">
+            Views above 2x their camera&apos;s median RMS:{" "}
+            {pd.flagged_views
+              .map(([c, v]) => `cam ${c} view ${v} (${(pd.view_rms_px[`${c}-${v}`] ?? NaN).toFixed(2)} px)`)
+              .join(", ")}
+            . The rig or board moved, or the model is worst there. If a flagged view is the
+            datum, the world plane is that view&apos;s, not the rig&apos;s.
+          </div>
+        )}
+        <button
+          type="button"
+          className="text-xs underline text-muted-foreground"
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "Hide" : "Show"} full report
+        </button>
+        {open && (
+          <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{pd.report}</pre>
+        )}
+      </AlertDescription>
+    </Alert>
   );
 };
 

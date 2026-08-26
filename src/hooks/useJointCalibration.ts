@@ -81,7 +81,31 @@ export interface JointJobStatus {
   cross_camera_board_agreement_mm?: number;
   n_board_dots?: number;
   paths?: string[];
+  /** Pinhole only; null for polynomial. */
+  pose_diversity?: JointPoseDiversity | null;
   error?: string;
+}
+
+/**
+ * Pose-diversity diagnostic from the joint pinhole solve (a detector, not a grade). `null`
+ * on the model payload means the record predates the diagnostic -- show nothing, never an
+ * all-clear. Metric maps are keyed by camera number as a string; NaN arrives as null.
+ */
+export interface JointPoseDiversity {
+  degenerate: boolean;
+  cameras: number[];
+  flag_low_tilt: Record<string, boolean>;
+  flag_single_azimuth: Record<string, boolean>;
+  flag_constant_standoff: Record<string, boolean>;
+  tilt_deg_median: Record<string, number | null>;
+  tilt_anisotropy: Record<string, number | null>;
+  standoff_range_fraction: Record<string, number | null>;
+  /** [camera, view] pairs whose rms exceeds 2x their camera's median. */
+  flagged_views: [number, number][];
+  view_rms_px: Record<string, number | null>;
+  board_planarity_rms_mm: number | null;
+  /** The CLI's plain-text report, verbatim. */
+  report: string;
 }
 
 /** Per-camera polynomial parameters for the joint results panel (the actual fitted cubic). */
@@ -135,6 +159,8 @@ export interface JointModel {
   per_camera?: Record<string, JointCameraParams | JointPolynomialParams>;
   /** Pinhole only: pairwise camera-centre distances, keyed "a-b". */
   baselines_mm?: Record<string, number>;
+  /** Pinhole only. null = record predates the diagnostic; absent for polynomial. */
+  pose_diversity?: JointPoseDiversity | null;
 }
 
 const POLL_MS = 700;
