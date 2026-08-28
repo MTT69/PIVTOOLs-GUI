@@ -28,8 +28,6 @@ export interface ValidationState {
   suggestedCameraCount?: number | null;
   /** Sample files backing the camera-count suggestion */
   suggestedCameraCountFiles?: string[];
-  /** Warning if memory per worker may be insufficient for image resolution */
-  memoryWarning?: string | null;
   /** Auto-detected frame/file count from container metadata or glob */
   detectedCount?: number | null;
   /** Sample files found in the source folder (shown on validation error for context) */
@@ -191,7 +189,6 @@ export function useAutoValidation(config: any) {
               error: message,
               patternValidations,
               abCountWarning,
-              memoryWarning: json.memory_warning || null,
               detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
               sampleFiles,
             });
@@ -240,11 +237,6 @@ export function useAutoValidation(config: any) {
                 warnings.push(`${key}: Found ${actual}/${expected} files`);
               }
             });
-
-            // Include memory warning as an error if present
-            if (json.memory_warning) {
-              errors.push(json.memory_warning);
-            }
 
             const errorMsg = [
               ...errors,

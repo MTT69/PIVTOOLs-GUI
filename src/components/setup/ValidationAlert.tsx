@@ -20,7 +20,6 @@ interface BaseValidationState {
   patternValidations?: PatternValidation[];
   abCountWarning?: string | null;
   sampleFiles?: string[];
-  memoryWarning?: string | null;
 }
 
 interface ValidationAlertProps {
@@ -70,9 +69,8 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
         : "Image files found and validated successfully!";
 
-    // Check for warnings (A/B count mismatch or memory insufficient)
-    const hasWarnings = validation.abCountWarning || validation.memoryWarning;
-    if (hasWarnings) {
+    // A/B count mismatch is a warning, not a failure
+    if (validation.abCountWarning) {
       return (
         <Alert className="border-yellow-500 bg-yellow-50">
           <AlertTriangle className="h-4 w-4 text-yellow-600" />
@@ -81,11 +79,6 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
             {validation.abCountWarning && (
               <div className="mt-1 text-yellow-700">
                 <strong>Warning:</strong> {validation.abCountWarning}
-              </div>
-            )}
-            {validation.memoryWarning && (
-              <div className="mt-1 text-yellow-700">
-                <strong>Warning:</strong> {validation.memoryWarning}
               </div>
             )}
           </AlertDescription>

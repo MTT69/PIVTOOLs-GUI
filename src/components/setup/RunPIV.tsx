@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ColormapSelect from "@/components/shared/ColormapSelect";
 import {
@@ -69,9 +71,47 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
   const [isCheckingOutput, setIsCheckingOutput] = useState(false);
+  const [memoryWarning, setMemoryWarning] = useState<string | null>(null);
+  // A slow /memory_check reply (it reads one image) must not overwrite a newer one.
+  const memoryCheckSeqRef = useRef(0);
 
   // Ref for log container to enable auto-scroll
   const logContainerRef = useRef<HTMLDivElement>(null);
+
+  // Worker-memory estimate. Lives here, next to the batch-size and memory
+  // controls, so the user can act on it. Re-runs on every key that changes
+  // the estimate: batch size, memory limit, and anything that changes which
+  // image is read for the shape. Warning only — the Run button is not gated.
+  const memoryCheckKey = JSON.stringify({
+    batchSize: config?.batches?.size,
+    memoryLimit: config?.processing?.dask_memory_limit,
+    sourcePaths: config?.paths?.source_paths,
+    imageFormat: config?.images?.image_format,
+    cameraNumbers: config?.paths?.camera_numbers,
+    cameraSubfolders: config?.paths?.camera_subfolders,
+  });
+  useEffect(() => {
+    const seq = ++memoryCheckSeqRef.current;
+    if (!config?.paths?.source_paths?.length) {
+      setMemoryWarning(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/backend/memory_check');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (seq !== memoryCheckSeqRef.current) return;
+        setMemoryWarning(json.warning || null);
+      } catch (err) {
+        if (seq !== memoryCheckSeqRef.current) return;
+        console.error('memory_check failed:', err);
+        setMemoryWarning(null);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memoryCheckKey]);
 
   // --- Derived State (memoized for performance) ---
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
@@ -326,6 +366,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
             </div>
           );
         })()}
+
+        {memoryWarning && (
+          <Alert className="border-yellow-500 bg-yellow-50">
+            <AlertTriangle className="h-4 w-4 text-yellow-600" />
+            <AlertTitle className="text-yellow-800">Memory estimate</AlertTitle>
+            <AlertDescription className="text-sm text-yellow-700">{memoryWarning}</AlertDescription>
+          </Alert>
+        )}
 
         <div className="space-y-3">
           <div>
