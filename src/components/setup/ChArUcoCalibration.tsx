@@ -781,7 +781,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                       <span key={cam} className="mr-3">
                         {cam}: {res.status === 'completed' && res.rms_error
                           ? `RMS ${Number(res.rms_error).toFixed(4)} px (${res.num_images_used} images)`
-                          : res.status}
+                          : `${res.status}${res.error ? `: ${res.error}` : ""}`}
                       </span>
                     ))}
                   </div>
