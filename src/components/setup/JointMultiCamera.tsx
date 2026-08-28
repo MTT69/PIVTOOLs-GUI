@@ -1489,8 +1489,7 @@ const PoseDiversityPanel: React.FC<{ pd: JointPoseDiversity }> = ({ pd }) => {
             {pd.flagged_views
               .map(([c, v]) => `cam ${c} view ${v} (${(pd.view_rms_px[`${c}-${v}`] ?? NaN).toFixed(2)} px)`)
               .join(", ")}
-            . The rig or board moved, or the model is worst there. If a flagged view is the
-            datum, the world plane is that view&apos;s, not the rig&apos;s.
+            .
           </div>
         )}
         <button
