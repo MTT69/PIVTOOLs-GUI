@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, stereoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Stepped (dual-level) board STEREO calibration on the calibration backend.
@@ -377,7 +378,15 @@ export function useStereoSteppedCalibration(
         ? [Number(pair[0]), Number(pair[1])]
         : [cam1, cam2];
       const [v1, v2] = await Promise.all([validateOne(c1, fromSettings), validateOne(c2, fromSettings)]);
-      setValidation({ cam1: v1, cam2: v2, valid: Boolean(v1.valid && v2.valid) });
+      const result: StereoValidation = { cam1: v1, cam2: v2, valid: Boolean(v1.valid && v2.valid) };
+      setValidation(result);
+      if (result.valid) {
+        // Fill the shared frame cache for both cameras before the viewer is opened.
+        warmCalibrationFrameCache({
+          backendUrl: '/backend', cameras: [c1, c2], sourcePathIdx,
+          refreshKey: stereoViewerRefreshKey(result),
+        });
+      }
     } finally {
       setValidating(false);
     }
@@ -589,6 +598,9 @@ export function useStereoSteppedCalibration(
   useEffect(() => {
     if (!configLoadedRef.current) return;
     setValidating(true);
+    // The frame URL carries none of these inputs (the backend reads them from the
+    // sidecar), so cached frames keyed on the unchanged camera path would be stale.
+    clearCalibrationFrameCache();
     setValidation(v => (v ? {
       ...v,
       valid: false,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, stereoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Detection data for a single stereo ChArUco frame (on-demand overlay).
@@ -253,12 +254,20 @@ export function useStereoCharucoCalibration(
       const matching = v1.found_count === 'container' || v2.found_count === 'container'
         ? 'container'
         : Math.min(count(v1), count(v2));
-      setValidation({
+      const result: StereoValidationResult = {
         valid: !!(v1.valid && v2.valid),
         cam1: v1, cam2: v2,
         matching_count: matching as number | 'container',
         error: v1.error || v2.error,
-      });
+      };
+      setValidation(result);
+      if (result.valid) {
+        // Fill the shared frame cache for both cameras before the viewer is opened.
+        warmCalibrationFrameCache({
+          backendUrl: '/backend', cameras: [c1, c2], sourcePathIdx,
+          refreshKey: stereoViewerRefreshKey(result),
+        });
+      }
     } catch (e) {
       const err: CameraValidationResult = { valid: false, found_count: 0, error: errorMessage(e) };
       setValidation({ valid: false, cam1: err, cam2: err, matching_count: 0, error: errorMessage(e) });
@@ -435,6 +444,9 @@ export function useStereoCharucoCalibration(
   useEffect(() => {
     if (!configLoadedRef.current) return;
     setValidating(true);
+    // The frame URL carries none of these inputs (the backend reads them from the
+    // sidecar), so cached frames keyed on the unchanged camera path would be stale.
+    clearCalibrationFrameCache();
     setValidation(v => (v ? {
       ...v,
       valid: false,

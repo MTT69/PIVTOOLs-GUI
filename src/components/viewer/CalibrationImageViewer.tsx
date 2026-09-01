@@ -5,7 +5,12 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useCalibrationImageViewer } from '@/hooks/useCalibrationImageViewer';
+import {
+  useCalibrationImageViewer,
+  DEFAULT_VIEWER_IMAGE_FORMAT,
+  DEFAULT_VIEWER_AUTO_LIMITS,
+  type CalibrationViewerImageFormat,
+} from '@/hooks/useCalibrationImageViewer';
 import ZoomableCanvas, { MarkerPoint, OverlayLine } from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 
@@ -32,7 +37,6 @@ export interface CalibrationImageViewerProps {
   sourcePathIdx: number;
   camera: number;
   numImages: number;
-  calibrationType: 'dotboard' | 'charuco' | 'stereo_dotboard' | 'stereo_charuco' | 'stepped_board' | 'scale_factor';
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;
@@ -95,7 +99,6 @@ export default function CalibrationImageViewer({
   sourcePathIdx,
   camera,
   numImages,
-  calibrationType,
   calibrationParams = {},
   onFrameChange,
   compact = false,
@@ -121,8 +124,8 @@ export default function CalibrationImageViewer({
 
   // Image display settings
   const [colormap, setColormap] = useState<"gray" | "viridis">("gray");
-  const [imageFormat, setImageFormat] = useState<'jpeg' | 'png'>('jpeg');
-  const [autoScale, setAutoScale] = useState(true);
+  const [imageFormat, setImageFormat] = useState<CalibrationViewerImageFormat>(DEFAULT_VIEWER_IMAGE_FORMAT);
+  const [autoScale, setAutoScale] = useState(DEFAULT_VIEWER_AUTO_LIMITS);
   const [manuallyAdjusted, setManuallyAdjusted] = useState(false);
 
   // Zoom/pan state (shared across view modes)
@@ -162,7 +165,6 @@ export default function CalibrationImageViewer({
     index,
     imageFormat,
     autoScale,
-    calibrationType,
     refreshKey
   );
 

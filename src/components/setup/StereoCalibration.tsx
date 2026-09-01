@@ -15,6 +15,7 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import { stereoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
@@ -551,8 +552,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
               numImages={parseInt(numImages) || 10}
-              calibrationType="stereo_dotboard"
-              refreshKey={`${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`}
+              refreshKey={stereoViewerRefreshKey(validation)}
               stereoParams={{ cam1, cam2 }}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}

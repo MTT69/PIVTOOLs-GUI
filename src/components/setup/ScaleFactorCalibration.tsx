@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler } from "lucide-react";
 import { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
+import { clearCalibrationFrameCache, monoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
@@ -276,6 +277,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   useEffect(() => {
     if (!settingsReadyRef.current || !useImages) return;
     setValidating(true);
+    clearCalibrationFrameCache();
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera, sourcePathIdx, imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
@@ -683,8 +685,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             sourcePathIdx={sourcePathIdx}
             camera={viewCamera}
             numImages={typeof validation?.found_count === "number" ? validation.found_count : 1}
-            calibrationType="scale_factor"
-            refreshKey={`${validation?.camera_path}-${validation?.valid}`}
+            refreshKey={monoViewerRefreshKey(validation)}
             onFrameChange={handleFrameChange}
             externalFrame={viewFrame}
             externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}

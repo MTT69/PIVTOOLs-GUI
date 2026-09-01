@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, monoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Detection data for a single frame (on-demand overlay).
@@ -223,12 +224,20 @@ export function useDotboardCalibration(
   const validateImages = useCallback(async (fromSettings?: SidecarSettings) => {
     setValidating(true);
     try {
-      setValidation(await postJson('/backend/calibration/validate', {
+      const result: ValidationResult = await postJson('/backend/calibration/validate', {
         camera, source_path_idx: sourcePathIdx,
         image_format: fromSettings?.image?.image_format ?? imageFormat,
         image_type: fromSettings?.image?.image_type ?? imageType,
         frame_total: fromSettings?.image?.n_views ?? frameTotal(),
-      }));
+      });
+      setValidation(result);
+      if (result.valid) {
+        // Fill the shared frame cache before the viewer is opened.
+        warmCalibrationFrameCache({
+          backendUrl: '/backend', cameras: [camera], sourcePathIdx,
+          refreshKey: monoViewerRefreshKey(result),
+        });
+      }
     } catch (e) {
       setValidation({ valid: false, found_count: 0, error: errorMessage(e) });
     } finally {
@@ -383,6 +392,9 @@ export function useDotboardCalibration(
   useEffect(() => {
     if (!configLoadedRef.current) return;
     setValidating(true);
+    // The frame URL carries none of these inputs (the backend reads them from the
+    // sidecar), so cached frames keyed on the unchanged camera path would be stale.
+    clearCalibrationFrameCache();
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     setDetectError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps

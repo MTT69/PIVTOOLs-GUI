@@ -14,6 +14,7 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import { monoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -568,8 +569,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={camera}
               numImages={parseInt(numImages) || 10}
-              calibrationType="charuco"
-              refreshKey={`${validation?.camera_path}-${validation?.valid}`}
+              refreshKey={monoViewerRefreshKey(validation)}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}

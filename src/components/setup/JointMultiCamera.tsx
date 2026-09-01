@@ -879,7 +879,6 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={effectiveCamera}
               numImages={numImages}
-              calibrationType={board}
               refreshKey={`joint-${board}-${sourcePathIdx}-${imageFormat}`}
               onFrameChange={handleFrameChange}
               savedDetections={jointDetections}
