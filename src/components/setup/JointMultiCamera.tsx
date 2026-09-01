@@ -228,14 +228,6 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     if (target >= 0 && target !== grid.datumView) grid.setDatumView(target);
   }, [isDotboard, datumFrame, grid.datumView, grid.setDatumView]);
 
-  // Auto-detect the datum view whenever the viewer is open, so world-frame clicks snap immediately.
-  // This replaces the old manual "Detect Dots" button — Preview already detects + draws the grid.
-  useEffect(() => {
-    if (isDotboard && showViewer && validationValid && !grid.wf.ready && !grid.wf.busy) {
-      void grid.wf.prepare();
-    }
-  }, [isDotboard, showViewer, validationValid, grid.wf.ready, grid.wf.busy, grid.wf]);
-
   // The grid resolution is only valid for the spec it was computed from — drop it when the inputs
   // that feed the spec change, so the overlay never shows a stale grid.
   useEffect(() => {
@@ -263,6 +255,9 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
       // Generate stamps dt into the model record; unset is omitted so the
       // backend falls to the saved rig.dt or fails loudly (never a default).
       ...(dt != null ? { dt } : {}),
+      // Live geometry wins over the debounce-lagged sidecar save (0 = unset, omit — the
+      // backend then reads the sidecar or raises the actionable geometry error).
+      ...(isDotboard && dotSpacingMm ? { board_params: { dot_spacing_mm: dotSpacingMm } } : {}),
     };
     if (isDotboard) {
       base.global_grid = grid.specBlock;
@@ -276,7 +271,25 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     }
     return base;
   }, [board, sourcePathIdx, cameras, numImages, imageFormat, imageType, modelType, dt, isDotboard,
-      charucoDatumView, grid.specBlock, grid.datumCamera, grid.datumView]);
+      dotSpacingMm, charucoDatumView, grid.specBlock, grid.datumCamera, grid.datumView]);
+
+  // Automatic viewer probe — cache reads only, never a fresh detect. Detected-before sources
+  // load their dots/grid into the viewer on open (memory or inputs.mat sidecar hit); a source
+  // never detected (or whose cache is stale after a params change) stays quiet and the viewer-bar
+  // hint points at Detect Dots. Only a button push (Preview / Detect / Re-detect) may compute.
+  const cachedProbeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showViewer) {
+      cachedProbeRef.current = null; // re-probe on the next open
+      return;
+    }
+    if (!validationValid || resolveData || resolving) return;
+    const key = `${sourcePathIdx}|${camerasKey}|${board}`;
+    if (cachedProbeRef.current === key) return; // one probe per open per source/camera set
+    cachedProbeRef.current = key;
+    void resolveGrid({ ...requestBody(), cached_only: true });
+  }, [showViewer, validationValid, resolveData, resolving, sourcePathIdx, camerasKey, board,
+      resolveGrid, requestBody]);
 
   // Preview = detect every image + resolve the live grid, AND cache the datum detection so
   // world-frame clicks snap immediately. Detections are cached (in memory + on disk), so the first
@@ -298,12 +311,14 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   }, [preview]);
 
   // Dotboard: re-resolve the live overlay whenever the committed spec changes (datum set, a view
-  // anchored, a camera bridged). Only once the datum frame exists.
+  // anchored, a camera bridged). Only once the datum frame exists. cached_only: this fires
+  // automatically, so it must never start a detection — mid-wizard the cache always exists (a
+  // button push preceded it); on mount-hydration with a stale cache it stays quiet instead.
   const specSig = isDotboard ? JSON.stringify(grid.specBlock) : "";
   useEffect(() => {
     if (!isDotboard || !validationValid || cameras.length === 0) return;
     if (!grid.specBlock.datum_clicks) return;
-    void resolveGrid({ ...requestBody() });
+    void resolveGrid({ ...requestBody(), cached_only: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [specSig, isDotboard, validationValid, cameras.length, numImages, imageFormat, imageType]);
 
@@ -571,6 +586,11 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   const handleSetGlobalCoords = useCallback(() => {
     const { actions, skipped } = buildGuideActions();
     setSkippedViews(skipped);
+    // The server-side datum cache is memory-only: after a backend restart the cached viewer
+    // probe restores the overlay but not that cache, and the wizard's world-frame clicks need
+    // it. This is a button push, so preparing here is inside the compute-on-push contract
+    // (and instant when the datum is already cached).
+    if (!grid.wf.ready) void grid.wf.prepare();
     grid.startGuide(actions);
   }, [grid, buildGuideActions]);
 
@@ -893,11 +913,36 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
                       Guided setup — follow the prompt above
                     </span>
                   )
-                ) : isDotboard && resolveData ? (
-                  <span className="text-xs text-muted-foreground">
-                    Press <strong>Set Global Coordinates</strong> to define the world frame and tie the cameras together
-                  </span>
-                ) : undefined
+                ) : (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {/* Same detect+resolve as Preview — the recovery path when the viewer was
+                        opened before the board geometry was typed in (the resolve clears any
+                        stale geometry error on entry). */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={resolving || grid.wf.busy}
+                      onClick={handlePreview}
+                    >
+                      {(resolving || grid.wf.busy) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                      {isDotboard ? "Detect Dots" : "Detect Markers"}
+                    </Button>
+                    {/* Detection never auto-runs — these hints walk the two prerequisites. */}
+                    {isDotboard && !dotSpacingMm ? (
+                      <span className="text-xs text-amber-700 font-medium">
+                        Enter the dot spacing (mm) above to detect the board
+                      </span>
+                    ) : isDotboard && !resolveData ? (
+                      <span className="text-xs text-muted-foreground">
+                        Press <strong>Detect Dots</strong> to detect the board
+                      </span>
+                    ) : isDotboard ? (
+                      <span className="text-xs text-muted-foreground">
+                        Press <strong>Set Global Coordinates</strong> to define the world frame and tie the cameras together
+                      </span>
+                    ) : null}
+                  </div>
+                )
               }
             />
           )}

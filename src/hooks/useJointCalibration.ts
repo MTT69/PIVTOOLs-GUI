@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 
 /**
  * Joint multi-camera calibration hook — drives the three /calibration/joint/* routes
@@ -59,6 +60,8 @@ export interface JointResolveResult {
   n_views_total: number;
   errors: string[];
   error?: string;
+  /** "no_cached_detections" when a cached_only probe missed — a quiet non-error. */
+  reason?: string;
 }
 
 /**
@@ -173,15 +176,6 @@ function qs(o: Record<string, unknown>): string {
   return p.toString();
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return res.json() as Promise<T>;
-}
-
 interface JointGenerateStart {
   success: boolean;
   job_id?: string;
@@ -214,8 +208,14 @@ export function useJointCalibration() {
       setResolving(true);
       setError(null);
       try {
-        const data = await postJSON<JointResolveResult>("/joint/resolve_grid", body);
+        const data = await postJson<JointResolveResult>(`${BASE}/joint/resolve_grid`, body);
         if (!data.success) {
+          if (data.reason === "no_cached_detections") {
+            // Automatic cached-only probe missed — nothing detected yet. Quiet by design:
+            // the viewer-bar hint tells the user to press Detect, no error banner.
+            setResolveData(null);
+            return null;
+          }
           setError(data.error || "grid resolve failed");
           setResolveData(null);
           return null;
@@ -223,7 +223,7 @@ export function useJointCalibration() {
         setResolveData(data);
         return data;
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
         setResolveData(null);
         return null;
       } finally {
@@ -238,14 +238,13 @@ export function useJointCalibration() {
     async (query: Record<string, unknown>): Promise<JointModel | null> => {
       const token = ++modelReqRef.current;
       try {
-        const res = await fetch(`${BASE}/joint/model?${qs(query)}`);
-        const data = (await res.json()) as JointModel;
+        const data = await fetchJson<JointModel>(`${BASE}/joint/model?${qs(query)}`);
         if (modelReqRef.current !== token) return data; // superseded — don't clobber a newer load
         setModel(data);
         setError(null); // a successful current load clears any stale error
         return data;
       } catch (e) {
-        if (modelReqRef.current === token) setError(String(e));
+        if (modelReqRef.current === token) setError(errorMessage(e));
         return null;
       }
     },
@@ -267,9 +266,9 @@ export function useJointCalibration() {
       setJobStatus({ status: "starting", progress: 0 });
       let start: JointGenerateStart;
       try {
-        start = await postJSON<JointGenerateStart>("/joint/generate", body);
+        start = await postJson<JointGenerateStart>(`${BASE}/joint/generate`, body);
       } catch (e) {
-        setJobStatus({ status: "failed", error: String(e) });
+        setJobStatus({ status: "failed", error: errorMessage(e) });
         return;
       }
       if (!start.success || !start.job_id) {
@@ -283,10 +282,9 @@ export function useJointCalibration() {
       const handle = setInterval(async () => {
         let status: JointJobStatus;
         try {
-          const res = await fetch(`${BASE}/joint/generate/status/${jobId}`);
-          status = (await res.json()) as JointJobStatus;
-        } catch {
-          return; // transient blip — keep polling
+          status = await fetchJson<JointJobStatus>(`${BASE}/joint/generate/status/${jobId}`);
+        } catch (e) {
+          status = { status: "failed", error: errorMessage(e) };
         }
         if (pollRef.current !== handle) return; // superseded by a newer generate / unmount
         setJobStatus(status);
