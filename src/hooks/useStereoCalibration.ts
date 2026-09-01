@@ -103,6 +103,24 @@ export interface StereoJobStatus {
 
 const BOARD = 'dotboard';
 
+/**
+ * The per-source settings sidecar shape, as returned by GET
+ * `/calibration/settings` and consumed by `applySettings`. Only the fields
+ * `validateImages`/`validateOne` read are typed; the rest hydrate through
+ * `applySettings`. (Local per hook — the five calibration hooks are
+ * deliberate clones.)
+ */
+interface SidecarSettings {
+  image?: {
+    image_format?: string;
+    image_type?: string;
+    n_views?: number | null;
+  };
+  rig?: {
+    camera_pair?: [number, number];
+  };
+}
+
 /** Parse a numeric form field; null when empty/invalid (the field is unset). */
 const numOrNull = (s: string): number | null => {
   const v = parseFloat(s);
@@ -197,19 +215,28 @@ export function useStereoCalibration(
   }, [dotSpacingMm]);
   const frameTotal = useCallback(() => parseInt(numImages) || 10, [numImages]);
 
-  // Validate one camera via calibration (all formats).
-  const validateOne = useCallback(async (cam: number): Promise<CameraValidationResult> => {
+  // Validate one camera via calibration (all formats). `fromSettings` carries
+  // just-fetched sidecar settings past the stale first-render closure.
+  const validateOne = useCallback(async (cam: number, fromSettings?: SidecarSettings): Promise<CameraValidationResult> => {
     return postJson('/backend/calibration/validate', {
       camera: cam, source_path_idx: sourcePathIdx,
-      image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
+      image_format: fromSettings?.image?.image_format ?? imageFormat,
+      image_type: fromSettings?.image?.image_type ?? imageType,
+      frame_total: fromSettings?.image?.n_views ?? frameTotal(),
     });
   }, [sourcePathIdx, imageFormat, imageType, frameTotal]);
 
-  // Validate both cameras and combine into the stereo shape.
-  const validateImages = useCallback(async () => {
+  // Validate both cameras and combine into the stereo shape. On the mount and
+  // path-edit call sites the camera-pair state is also pre-hydration, so the
+  // pair comes from `fromSettings.rig.camera_pair` when supplied.
+  const validateImages = useCallback(async (fromSettings?: SidecarSettings) => {
     setValidating(true);
     try {
-      const [v1, v2] = await Promise.all([validateOne(cam1), validateOne(cam2)]);
+      const pair = fromSettings?.rig?.camera_pair;
+      const [c1, c2] = Array.isArray(pair) && pair.length >= 2
+        ? [Number(pair[0]), Number(pair[1])]
+        : [cam1, cam2];
+      const [v1, v2] = await Promise.all([validateOne(c1, fromSettings), validateOne(c2, fromSettings)]);
       const count = (v: CameraValidationResult) =>
         v.found_count === 'container' ? Infinity : Number(v.found_count) || 0;
       const matching = v1.found_count === 'container' || v2.found_count === 'container'
@@ -253,28 +280,32 @@ export function useStereoCalibration(
   }, []);
 
   // Fetch the per-source settings sidecar (server seeds when absent; GET never
-  // writes) and hydrate the form.
-  const loadSettings = useCallback(async (idx: number) => {
+  // writes) and hydrate the form. Returns the fetched settings so callers can
+  // validate against them immediately (setState from applySettings has not
+  // committed yet in this closure); null on any failure.
+  const loadSettings = useCallback(async (idx: number): Promise<SidecarSettings | null> => {
     settingsReadyRef.current = false;
     const seq = ++settingsSeqRef.current;
     try {
       const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${idx}`);
-      if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
+      if (seq !== settingsSeqRef.current) return null;  // superseded by a newer load
       if (!data.settings) {
         // Guard stays CLOSED: the form still holds another source's values and
         // an open guard would let the debounced save write them into THIS
         // source's sidecar. Surface the failure instead of console-only.
         setDetectError(`Failed to load calibration settings: ${data.error ?? 'no settings in response'}`);
-        return;
+        return null;
       }
       applySettings(data.settings);
       // A save scheduled before/during hydration captured the OLD form —
       // cancel it; the hydrated state commit reschedules a fresh one.
       if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
       settingsReadyRef.current = true;
+      return data.settings as SidecarSettings;
     } catch (e) {
-      if (seq !== settingsSeqRef.current) return;
+      if (seq !== settingsSeqRef.current) return null;
       setDetectError(`Failed to load calibration settings: ${errorMessage(e)}`);
+      return null;
     }
   }, [applySettings]);
 
@@ -288,10 +319,10 @@ export function useStereoCalibration(
       } catch (e) {
         console.error('Failed to load config:', e);
       }
-      await loadSettings(0);
+      const s = await loadSettings(0);
       configLoadedRef.current = true;
       setConfigLoaded(true);
-      validateImages();
+      validateImages(s ?? undefined);
     };
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -351,15 +382,19 @@ export function useStereoCalibration(
       }
       if (pathEdited) {
         // In-place edit of the current source path: clear the stale model/overlay
-        // and rehydrate model + settings from the new directory.
+        // and rehydrate model + settings from the new directory. Validate with
+        // the freshly fetched settings: this closure's state still holds the
+        // OLD source's values.
         loadedSourcePathRef.current = currentPath;
         setStereoModel(null);
         setDetectionsCam1({});
         setDetectionsCam2({});
         loadModelRef.current?.();
-        loadSettings(sourcePathIdx);
+        const s = await loadSettings(sourcePathIdx);
+        validateImages(s ?? undefined);
+      } else {
+        validateImages();
       }
-      validateImages();
     }, 500);
   }, [imageFormat, imageType, frameTotal, calibrationSources, useCameraSubfolders, cameraSubfolders,
       dt, datumFrame, interpolator, pivType, dotSpacingMm, fixK2, cam1, cam2, sourcePathIdx,
