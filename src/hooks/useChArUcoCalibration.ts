@@ -572,6 +572,16 @@ export function useChArUcoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, camera, sourcePathIdx]);
 
+  // The overlay is only valid for the inputs that produced it: an image format / type or
+  // board-geometry edit changes what Detect Dots returns (and its det_key), so the drawn
+  // dots go stale the moment the edit lands. Camera / source clears live in the effect above.
+  useEffect(() => {
+    if (!configLoaded) return;
+    setDetections({});
+    setDetectError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageFormat, imageType, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
+
   // On-demand board detection for the overlay on a given frame.
   const detectFrame = useCallback(async (frame: number) => {
     try {
@@ -604,12 +614,17 @@ export function useChArUcoCalibration(
         frame_total: frameTotal(),
       });
       if (data.success) {
+        const mine = data.by_camera[String(camera)];
         const next: Record<string, FrameDetection> = {};
-        for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
+        for (const [f, v] of Object.entries(mine.frames as Record<string, any>)) {
           next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
         }
         setDetections(next);
-        setDetectError(data.n_detected === 0 ? 'No board detected in any view' : null);
+        // The backend wrote these detections into inputs.mat for Generate; say so when it
+        // could not (an unloadable view or a read-only source) -- Generate then re-detects.
+        setDetectError(
+          mine.n_detected === 0 ? 'No board detected in any view'
+          : data.persisted ? null : `Detected, but not saved for Generate: ${data.persist_skipped}`);
       } else {
         setDetectError(data.error || 'Detection failed');
       }

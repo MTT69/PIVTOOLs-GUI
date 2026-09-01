@@ -232,7 +232,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   // that feed the spec change, so the overlay never shows a stale grid.
   useEffect(() => {
     clearResolve();
-  }, [board, sourcePathIdx, numImages, imageFormat, imageType, camerasKey, clearResolve]);
+  }, [board, sourcePathIdx, numImages, imageFormat, imageType, dotSpacingMm, camerasKey, clearResolve]);
 
   // Load any saved joint model for display (and refresh after a generate completes).
   const modelQuery = useMemo(

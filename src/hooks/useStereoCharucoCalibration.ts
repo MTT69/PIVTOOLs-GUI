@@ -547,6 +547,17 @@ export function useStereoCharucoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, cam1, cam2, sourcePathIdx]);
 
+  // The overlay is only valid for the inputs that produced it: an image format / type or
+  // board-geometry edit changes what Detect Dots returns (and its det_key), so the drawn
+  // dots go stale the moment the edit lands. Camera / source clears live in the effect above.
+  useEffect(() => {
+    if (!configLoaded) return;
+    setDetectionsCam1({});
+    setDetectionsCam2({});
+    setDetectError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageFormat, imageType, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
+
   // On-demand board detection for the overlay on a given frame of a camera.
   const detectFrame = useCallback(async (frame: number, cam: number) => {
     try {
@@ -572,30 +583,36 @@ export function useStereoCharucoCalibration(
   // button can't re-enable mid-sequence. Replaces each cam's detections map.
   const detectAllViews = useCallback(async () => {
     setDetecting(true);
-    const errs: string[] = [];
+    // Both overlays clear before the call: the pair is detected and persisted as ONE set
+    // (the stereo sidecar holds both cameras under one det_key), so a failure must never
+    // leave cam1 fresh and cam2 stale.
+    setDetectionsCam1({});
+    setDetectionsCam2({});
     try {
-      for (const cam of [cam1, cam2]) {
-        try {
-          const data = await postJson('/backend/calibration/detect_views', {
-            camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
-            board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-            frame_total: frameTotal(),
-          });
-          if (data.success) {
-            const next: Record<string, StereoCharucoFrameDetection> = {};
-            for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
-              next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
-            }
-            (cam === cam1 ? setDetectionsCam1 : setDetectionsCam2)(next);
-            if (data.n_detected === 0) errs.push(`No board detected on Cam${cam}`);
-          } else {
-            errs.push(`Cam${cam}: ${data.error || 'detection failed'}`);
+      const data = await postJson('/backend/calibration/detect_views', {
+        stereo: true, camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+        frame_total: frameTotal(),
+      });
+      if (data.success) {
+        const errs: string[] = [];
+        for (const cam of [cam1, cam2]) {
+          const mine = data.by_camera[String(cam)];
+          const next: Record<string, StereoCharucoFrameDetection> = {};
+          for (const [f, v] of Object.entries(mine.frames as Record<string, any>)) {
+            next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
           }
-        } catch (e) {
-          errs.push(`Cam${cam}: ${errorMessage(e)}`);
+          (cam === cam1 ? setDetectionsCam1 : setDetectionsCam2)(next);
+          if (mine.n_detected === 0) errs.push(`No board detected on Cam${cam}`);
         }
+        // The backend wrote the pair into inputs.mat for Generate; say so when it could not.
+        if (!data.persisted) errs.push(`Detected, but not saved for Generate: ${data.persist_skipped}`);
+        setDetectError(errs.length ? errs.join('; ') : null);
+      } else {
+        setDetectError(data.error || 'Detection failed');
       }
-      setDetectError(errs.length ? errs.join('; ') : null);
+    } catch (e) {
+      setDetectError(`Detection failed: ${errorMessage(e)}`);
     } finally {
       setDetecting(false);
     }
