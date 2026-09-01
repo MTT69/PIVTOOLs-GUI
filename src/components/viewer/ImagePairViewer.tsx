@@ -23,6 +23,7 @@ import { FilterSelector, FilterEditor } from '@/components/FilterComponents';
 import ZoomableCanvas from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 import { basename, cn } from "@/lib/utils";
+import { postJson, errorMessage } from "@/lib/api";
 
 interface ImagePairViewerProps {
   backendUrl?: string;
@@ -265,11 +266,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
       });
 
       try {
-        await fetch(`${backendUrl}/update_config`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filters: filtersToSave }),
-        });
+        await postJson(`${backendUrl}/update_config`, { filters: filtersToSave });
 
         // Update parent config to keep it in sync
         if (updateConfig) {
@@ -277,6 +274,11 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         }
       } catch (e) {
         console.error('Failed to save filters to backend', e);
+        toast({
+          title: "Failed to save filters",
+          description: errorMessage(e),
+          variant: "destructive",
+        });
       }
     }, 500); // 500ms debounce
 

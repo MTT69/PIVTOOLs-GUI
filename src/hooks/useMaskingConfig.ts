@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { postJson, errorMessage } from '@/lib/api';
 
 export interface MaskingConfig {
   enabled: boolean;
@@ -55,16 +56,7 @@ export function useMaskingConfig(
         masking: config
       };
 
-      const response = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || 'Failed to update masking config');
+      const json = await postJson('/backend/update_config', payload);
 
       // Update local state with the response
       if (json.updated?.masking) {
@@ -73,7 +65,7 @@ export function useMaskingConfig(
 
       return true;
     } catch (error) {
-      console.error('Error updating masking config:', error);
+      console.error('Error updating masking config:', errorMessage(error));
       return false;
     }
   }, [updateConfig]);

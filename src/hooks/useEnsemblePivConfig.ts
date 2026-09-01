@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { postJson, errorMessage } from '@/lib/api';
 
 // --- Type Definitions ---
 export interface EnsemblePass {
@@ -153,20 +154,12 @@ export function useEnsemblePivConfig(
       };
 
       try {
-        const res = await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ensemble_piv: payloadData }),
-        });
-        if (res.ok) {
-          updateConfig(['ensemble_piv'], payloadData);
-          suppressUntilRef.current = Date.now() + 1500; // Suppress updates for 1.5s
-        } else {
-          console.error('Failed to update config:', await res.json());
-        }
+        await postJson('/backend/update_config', { ensemble_piv: payloadData });
+        updateConfig(['ensemble_piv'], payloadData);
+        suppressUntilRef.current = Date.now() + 1500; // Suppress updates for 1.5s
         hasPendingEditRef.current = false;
       } catch (e) {
-        console.error('Auto-save failed:', e);
+        console.error('Auto-save failed:', errorMessage(e));
         hasPendingEditRef.current = false;
       }
     }, 400);

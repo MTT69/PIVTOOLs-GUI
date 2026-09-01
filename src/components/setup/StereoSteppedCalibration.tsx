@@ -26,6 +26,7 @@ import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGa
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { MarkerPoint } from "@/components/viewer/zoomableCanvas";
+import { postJson, errorMessage } from "@/lib/api";
 
 interface StereoSteppedCalibrationProps {
   config: any;
@@ -407,18 +408,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   // ---- Set as active method ----
   const setAsActiveMethod = useCallback(async () => {
     try {
-      const res = await fetch("/backend/update_config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ calibration: { active: "stereo_stepped" } }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to set active method");
+      const json = await postJson("/backend/update_config", { calibration: { active: "stereo_stepped" } });
       if (json.updated?.calibration) {
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (err) {
-      console.error("Failed to set active calibration method:", err);
+      console.error("Failed to set active calibration method:", errorMessage(err));
     }
   }, [config.calibration, updateConfig]);
 

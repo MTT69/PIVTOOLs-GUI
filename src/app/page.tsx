@@ -17,7 +17,6 @@ import {
 import InstantaneousPIV from '@/components/setup/InstantaneousPIV';
 import EnsemblePIV from '@/components/setup/EnsemblePIV';
 import PathsConfig from '@/components/setup/PathsConfig';
-import POD from '@/components/setup/POD';
 import ImagePairViewer from '@/components/viewer/ImagePairViewer';
 import RunPIV from '@/components/setup/RunPIV';
 import ImageConfig from '@/components/setup/ImageConfig';
@@ -27,6 +26,7 @@ import Masking from '@/components/setup/Masking';
 import { Calibration } from '@/components/setup/Calibration';
 import { useAutoValidation, useConfigUpdate } from '@/hooks/useConfigUpdate';
 import { PivJobProvider } from '@/contexts/PivJobContext';
+import { fetchJson } from '@/lib/api';
 
 // Initial empty config; will be replaced by backend YAML
 const emptyConfig: any = { paths: { base_dir: [], source: [] }, images: {} };
@@ -48,12 +48,7 @@ export default function Home() {
   // Fetch config from backend and update state
   const fetchConfig = useCallback(async () => {
     try {
-      const res = await fetch('/backend/config');
-      if (!res.ok) {
-        setConfigError('Cannot connect to backend server. Please ensure the server is running.');
-        return;
-      }
-      const json = await res.json();
+      const json = await fetchJson('/backend/config');
       const mapped = {
         ...json,
         paths: {
@@ -275,10 +270,6 @@ export default function Home() {
 
                 <TabsContent value="ensemble">
                   <EnsemblePIV config={config} updateConfig={updateConfig} />
-                </TabsContent>
-
-                <TabsContent value="pod">
-                  <POD config={config} updateConfig={updateConfig} />
                 </TabsContent>
 
                 <TabsContent value="results">

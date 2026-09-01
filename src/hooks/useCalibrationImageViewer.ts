@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchJson, errorMessage } from '@/lib/api';
 
 /**
  * Cache entry for prefetched calibration frames
@@ -122,14 +123,7 @@ export function useCalibrationImageViewer(
 
     try {
       const url = buildFrameUrl(frameIdx);
-      const res = await fetch(url, { signal });
-
-      if (!res.ok) {
-        prefetchInProgressRef.current.delete(cacheKey);
-        return;
-      }
-
-      const json = await res.json();
+      const json = await fetchJson(url, { signal });
 
       prefetchBufferRef.current.set(cacheKey, {
         idx: frameIdx,
@@ -205,15 +199,9 @@ export function useCalibrationImageViewer(
 
       try {
         const url = buildFrameUrl(idx);
-        const res = await fetch(url, { signal: abortController.signal });
+        const json = await fetchJson(url, { signal: abortController.signal });
 
         if (cancelled) return;
-
-        const json = await res.json();
-
-        if (!res.ok) {
-          throw new Error(json.error || `Calibration image not found (frame ${idx})`);
-        }
 
         setImage(json.image);
         setWidth(json.width);
@@ -229,9 +217,9 @@ export function useCalibrationImageViewer(
 
         prefetchSurrounding(idx);
 
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
-        setError(e.message);
+      } catch (e) {
+        if (e instanceof Error && e.name === 'AbortError') return;
+        setError(errorMessage(e));
         console.error('[useCalibrationImageViewer] Error fetching frame:', e);
       } finally {
         if (!cancelled) {

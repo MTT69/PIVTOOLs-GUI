@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { usePanZoom } from "@/hooks/usePanZoom";
+import { fetchJson, errorMessage, ApiError } from "@/lib/api";
 
 type DType = "uint8" | "uint16";
 type RawImage = {
@@ -109,16 +110,7 @@ function PolygonMaskEditor({
 					polygons_only: 'true', // Request only polygon data for faster loading
 				});
 
-				const response = await fetch(`/backend/load_mask?${params}`);
-				if (cancelled) return;
-				if (!response.ok) {
-					// No existing mask found - that's fine, start with empty
-					console.log('No existing mask found, starting fresh');
-					setMaskLoadStatus('none');
-					return;
-				}
-
-				const data = await response.json();
+				const data = await fetchJson(`/backend/load_mask?${params}`);
 				if (cancelled) return;
 
 				if (data.polygons && data.polygons.length > 0) {
@@ -137,7 +129,14 @@ function PolygonMaskEditor({
 					setMaskLoadStatus('none');
 				}
 			} catch (error) {
-				console.error('Error loading existing mask:', error);
+				if (cancelled) return;
+				if (error instanceof ApiError) {
+					// No existing mask found - that's fine, start with empty
+					console.log('No existing mask found, starting fresh');
+					setMaskLoadStatus('none');
+					return;
+				}
+				console.error('Error loading existing mask:', errorMessage(error));
 				setMaskLoadStatus('error');
 				// Continue with empty polygons on error
 			} finally {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 
 export type Pt = [number, number];
 
@@ -36,15 +37,6 @@ function qs(o: Record<string, any>): string {
   return p.toString();
 }
 
-async function postJSON(path: string, body: any): Promise<any> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
-
 async function fetchPngBase64(url: string): Promise<string | null> {
   const res = await fetch(url);
   if (!res.ok) return null;
@@ -73,7 +65,7 @@ export function useCalibrationApi() {
       setError(null);
       try {
         const path = opts?.datum ? "/detect_datum" : "/detect_frame";
-        const data = await postJSON(path, body);
+        const data = await postJson(`${BASE}${path}`, body);
         if (!data.success) {
           setError(data.error || "board not detected");
           return null;
@@ -87,7 +79,7 @@ export function useCalibrationApi() {
           frameCount: data.frame_count,
         };
       } catch (e: any) {
-        setError(String(e));
+        setError(errorMessage(e));
         return null;
       } finally {
         setBusy(false);
@@ -102,7 +94,7 @@ export function useCalibrationApi() {
         const path = datum ? "/datum_image" : "/frame_image";
         return await fetchPngBase64(`${BASE}${path}?${qs(query)}`);
       } catch (e: any) {
-        setError(String(e));
+        setError(errorMessage(e));
         return null;
       }
     },
@@ -112,14 +104,14 @@ export function useCalibrationApi() {
   const snap = useCallback(
     async (camera: number, x: number, y: number): Promise<Pt | null> => {
       try {
-        const data = await postJSON("/snap_fiducial", { camera, click_x: x, click_y: y });
+        const data = await postJson(`${BASE}/snap_fiducial`, { camera, click_x: x, click_y: y });
         if (data.snapped_x === undefined) {
           setError(data.error || "snap failed");
           return null;
         }
         return [data.snapped_x, data.snapped_y];
       } catch (e: any) {
-        setError(String(e));
+        setError(errorMessage(e));
         return null;
       }
     },
@@ -130,14 +122,14 @@ export function useCalibrationApi() {
     setBusy(true);
     setError(null);
     try {
-      const data = await postJSON("/generate_model", body);
+      const data = await postJson(`${BASE}/generate_model`, body);
       if (!data.success) {
         setError(data.error || "model generation failed");
         return null;
       }
       return data;
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     } finally {
       setBusy(false);
@@ -148,14 +140,14 @@ export function useCalibrationApi() {
     setBusy(true);
     setError(null);
     try {
-      const data = await postJSON("/scale_factor/generate", body);
+      const data = await postJson(`${BASE}/scale_factor/generate`, body);
       if (!data.success) {
         setError(data.error || "scale-factor generation failed");
         return null;
       }
       return data;
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     } finally {
       setBusy(false);
@@ -164,32 +156,30 @@ export function useCalibrationApi() {
 
   const loadModel = useCallback(async (query: Record<string, any>): Promise<any> => {
     try {
-      const res = await fetch(`${BASE}/model?${qs(query)}`);
-      return await res.json();
+      return await fetchJson(`${BASE}/model?${qs(query)}`);
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     }
   }, []);
 
   const measure = useCallback(async (body: any): Promise<V2Measure | null> => {
     try {
-      const data = await postJSON("/measure", body);
+      const data = await postJson(`${BASE}/measure`, body);
       if (data.error) {
         setError(data.error);
         return null;
       }
       return data as V2Measure;
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     }
   }, []);
 
   const listFigures = useCallback(async (query: Record<string, any>): Promise<string[]> => {
     try {
-      const res = await fetch(`${BASE}/figures?${qs(query)}`);
-      const data = await res.json();
+      const data = await fetchJson(`${BASE}/figures?${qs(query)}`);
       return data.figures || [];
     } catch {
       return [];
@@ -204,10 +194,10 @@ export function useCalibrationApi() {
 
   const validateSource = useCallback(async (body: any): Promise<any> => {
     try {
-      return await postJSON("/validate", body);
+      return await postJson(`${BASE}/validate`, body);
     } catch (e: any) {
-      setError(String(e));
-      return { valid: false, error: String(e) };
+      setError(errorMessage(e));
+      return { valid: false, error: errorMessage(e) };
     }
   }, []);
 
@@ -215,14 +205,14 @@ export function useCalibrationApi() {
     setBusy(true);
     setError(null);
     try {
-      const data = await postJSON("/global/compute", body);
+      const data = await postJson(`${BASE}/global/compute`, body);
       if (data.error) {
         setError(data.error);
         return null;
       }
       return data;
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     } finally {
       setBusy(false);
@@ -232,14 +222,14 @@ export function useCalibrationApi() {
   const startApply = useCallback(async (body: any): Promise<any> => {
     setError(null);
     try {
-      const data = await postJSON("/apply", body);
+      const data = await postJson(`${BASE}/apply`, body);
       if (!data.success) {
         setError(data.error || "apply failed to start");
         return null;
       }
       return data;
     } catch (e: any) {
-      setError(String(e));
+      setError(errorMessage(e));
       return null;
     }
   }, []);
@@ -248,10 +238,9 @@ export function useCalibrationApi() {
     // Never throw out of a poll loop: a transient network blip returns a failed status
     // so callers stop polling instead of leaving a spinner stuck forever.
     try {
-      const res = await fetch(`${BASE}/apply/status/${jobId}`);
-      return await res.json();
+      return await fetchJson(`${BASE}/apply/status/${jobId}`);
     } catch (e: any) {
-      return { status: "failed", error: String(e) };
+      return { status: "failed", error: errorMessage(e) };
     }
   }, []);
 

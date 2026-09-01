@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 /**
  * Detection data for a single frame (on-demand overlay).
@@ -201,17 +202,12 @@ export function useDotboardCalibration(
   const validateImages = useCallback(async () => {
     setValidating(true);
     try {
-      const res = await fetch('/backend/calibration/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera, source_path_idx: sourcePathIdx,
-          image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
-        }),
-      });
-      setValidation(await res.json());
+      setValidation(await postJson('/backend/calibration/validate', {
+        camera, source_path_idx: sourcePathIdx,
+        image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
+      }));
     } catch (e) {
-      setValidation({ valid: false, found_count: 0, error: String(e) });
+      setValidation({ valid: false, found_count: 0, error: errorMessage(e) });
     } finally {
       setValidating(false);
     }
@@ -242,14 +238,13 @@ export function useDotboardCalibration(
     settingsReadyRef.current = false;
     const seq = ++settingsSeqRef.current;
     try {
-      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
-      const data = await res.json();
+      const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${idx}`);
       if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
-      if (!res.ok || !data.settings) {
+      if (!data.settings) {
         // Guard stays CLOSED: the form still holds another source's values and
         // an open guard would let the debounced save write them into THIS
         // source's sidecar. Surface the failure instead of console-only.
-        setModelLoadError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        setModelLoadError(`Failed to load calibration settings: ${data.error ?? 'no settings in response'}`);
         return;
       }
       applySettings(data.settings);
@@ -259,7 +254,7 @@ export function useDotboardCalibration(
       settingsReadyRef.current = true;
     } catch (e) {
       if (seq !== settingsSeqRef.current) return;
-      setModelLoadError(`Failed to load calibration settings: ${String(e)}`);
+      setModelLoadError(`Failed to load calibration settings: ${errorMessage(e)}`);
     }
   }, [applySettings]);
 
@@ -268,11 +263,8 @@ export function useDotboardCalibration(
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/backend/config');
-        if (res.ok) {
-          const cal = (await res.json()).calibration || {};
-          if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-        }
+        const cal = (await fetchJson('/backend/config')).calibration || {};
+        if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
       } catch (e) {
         console.error('Failed to load config:', e);
       }
@@ -298,12 +290,8 @@ export function useDotboardCalibration(
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
       try {
-        await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            calibration: { calibration_sources: calibrationSources, active: BOARD },
-          }),
+        await postJson('/backend/update_config', {
+          calibration: { calibration_sources: calibrationSources, active: BOARD },
         });
       } catch (e) {
         console.error('Failed to save config:', e);
@@ -314,27 +302,23 @@ export function useDotboardCalibration(
       // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
       if (!pathEdited && settingsReadyRef.current) {
         try {
-          await fetch('/backend/calibration/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_path_idx: sourcePathIdx,
-              settings: {
-                image: {
-                  image_format: imageFormat,
-                  image_type: imageType,
-                  // null when unset (dt idiom) — persisting frameTotal()'s UI
-                  // fallback would silently bake 10 into the sidecar
-                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
-                  use_camera_subfolders: useCameraSubfolders,
-                  camera_subfolders: cameraSubfolders,
-                },
-                rig: { camera, dt: numOrNull(dt), datum_frame: datumFrame, piv_type: pivType },
-                methods: {
-                  dotboard: { dot_spacing_mm: numOrNull(dotSpacingMm), model_type: modelType },
-                },
+          await postJson('/backend/calibration/settings', {
+            source_path_idx: sourcePathIdx,
+            settings: {
+              image: {
+                image_format: imageFormat,
+                image_type: imageType,
+                // null when unset (dt idiom) — persisting frameTotal()'s UI
+                // fallback would silently bake 10 into the sidecar
+                n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                use_camera_subfolders: useCameraSubfolders,
+                camera_subfolders: cameraSubfolders,
               },
-            }),
+              rig: { camera, dt: numOrNull(dt), datum_frame: datumFrame, piv_type: pivType },
+              methods: {
+                dotboard: { dot_spacing_mm: numOrNull(dotSpacingMm), model_type: modelType },
+              },
+            },
           });
         } catch (e) {
           console.error('Failed to save calibration settings:', e);
@@ -411,21 +395,16 @@ export function useDotboardCalibration(
 
   // Generate the model for one camera (synchronous); optional world-frame clicks.
   const generateOne = useCallback(async (cam: number, clicks?: WorldFrameClicks | null) => {
-    const res = await fetch('/backend/calibration/generate_model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        stereo: false, camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
-        model_type: modelType,
-        board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
-        image_format: imageFormat, image_type: imageType,
-        // Generate stamps dt into the model record; empty is omitted so the
-        // backend falls to the saved rig.dt or fails loudly (never a default).
-        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
-        clicks: clicks || undefined,
-      }),
+    return postJson('/backend/calibration/generate_model', {
+      stereo: false, camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+      model_type: modelType,
+      board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
+      image_format: imageFormat, image_type: imageType,
+      // Generate stamps dt into the model record; empty is omitted so the
+      // backend falls to the saved rig.dt or fails loudly (never a default).
+      ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
+      clicks: clicks || undefined,
     });
-    return res.json();
   }, [sourcePathIdx, modelType, boardParams, datumFrame, frameTotal, imageFormat, imageType, dt]);
 
   // Single-camera generate.
@@ -444,7 +423,7 @@ export function useDotboardCalibration(
         setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
       }
     } catch (e) {
-      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: String(e) });
+      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: errorMessage(e) });
     }
   }, [camera, frameTotal, generateOne]);
 
@@ -464,7 +443,7 @@ export function useDotboardCalibration(
           : { status: 'failed', error: data.error };
         if (data.success && cam === camera) setCameraModel(toCameraModel(data));
       } catch (e) {
-        results[`Camera ${cam}`] = { status: 'failed', error: String(e) };
+        results[`Camera ${cam}`] = { status: 'failed', error: errorMessage(e) };
       }
     }
     setMultiCameraJobStatus({ status: 'completed', processed_cameras: cams.length, total_cameras: cams.length, camera_results: results });
@@ -476,9 +455,8 @@ export function useDotboardCalibration(
     setModelLoading(true);
     setModelLoadError(null);
     try {
-      const res = await fetch(`/backend/calibration/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
-      const data = await res.json();
-      if (res.ok && data.exists) {
+      const data = await fetchJson(`/backend/calibration/model?stereo=0&board=${BOARD}&camera=${camera}&source_path_idx=${sourcePathIdx}`);
+      if (data.exists) {
         setCameraModel(toCameraModel(data));
         setLoadedWorldFrame(data.world_frame ?? null);
         // Seed geometry from the model itself (self-describing sidecar) so the panel reflects
@@ -519,15 +497,10 @@ export function useDotboardCalibration(
   // On-demand board detection for the overlay on a given frame.
   const detectFrame = useCallback(async (frame: number) => {
     try {
-      const res = await fetch('/backend/calibration/detect_frame', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera, source_path_idx: sourcePathIdx, frame, board: BOARD,
-          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-        }),
+      const data = await postJson('/backend/calibration/detect_frame', {
+        camera, source_path_idx: sourcePathIdx, frame, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
       });
-      const data = await res.json();
       if (data.success) {
         setDetections(prev => ({
           ...prev,
@@ -538,7 +511,7 @@ export function useDotboardCalibration(
         setDetectError(data.error || `No board detected on frame ${frame}`);
       }
     } catch (e) {
-      setDetectError(`Detection failed on frame ${frame}: ${String(e)}`);
+      setDetectError(`Detection failed on frame ${frame}: ${errorMessage(e)}`);
     }
   }, [camera, sourcePathIdx, boardParams, imageFormat, imageType]);
 
@@ -547,16 +520,11 @@ export function useDotboardCalibration(
   const detectAllViews = useCallback(async () => {
     setDetecting(true);
     try {
-      const res = await fetch('/backend/calibration/detect_views', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera, source_path_idx: sourcePathIdx, board: BOARD,
-          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-          frame_total: frameTotal(),
-        }),
+      const data = await postJson('/backend/calibration/detect_views', {
+        camera, source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+        frame_total: frameTotal(),
       });
-      const data = await res.json();
       if (data.success) {
         const next: Record<string, FrameDetection> = {};
         for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
@@ -568,7 +536,7 @@ export function useDotboardCalibration(
         setDetectError(data.error || 'Detection failed');
       }
     } catch (e) {
-      setDetectError(`Detection failed: ${String(e)}`);
+      setDetectError(`Detection failed: ${errorMessage(e)}`);
     } finally {
       setDetecting(false);
     }
@@ -582,23 +550,18 @@ export function useDotboardCalibration(
   ) => {
     setVectorJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
-      const res = await fetch('/backend/calibration/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
-          type_name: typeName,
-          // Empty dt is omitted: apply falls back to the model-stamped dt.
-          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
-          // Omit active_paths → backend applies to all configured base paths.
-          ...(activePaths ? { active_paths: activePaths } : {}),
-        }),
+      const data = await postJson('/backend/calibration/apply', {
+        stereo: false, board: BOARD, source_path_idx: sourcePathIdx,
+        type_name: typeName,
+        // Empty dt is omitted: apply falls back to the model-stamped dt.
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
+        // Omit active_paths → backend applies to all configured base paths.
+        ...(activePaths ? { active_paths: activePaths } : {}),
       });
-      const data = await res.json();
       if (data.job_id) setVectorJobId(data.job_id);
       else setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error });
     } catch (e) {
-      setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
+      setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
     }
   }, [sourcePathIdx, dt]);
 
@@ -610,16 +573,14 @@ export function useDotboardCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration/apply/status/${vectorJobId}`);
-        const data = await res.json();
-        if (res.ok) {
-          setVectorJobStatus(readApplyJobStatus(data));
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
-          }
+        const data = await fetchJson(`/backend/calibration/apply/status/${vectorJobId}`);
+        setVectorJobStatus(readApplyJobStatus(data));
+        if (data.status === 'completed' || data.status === 'failed') {
+          if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
         }
       } catch (e) {
-        // best-effort polling
+        setVectorJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
+        if (vectorPollRef.current) { clearInterval(vectorPollRef.current); vectorPollRef.current = null; }
       }
     };
     poll();

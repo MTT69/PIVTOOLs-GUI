@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { DataSourceType } from './useVectorViewer';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 // All valid statistic keys (1:1 mapping with config)
 const ALL_STAT_KEYS = [
@@ -89,13 +90,10 @@ export function useStatisticsCalculation(
   useEffect(() => {
     const fetchConstraints = async () => {
       try {
-        const res = await fetch(`${backendUrl}/statistics/constraints`);
-        if (res.ok) {
-          const data = await res.json();
-          setConstraints(data);
-        }
+        const data = await fetchJson<StatisticsConstraints>(`${backendUrl}/statistics/constraints`);
+        setConstraints(data);
       } catch (err) {
-        console.error("Error fetching statistics constraints:", err);
+        console.error("Error fetching statistics constraints:", errorMessage(err));
       }
     };
     fetchConstraints();
@@ -144,11 +142,7 @@ export function useStatisticsCalculation(
 
       const fetchStatus = async () => {
         try {
-          const res = await fetch(`${backendUrl}/statistics/status/${jobId}`);
-          if (!res.ok) {
-            throw new Error("Failed to fetch status");
-          }
-          const data = await res.json();
+          const data = await fetchJson<StatisticsJobDetails>(`${backendUrl}/statistics/status/${jobId}`);
 
           if (active) {
             setStatus(data.status || "not_started");
@@ -180,10 +174,11 @@ export function useStatisticsCalculation(
             }
           }
         } catch (err) {
-          console.error("Error fetching statistics status:", err);
+          console.error("Error fetching statistics status:", errorMessage(err));
           if (active) {
             setStatus("error");
-            setDetails({ status: "error", progress: 0, error: String(err) });
+            setDetails({ status: "error", progress: 0, error: errorMessage(err) });
+            setCalculating(false);
           }
           if (intervalRef.current) {
             clearInterval(intervalRef.current);
@@ -222,18 +217,14 @@ export function useStatisticsCalculation(
     }
 
     try {
-      await fetch(`${backendUrl}/update_config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          statistics: {
-            enabled_methods: enabledMethods,
-            gamma_radius: newGammaRadius,
-          },
-        }),
+      await postJson(`${backendUrl}/update_config`, {
+        statistics: {
+          enabled_methods: enabledMethods,
+          gamma_radius: newGammaRadius,
+        },
       });
     } catch (err) {
-      console.error("Failed to update config:", err);
+      console.error("Failed to update config:", errorMessage(err));
     }
   }, [backendUrl]);
 
@@ -275,41 +266,30 @@ export function useStatisticsCalculation(
       : requestedStatistics;
 
     try {
-      const res = await fetch(`${backendUrl}/statistics/calculate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          base_path_idx: basePathIdx,
-          workflow: workflow,
-          // Always instantaneous: the Statistics panel is gated on !isEnsemble
-          // (useVectorViewer canCalculateStatistics), so an ensemble dataSource
-          // can never reach here.
-          type_name: 'instantaneous',
-          source_endpoint: dataSource
-            ? (isUncalibratedSource
-                ? 'uncalibrated'
-                : dataSource.includes('stereo')
-                  ? 'stereo'
-                  : dataSource.includes('merged')
-                    ? 'merged'
-                    : 'regular')
-            : sourceEndpoint,
-          requested_statistics: statsToSend.length > 0 ? statsToSend : undefined,
-        }),
+      const data = await postJson(`${backendUrl}/statistics/calculate`, {
+        base_path_idx: basePathIdx,
+        workflow: workflow,
+        // Always instantaneous: the Statistics panel is gated on !isEnsemble
+        // (useVectorViewer canCalculateStatistics), so an ensemble dataSource
+        // can never reach here.
+        type_name: 'instantaneous',
+        source_endpoint: dataSource
+          ? (isUncalibratedSource
+              ? 'uncalibrated'
+              : dataSource.includes('stereo')
+                ? 'stereo'
+                : dataSource.includes('merged')
+                  ? 'merged'
+                  : 'regular')
+          : sourceEndpoint,
+        requested_statistics: statsToSend.length > 0 ? statsToSend : undefined,
       });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to start statistics calculation");
-      }
-
-      const data = await res.json();
       setStatisticsJobId(data.parent_job_id);
       setShowDialog(false);
       console.log(`Statistics calculation started! Job ID: ${data.parent_job_id}, processing ${data.processed_targets} target(s)`);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error starting statistics calculation:", err);
-      alert(`Error: ${err.message}`);
+      alert(`Error: ${errorMessage(err)}`);
       setCalculating(false);
     }
   };

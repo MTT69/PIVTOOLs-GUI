@@ -1,4 +1,5 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
+import { postJson, errorMessage } from '@/lib/api';
 
 /** Validation result for a single pattern (A or B) */
 export interface PatternValidation {
@@ -50,23 +51,10 @@ export function useConfigUpdate() {
     setUpdateError(null);
 
     try {
-      const res = await fetch('/backend/update_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok) {
-        const errorMsg = json.error || 'Failed to update configuration';
-        setUpdateError(errorMsg);
-        return { success: false, error: errorMsg };
-      }
-
+      const json = await postJson('/backend/update_config', payload);
       return { success: true, data: json };
-    } catch (e: any) {
-      const errorMsg = `Failed to update config: ${e.message}`;
+    } catch (e) {
+      const errorMsg = `Failed to update config: ${errorMessage(e)}`;
       setUpdateError(errorMsg);
       return { success: false, error: errorMsg };
     } finally {
@@ -145,131 +133,118 @@ export function useAutoValidation(config: any) {
 
       try {
         // Use new smart validation endpoint
-        const res = await fetch('/backend/validate_files', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_path_idx: 0 }),
-        });
+        const json = await postJson('/backend/validate_files', { source_path_idx: 0 });
+        if (seq !== requestSeqRef.current) return; // stale response — a newer validation superseded this one
+        const details = json.details || {};
 
-        if (res.ok) {
-          const json = await res.json();
-          if (seq !== requestSeqRef.current) return; // stale response — a newer validation superseded this one
-          const details = json.details || {};
+        // Extract per-pattern validations, A/B count warning, and sample files from first camera
+        const firstCamera = Object.values(details)[0] as any;
+        const patternValidations: PatternValidation[] = firstCamera?.pattern_validations || [];
+        const abCountWarning = firstCamera?.ab_count_warning || null;
+        const sampleFiles: string[] = firstCamera?.sample_files || [];
 
-          // Extract per-pattern validations, A/B count warning, and sample files from first camera
-          const firstCamera = Object.values(details)[0] as any;
-          const patternValidations: PatternValidation[] = firstCamera?.pattern_validations || [];
-          const abCountWarning = firstCamera?.ab_count_warning || null;
-          const sampleFiles: string[] = firstCamera?.sample_files || [];
+        if (json.valid) {
+          // Check for color images or subset processing
+          const messages: string[] = [];
 
-          if (json.valid) {
-            // Check for color images or subset processing
-            const messages: string[] = [];
+          Object.values(details).forEach((detail: any) => {
+            if (detail.color_detected) {
+              messages.push('Color images will be converted to grayscale');
+            }
+            if (detail.error && detail.error.startsWith('Processing subset:')) {
+              messages.push(detail.error);
+            }
+            if (detail.indexing_warning) {
+              messages.push(detail.indexing_warning);
+            }
+            if (detail.ab_count_warning) {
+              messages.push(detail.ab_count_warning);
+            }
+          });
 
-            Object.values(details).forEach((detail: any) => {
-              if (detail.color_detected) {
-                messages.push('Color images will be converted to grayscale');
-              }
-              if (detail.error && detail.error.startsWith('Processing subset:')) {
-                messages.push(detail.error);
-              }
-              if (detail.indexing_warning) {
-                messages.push(detail.indexing_warning);
-              }
-              if (detail.ab_count_warning) {
-                messages.push(detail.ab_count_warning);
-              }
-            });
+          const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
 
-            const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
+          setValidation({
+            valid: true,
+            checked: true,
+            error: message,
+            patternValidations,
+            abCountWarning,
+            detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
+            sampleFiles,
+          });
 
-            setValidation({
-              valid: true,
-              checked: true,
-              error: message,
-              patternValidations,
-              abCountWarning,
-              detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
-              sampleFiles,
-            });
-
-            // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
-            // We don't preload here to avoid loading the wrong format (jpeg vs png)
-          } else {
-            // Build detailed error message from validation results
-            const errors: string[] = [];
-            const warnings: string[] = [];
-            let suggestedPattern: string | null = null;
-            let suggestedPatternB: string | null = null;
-            let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
-            let suggestedSubfolder: string | null = null;
-            const perCameraSuggestions: Record<string, string> = {};
-
-            Object.entries(details).forEach(([key, value]: [string, any]) => {
-              if (value.status === 'error') {
-                // Use the detailed error message if available
-                const errorDetail = value.error ||
-                  (value.expected_count && value.actual_count !== value.expected_count
-                    ? `Found ${value.actual_count}/${value.expected_count} files`
-                    : 'Cannot read files');
-                errors.push(`${key}: ${errorDetail}`);
-                // Capture per-camera suggested subfolder
-                if (value.suggested_subfolder) {
-                  perCameraSuggestions[key] = value.suggested_subfolder;
-                  if (!suggestedSubfolder) {
-                    suggestedSubfolder = value.suggested_subfolder;
-                  }
-                }
-                // Capture first suggested pattern from any camera (legacy)
-                if (value.suggested_pattern && !suggestedPattern) {
-                  suggestedPattern = value.suggested_pattern;
-                }
-                // Capture A/B pair suggestion if available (legacy)
-                if (value.suggested_pattern_b && !suggestedPatternB) {
-                  suggestedPatternB = value.suggested_pattern_b;
-                }
-                if (value.suggested_mode && !suggestedMode) {
-                  suggestedMode = value.suggested_mode;
-                }
-              } else if (value.status === 'warning') {
-                const expected = value.expected_count || 0;
-                const actual = value.actual_count || 0;
-                warnings.push(`${key}: Found ${actual}/${expected} files`);
-              }
-            });
-
-            const errorMsg = [
-              ...errors,
-              ...warnings,
-            ].join('; ') || 'Image files not found';
-
-            setValidation({
-              valid: false,
-              checked: true,
-              error: errorMsg,
-              patternValidations,
-              abCountWarning,
-              detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
-              sampleFiles,
-              suggested_subfolder: suggestedSubfolder,
-              suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
-              suggestedCameraCount: typeof json.suggested_camera_count === 'number' ? json.suggested_camera_count : null,
-              suggestedCameraCountFiles: Array.isArray(json.suggested_camera_count_files) ? json.suggested_camera_count_files : undefined,
-              // Legacy fields
-              suggested_pattern: suggestedPattern,
-              suggested_pattern_b: suggestedPatternB,
-              suggested_mode: suggestedMode,
-            });
-          }
+          // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
+          // We don't preload here to avoid loading the wrong format (jpeg vs png)
         } else {
-          const json = await res.json();
-          if (seq !== requestSeqRef.current) return; // stale response
-          const errorMsg = json.error || 'Validation failed';
-          setValidation({ valid: false, checked: true, error: errorMsg });
+          // Build detailed error message from validation results
+          const errors: string[] = [];
+          const warnings: string[] = [];
+          let suggestedPattern: string | null = null;
+          let suggestedPatternB: string | null = null;
+          let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
+          let suggestedSubfolder: string | null = null;
+          const perCameraSuggestions: Record<string, string> = {};
+
+          Object.entries(details).forEach(([key, value]: [string, any]) => {
+            if (value.status === 'error') {
+              // Use the detailed error message if available
+              const errorDetail = value.error ||
+                (value.expected_count && value.actual_count !== value.expected_count
+                  ? `Found ${value.actual_count}/${value.expected_count} files`
+                  : 'Cannot read files');
+              errors.push(`${key}: ${errorDetail}`);
+              // Capture per-camera suggested subfolder
+              if (value.suggested_subfolder) {
+                perCameraSuggestions[key] = value.suggested_subfolder;
+                if (!suggestedSubfolder) {
+                  suggestedSubfolder = value.suggested_subfolder;
+                }
+              }
+              // Capture first suggested pattern from any camera (legacy)
+              if (value.suggested_pattern && !suggestedPattern) {
+                suggestedPattern = value.suggested_pattern;
+              }
+              // Capture A/B pair suggestion if available (legacy)
+              if (value.suggested_pattern_b && !suggestedPatternB) {
+                suggestedPatternB = value.suggested_pattern_b;
+              }
+              if (value.suggested_mode && !suggestedMode) {
+                suggestedMode = value.suggested_mode;
+              }
+            } else if (value.status === 'warning') {
+              const expected = value.expected_count || 0;
+              const actual = value.actual_count || 0;
+              warnings.push(`${key}: Found ${actual}/${expected} files`);
+            }
+          });
+
+          const errorMsg = [
+            ...errors,
+            ...warnings,
+          ].join('; ') || 'Image files not found';
+
+          setValidation({
+            valid: false,
+            checked: true,
+            error: errorMsg,
+            patternValidations,
+            abCountWarning,
+            detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
+            sampleFiles,
+            suggested_subfolder: suggestedSubfolder,
+            suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
+            suggestedCameraCount: typeof json.suggested_camera_count === 'number' ? json.suggested_camera_count : null,
+            suggestedCameraCountFiles: Array.isArray(json.suggested_camera_count_files) ? json.suggested_camera_count_files : undefined,
+            // Legacy fields
+            suggested_pattern: suggestedPattern,
+            suggested_pattern_b: suggestedPatternB,
+            suggested_mode: suggestedMode,
+          });
         }
-      } catch (e: any) {
+      } catch (e) {
         if (seq !== requestSeqRef.current) return; // stale response
-        setValidation({ valid: false, checked: true, error: `Validation failed: ${e.message}` });
+        setValidation({ valid: false, checked: true, error: `Validation failed: ${errorMessage(e)}` });
       }
     }, 500);
 

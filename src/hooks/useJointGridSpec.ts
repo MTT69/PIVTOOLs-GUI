@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorldFrame, WorldFrameState } from "@/components/setup/WorldFrameSetup";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 
 /**
  * Dotboard global-grid spec builder for the joint multi-camera flow (S2·C2).
@@ -306,17 +307,16 @@ export function useJointGridSpec({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
+        const json = await fetchJson(
           `/backend/calibration/joint/inputs?board=dotboard&source_path_idx=${sourcePathIdx}`,
         );
-        const json = await res.json();
         const coords = (json?.coords as Record<string, unknown>) ?? null;
         if (!cancelled) {
           ggRef.current = coords;
           setGg(coords);
         }
       } catch (e) {
-        console.error("Failed to load joint inputs:", e);
+        console.error("Failed to load joint inputs:", errorMessage(e));
       }
     })();
     return () => {
@@ -333,17 +333,13 @@ export function useJointGridSpec({
       const merged = { ...(ggRef.current || {}), ...block } as Record<string, unknown>;
       ggRef.current = merged;
       try {
-        await fetch("/backend/calibration/joint/inputs/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            board: "dotboard",
-            source_path_idx: sourcePathIdx,
-            global_grid: merged,
-          }),
+        await postJson("/backend/calibration/joint/inputs/save", {
+          board: "dotboard",
+          source_path_idx: sourcePathIdx,
+          global_grid: merged,
         });
       } catch (e) {
-        console.error("Failed to persist joint inputs:", e);
+        console.error("Failed to persist joint inputs:", errorMessage(e));
       }
     },
     [sourcePathIdx],

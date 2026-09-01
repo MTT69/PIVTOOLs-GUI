@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { RawImage, DType, decodeTypedArray, percentileFromRaw } from '@/lib/imageUtils';
+import { fetchJson, errorMessage } from '@/lib/api';
 
 // Prefetch buffer for smooth playback
 interface PrefetchedFrame {
@@ -103,14 +104,7 @@ export function useImagePair(
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
-      const res = await fetch(url, { signal });
-
-      if (!res.ok) {
-        prefetchInProgressRef.current.delete(cacheKey);
-        return;
-      }
-
-      const json = await res.json();
+      const json = await fetchJson(url, { signal });
 
       // Store in prefetch buffer
       // Stats are now percentages (0-100), default to full range if missing
@@ -193,12 +187,7 @@ export function useImagePair(
 
     try {
       const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
-      const res = await fetch(url);
-      const json = await res.json();
-
-      if (!res.ok) {
-        throw new Error(json.error || `Image pair not found (frame ${index})`);
-      }
+      const json = await fetchJson(url);
 
       // Check for raw image fields and meta (for 16-bit support)
       if (json.meta?.width && (json.A_raw || json.B_raw)) {
@@ -209,7 +198,7 @@ export function useImagePair(
           try {
             rawA = { ...meta, data: decodeTypedArray(json.A_raw, meta.dtype) };
           } catch (err) {
-            const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+            const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : errorMessage(err);
             setError('Failed to decode A_raw: ' + msg);
             rawA = null;
           }
@@ -218,7 +207,7 @@ export function useImagePair(
           try {
             rawB = { ...meta, data: decodeTypedArray(json.B_raw, meta.dtype) };
           } catch (err) {
-            const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+            const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : errorMessage(err);
             setError('Failed to decode B_raw: ' + msg);
             rawB = null;
           }
@@ -261,8 +250,8 @@ export function useImagePair(
       // Prefetch surrounding frames for smooth playback
       prefetchSurrounding(index);
 
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e) {
+      setError(errorMessage(e));
       if (typeof window !== 'undefined') {
         console.error('[useImagePair] Error fetching image pair:', e);
       }
@@ -322,15 +311,9 @@ export function useImagePair(
 
       try {
         const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
-        const res = await fetch(url, { signal: abortController.signal });
+        const json = await fetchJson(url, { signal: abortController.signal });
 
         if (cancelled) return;
-
-        const json = await res.json();
-
-        if (!res.ok) {
-          throw new Error(json.error || `Image pair not found (frame ${index})`);
-        }
 
         // Check for raw image fields and meta
         if (json.meta?.width && (json.A_raw || json.B_raw)) {
@@ -341,7 +324,7 @@ export function useImagePair(
             try {
               rawA = { ...meta, data: decodeTypedArray(json.A_raw, meta.dtype) };
             } catch (err) {
-              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : errorMessage(err);
               setError('Failed to decode A_raw: ' + msg);
               rawA = null;
             }
@@ -350,7 +333,7 @@ export function useImagePair(
             try {
               rawB = { ...meta, data: decodeTypedArray(json.B_raw, meta.dtype) };
             } catch (err) {
-              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : String(err);
+              const msg = typeof err === 'object' && err !== null && 'message' in err ? (err as any).message : errorMessage(err);
               setError('Failed to decode B_raw: ' + msg);
               rawB = null;
             }
@@ -392,11 +375,11 @@ export function useImagePair(
         // Prefetch surrounding frames
         prefetchSurrounding(index);
 
-      } catch (e: any) {
-        if (e.name === 'AbortError') {
+      } catch (e) {
+        if (e instanceof Error && e.name === 'AbortError') {
           return;
         }
-        setError(e.message);
+        setError(errorMessage(e));
         if (typeof window !== 'undefined') {
           console.error('[useImagePair] Error fetching image pair:', e);
         }

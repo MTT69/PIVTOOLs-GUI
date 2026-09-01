@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 /** One iteration of the self-calibration convergence history. */
 export interface SC2IterationRecord {
@@ -98,11 +99,8 @@ export function useSelfCalibration(
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/backend/config');
-        if (res.ok) {
-          const cfg = await res.json();
-          if (Array.isArray(cfg.base_paths)) setBasePaths(cfg.base_paths);
-        }
+        const cfg = await fetchJson('/backend/config');
+        if (Array.isArray(cfg.base_paths)) setBasePaths(cfg.base_paths);
       } catch {
         /* base paths are best-effort; default to index 0 */
       }
@@ -113,9 +111,7 @@ export function useSelfCalibration(
   const checkStatus = useCallback(async () => {
     try {
       const q = `stereo=1&board=${board}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`;
-      const res = await fetch(`/backend/calibration/self_cal/result?${q}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await fetchJson(`/backend/calibration/self_cal/result?${q}`);
       if (data.has_self_calibration) {
         setStatus(data);
         if (data.n_images) setNImages(data.n_images);
@@ -137,9 +133,7 @@ export function useSelfCalibration(
   const pollJob = useCallback(
     async (id: string) => {
       try {
-        const res = await fetch(`/backend/calibration/self_cal/status/${id}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await fetchJson(`/backend/calibration/self_cal/status/${id}`);
         setJobStatus(data.status);
         setJobProgress(data.progress ?? 0);
         if (data.status === 'completed') {
@@ -170,8 +164,13 @@ export function useSelfCalibration(
             pollRef.current = null;
           }
         }
-      } catch {
-        /* keep polling */
+      } catch (e) {
+        setIsRunning(false);
+        setError(errorMessage(e));
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
       }
     },
     [checkStatus],
@@ -184,19 +183,14 @@ export function useSelfCalibration(
     setJobProgress(0);
     setJobStatus('starting');
     try {
-      const res = await fetch('/backend/calibration/self_cal/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...locator(),
-          base_path_idx: basePathIdx,
-          n_images: nImages,
-          window_size: windowSize,
-          overlap,
-          apply_filters: applyFilters,
-        }),
+      const data = await postJson('/backend/calibration/self_cal/run', {
+        ...locator(),
+        base_path_idx: basePathIdx,
+        n_images: nImages,
+        window_size: windowSize,
+        overlap,
+        apply_filters: applyFilters,
       });
-      const data = await res.json();
       if (!data.success) {
         setError(data.error || 'Failed to start self-calibration');
         setIsRunning(false);

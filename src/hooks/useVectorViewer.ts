@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { normalizeVarName } from "@/lib/plotUnits";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 
 interface UseVectorViewerProps {
   backendUrl: string;
@@ -499,18 +500,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
     const syncTypeNames = async () => {
       try {
-        await fetch(`${backendUrl}/update_config`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            merging: { type_name: typeName },
-            transforms: { type_name: typeName, source_endpoint: sourceEndpoint },
-            statistics: { type_name: typeName, source_endpoint: sourceEndpoint },
-            video: { piv_type: typeName, source_endpoint: sourceEndpoint },
-          }),
+        await postJson(`${backendUrl}/update_config`, {
+          merging: { type_name: typeName },
+          transforms: { type_name: typeName, source_endpoint: sourceEndpoint },
+          statistics: { type_name: typeName, source_endpoint: sourceEndpoint },
+          video: { piv_type: typeName, source_endpoint: sourceEndpoint },
         });
       } catch (err) {
-        console.error('Failed to sync type_name to config:', err);
+        console.error('Failed to sync type_name to config:', errorMessage(err));
       }
     };
 
@@ -596,9 +593,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to fetch vector plot");
+      const json = await fetchJson(url);
 
       // Cache regardless of staleness - the bytes are valid for their key even if a
       // newer request has superseded this one on screen.
@@ -616,9 +611,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       // Run is managed by fetchAvailableRuns (auto-selects max) and validateAndSetRun (user input).
       // Do NOT override run from meta.run here — it races with fetchAvailableRuns and resets to 1.
       return true;
-    } catch (e: any) {
+    } catch (e) {
       if (plotRequestIdRef.current !== requestId) return false;
-      setError(e.message || "Unknown error");
+      setError(errorMessage(e));
       return false;
     } finally {
       // Only the newest request may clear the spinner; an older one finishing first
@@ -679,10 +674,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_vector?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
+      const json = await fetchJson(url);
 
-      if (res.ok && json.image) {
+      if (json.image) {
         prefetchBufferRef.current.set(cacheKey, {
           image: json.image,
           meta: json.meta
@@ -754,13 +748,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("camera", String(camera));
 
       const url = `${backendUrl}/plot/check_available_data?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
+      const json = await fetchJson(url);
 
       // A newer path/camera has been requested since - discard this answer entirely.
       if (latestAvailabilityKeyRef.current !== fetchKey) return;
 
-      if (res.ok && json.available) {
+      if (json.available) {
         // Mark as fetched for this path/camera
         lastFetchedAvailabilityRef.current = fetchKey;
         setAvailableDataSources(json.available);
@@ -797,7 +790,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         });
       }
     } catch (e) {
-      console.error("Error fetching available data sources:", e);
+      console.error("Error fetching available data sources:", errorMessage(e));
     } finally {
       // Only the newest probe may report. An older one opening the gate here would
       // stamp the key to a location the viewer has already left.
@@ -853,10 +846,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       appendWallUnitsParams(params);
 
       const url = `${backendUrl}/plot/plot_ensemble?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
+      const json = await fetchJson(url);
 
-      if (!res.ok) throw new Error(json.error || "Failed to fetch ensemble plot");
       if (plotRequestIdRef.current !== requestId) return false;
 
       setImageSrc(json.image ?? null);
@@ -877,9 +868,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         }
       }
       return true;
-    } catch (e: any) {
+    } catch (e) {
       if (plotRequestIdRef.current !== requestId) return false;
-      setError(e.message || "Unknown error");
+      setError(errorMessage(e));
       return false;
     } finally {
       if (plotRequestIdRef.current === requestId) setLoading(false);
@@ -915,14 +906,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_stat_vars?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch stat vars (${res.status})`);
+      const json = await fetchJson(url);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
       setStatVars(vars);
       // Note: Don't auto-select here - unified dropdown handles variable selection
-    } catch (e: any) {
-      setStatVarsError(e?.message ?? "Unknown error");
+    } catch (e) {
+      setStatVarsError(errorMessage(e));
       setStatVars(null);
     } finally {
       setStatVarsLoading(false);
@@ -948,14 +937,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_vars?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch frame vars (${res.status})`);
+      const json = await fetchJson(url);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
       setFrameVars(vars);
       // Note: Don't auto-select here - unified dropdown handles variable selection
-    } catch (e: any) {
-      setFrameVarsError(e?.message ?? "Unknown error");
+    } catch (e) {
+      setFrameVarsError(errorMessage(e));
       setFrameVars(null);
     } finally {
       setFrameVarsLoading(false);
@@ -981,12 +968,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) {
-        console.error("Failed to fetch all vars:", json.error);
-        return;
-      }
+      const json = await fetchJson(url);
       const grouped: GroupedVariables = {
         instantaneous: Array.isArray(json.instantaneous) ? json.instantaneous : [],
         instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
@@ -995,8 +977,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         corr_quality: Array.isArray(json.corr_quality) ? json.corr_quality : [],
       };
       setAllVars(grouped);
-    } catch (e: any) {
-      console.error("Error fetching all vars:", e?.message);
+    } catch (e) {
+      console.error("Error fetching all vars:", errorMessage(e));
     } finally {
       setAllVarsLoading(false);
     }
@@ -1020,9 +1002,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_limits?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch limits (${res.status})`);
+      const json = await fetchJson(url);
       // A superseded limits request must not overwrite the newer variable's range.
       if (limitsRequestIdRef.current !== requestId) return;
       // Prefer robust percentile limits (p5/p95) so a single outlier vector
@@ -1038,7 +1018,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         console.warn("check_limits returned unexpected payload", json);
       }
     } catch (err) {
-      console.error("Error fetching limits:", err);
+      console.error("Error fetching limits:", errorMessage(err));
     } finally {
       if (limitsRequestIdRef.current === requestId) setLimitsLoading(false);
     }
@@ -1062,10 +1042,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_runs?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) return [];
-      const runs = Array.isArray(json.runs) ? json.runs.map(Number).filter((n: number) => Number.isFinite(n) && n > 0) : [];
+      const json = await fetchJson(url);
+      const runs =Array.isArray(json.runs) ? json.runs.map(Number).filter((n: number) => Number.isFinite(n) && n > 0) : [];
       return runs;
     } catch (e) {
       return [];
@@ -1118,9 +1096,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       appendWallUnitsParams(params);
       
       const url = `${backendUrl}/plot/plot_stats?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch stats plot (${res.status})`);
+      const json = await fetchJson(url);
       if (plotRequestIdRef.current !== requestId) return;
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
@@ -1138,9 +1114,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         }
       }
       setHasRendered(true);
-    } catch (e: any) {
+    } catch (e) {
       if (plotRequestIdRef.current !== requestId) return;
-      const msg = e?.message ?? "Unknown error";
+      const msg = errorMessage(e);
       // Filter out "Internal Server Error" if it's just a generic 500
       if (msg.includes("Internal Server Error")) {
         setStatsError("Statistics not found for this configuration.");
@@ -1174,15 +1150,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
 
       const url = `${backendUrl}/plot/plot_corr_quality?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to fetch correlation-quality plot (${res.status})`);
+      const json = await fetchJson(url);
       if (plotRequestIdRef.current !== requestId) return;
       setImageSrc(json.image ?? null);
       setMeta(json.meta ?? null);
-    } catch (e: any) {
+    } catch (e) {
       if (plotRequestIdRef.current !== requestId) return;
-      setError(e?.message ?? "Unknown error");
+      setError(errorMessage(e));
     } finally {
       if (plotRequestIdRef.current === requestId) setLoading(false);
     }
@@ -1287,17 +1261,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       // and converts the y+ wall-units axis back to mm at this boundary.
       const params = buildPositionParams(xPercent, yPercent);
       const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      if (!res.ok || json.error) throw new Error(json.error || "Failed to get vector value");
+      const json = await fetchJson(url);
+      if (json.error) throw new Error(json.error);
       // json.x/json.y are always raw mm (get_vector_at_position works in mm); note that
       // in the alert so a y+ view doesn't make the value look wrong.
       const unit = wallUnitsActive ? " mm" : "";
       alert(`New datum set at physical position: x=${json.x?.toFixed(4)}${unit}, y=${json.y?.toFixed(4)}${unit}`);
       await sendDatumToBackend(json.x, json.y);
       void fetchCurrentView();
-    } catch (e: any) {
-      setError(`Failed to set datum: ${e.message}`);
+    } catch (e) {
+      setError(`Failed to set datum: ${errorMessage(e)}`);
     }
     setDatumMode(false);
   };
@@ -1320,19 +1293,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         body.camera_pair = stereoInstPair;
       }
       const url = `${backendUrl}/calibration/set_datum`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to update offsets");
+      await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
       prefetchBufferRef.current.clear();
       prefetchInProgressRef.current.clear();
       void fetchCurrentView();
-    } catch (e: any) {
-      setError(`Failed to update offsets: ${e.message}`);
+    } catch (e) {
+      setError(`Failed to update offsets: ${errorMessage(e)}`);
     }
   };
 
@@ -1356,18 +1323,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         body.camera_pair = stereoInstPair;
       }
       const url = `${backendUrl}/calibration/set_datum`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to set datum");
+      await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
       prefetchBufferRef.current.clear();
       prefetchInProgressRef.current.clear();
-    } catch (e: any) {
-      setError(`Failed to set datum: ${e.message}`);
+    } catch (e) {
+      setError(`Failed to set datum: ${errorMessage(e)}`);
     }
   };
 
@@ -1397,9 +1358,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           params.set("camera_pair", cameraPair.join(","));
         }
         const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        if (!res.ok || json.error) throw new Error(json.error || "Failed to get corner coordinate");
+        const json = await fetchJson(url);
+        if (json.error) throw new Error(json.error);
         return { x: json.x, y: json.y };
       };
       const [topLeft, topRight, bottomLeft, bottomRight] = await Promise.all([
@@ -1410,8 +1370,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       ]);
       setCornerCoordinates({ topLeft, topRight, bottomLeft, bottomRight });
       setShowCorners(true);
-    } catch (e: any) {
-      setError(`Failed to get corner coordinates: ${e.message}`);
+    } catch (e) {
+      setError(`Failed to get corner coordinates: ${errorMessage(e)}`);
     }
   };
 
@@ -1477,11 +1437,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     pendingFetchRef.current = true;
     const params = buildPositionParams(xPercent, yPercent);
     const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
-    fetch(url)
-      .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
-      .then(({ ok, json }) => {
+    fetchJson(url)
+      .then(json => {
         pendingFetchRef.current = false;
-        if (!ok || json.error) return;
+        if (json.error) return;
         setHoverData(h => h ? { ...h, ...json } : null);
       })
       .catch(() => { pendingFetchRef.current = false; });
@@ -1493,9 +1452,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     const params = buildPositionParams(xPercent, yPercent);
     const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
     try {
-      const r = await fetch(url);
-      const j = await r.json();
-      if (!r.ok || j.error || typeof j.x !== "number" || typeof j.y !== "number") return null;
+      const j = await fetchJson(url);
+      if (j.error || typeof j.x !== "number" || typeof j.y !== "number") return null;
       return { x: j.x, y: j.y };
     } catch {
       return null;
@@ -1735,9 +1693,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   useEffect(() => {
     async function fetchConfig() {
       try {
-        const res = await fetch(`${backendUrl}/config`);
-        if (!res.ok) return;
-        const json = await res.json();
+        const json = await fetchJson(`${backendUrl}/config`);
         const backendNumFramePairs = json.images?.num_frame_pairs;
         if (Number.isFinite(backendNumFramePairs) && backendNumFramePairs > 0) {
           setMaxFrameCount(backendNumFramePairs);
@@ -1745,7 +1701,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           setIndex(prev => Math.min(prev, backendNumFramePairs));
         }
       } catch (err) {
-        console.error("Error fetching config for frame count:", err);
+        console.error("Error fetching config for frame count:", errorMessage(err));
       }
     }
     fetchConfig();
@@ -2003,20 +1959,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${backendUrl}/plot/transform_frame`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          base_path: effectiveDir,
-          camera: camera,
-          frame: index,
-          transformation,
-          merged: merged,
-        }),
+      const result = await postJson(`${backendUrl}/plot/transform_frame`, {
+        base_path: effectiveDir,
+        camera: camera,
+        frame: index,
+        transformation,
+        merged: merged,
       });
-      const result = await response.json();
       if (result.success) {
         // Use the backend's simplified transformation list
         setAppliedTransforms(result.pending_transformations || []);
@@ -2028,8 +1977,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       } else {
         setError(result.error || "Transformation failed");
       }
-    } catch (e: any) {
-      setError(`Transformation failed: ${e?.message ?? "Unknown error"}`);
+    } catch (e) {
+      setError(`Transformation failed: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -2039,19 +1988,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${backendUrl}/plot/clear_transform`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          base_path: effectiveDir,
-          camera: camera,
-          frame: index,
-          merged: merged,
-        }),
+      const result = await postJson(`${backendUrl}/plot/clear_transform`, {
+        base_path: effectiveDir,
+        camera: camera,
+        frame: index,
+        merged: merged,
       });
-      const result = await response.json();
       if (result.success) {
         setAppliedTransforms([]);
         // Invalidate prefetch cache so the re-render fetches fresh data from backend
@@ -2074,8 +2016,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
           setError(errorMsg);
         }
       }
-    } catch (e: any) {
-      setError(`Clear transforms failed: ${e?.message ?? "Unknown error"}`);
+    } catch (e) {
+      setError(`Clear transforms failed: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -2101,21 +2043,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setError(null);
       setTransformationJob(null);
 
-      const response = await fetch(`${backendUrl}/plot/transform_all_frames`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          base_path: effectiveDir,
-          camera: camera,
-          transformations,
-          merged: merged,
-          image_count: maxFrameCount,
-          cameras: transformCameras.length < cameraOptions.length ? transformCameras : undefined,
-        }),
+      const result = await postJson(`${backendUrl}/plot/transform_all_frames`, {
+        base_path: effectiveDir,
+        camera: camera,
+        transformations,
+        merged: merged,
+        image_count: maxFrameCount,
+        cameras: transformCameras.length < cameraOptions.length ? transformCameras : undefined,
       });
-      const result = await response.json();
       if (result.job_id) {
         setTransformationJob({
           job_id: result.job_id,
@@ -2129,8 +2064,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       } else {
         setError(result.error || "Failed to start transformation job");
       }
-    } catch (e: any) {
-      setError(`Failed to start transformation: ${e?.message ?? "Unknown error"}`);
+    } catch (e) {
+      setError(`Failed to start transformation: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -2138,13 +2073,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
-      const response = await fetch(`${backendUrl}/plot/transform_all_frames/status/${jobId}`);
-      if (!response.ok) {
-        setError(`Transform status check failed: ${response.statusText}`);
-        setTransformationJob(null);
-        return; // Stop polling on HTTP error
-      }
-      const status = await response.json();
+      const status = await fetchJson(`${backendUrl}/plot/transform_all_frames/status/${jobId}`);
 
       setTransformationJob(status);
 
@@ -2157,19 +2086,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
         // Clear the operations from config.yaml
         try {
-          await fetch(`${backendUrl}/update_config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              transforms: {
-                cameras: {
-                  [camera]: { operations: [] }
-                }
+          await postJson(`${backendUrl}/update_config`, {
+            transforms: {
+              cameras: {
+                [camera]: { operations: [] }
               }
-            }),
+            }
           });
         } catch (err) {
-          console.error('Failed to clear transform operations from config:', err);
+          console.error('Failed to clear transform operations from config:', errorMessage(err));
         }
 
         // Invalidate prefetch cache so re-render fetches fresh data
@@ -2180,9 +2105,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       } else if (status.status === "failed") {
         setError(`Batch transform failed: ${status.error || "Unknown error"}`);
       }
-    } catch (e: any) {
+    } catch (e) {
       // Network error - stop polling
-      setError(`Failed to check transformation status: ${e?.message ?? "Unknown error"}`);
+      setError(`Failed to check transformation status: ${errorMessage(e)}`);
       setTransformationJob(null);
     }
   }, [backendUrl, handleRender, camera]);

@@ -14,6 +14,7 @@ import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGa
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { ApplyJobStatus, readApplyJobStatus } from "@/lib/applyJob";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
   GCInlineControls,
@@ -104,16 +105,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const handleVectorTypeChange = useCallback(async (value: "instantaneous" | "ensemble") => {
     setVectorTypeName(value);
     try {
-      await fetch("/backend/calibration/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          settings: { rig: { piv_type: value } },
-        }),
+      await postJson("/backend/calibration/settings", {
+        source_path_idx: sourcePathIdx,
+        settings: { rig: { piv_type: value } },
       });
     } catch (e) {
-      console.error("Failed to save piv_type:", e);
+      console.error("Failed to save piv_type:", errorMessage(e));
     }
   }, [sourcePathIdx]);
 
@@ -164,14 +161,13 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     const seq = ++settingsSeqRef.current;
     (async () => {
       try {
-        const res = await fetch(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
-        const data = await res.json();
+        const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
         if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
-        if (!res.ok || !data.settings) {
+        if (!data.settings) {
           // Guard stays CLOSED: the form still holds another source's values
           // and an open guard would let the debounced save write them into
           // THIS source's sidecar. Surface the failure in the validation panel.
-          setValidation({ valid: false, error: `Failed to load calibration settings: ${data.error ?? res.status}` });
+          setValidation({ valid: false, error: `Failed to load calibration settings: ${data.error ?? "no settings in response"}` });
           return;
         }
         const img = data.settings.image || {};
@@ -189,7 +185,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         setSettingsEpoch(n => n + 1);
       } catch (e) {
         if (seq !== settingsSeqRef.current) return;
-        setValidation({ valid: false, error: `Failed to load calibration settings: ${String(e)}` });
+        setValidation({ valid: false, error: `Failed to load calibration settings: ${errorMessage(e)}` });
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,15 +196,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     if (!settingsEpoch) return;  // nothing hydrated yet
     const t = setTimeout(async () => {
       try {
-        await fetch("/backend/update_config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            calibration: { calibration_sources: calibrationSources },
-          }),
+        await postJson("/backend/update_config", {
+          calibration: { calibration_sources: calibrationSources },
         });
       } catch (e) {
-        console.error("persist calibration sources failed", e);
+        console.error("persist calibration sources failed", errorMessage(e));
       }
       // Sidecars are per-source: never write the form into a source it wasn't
       // hydrated from — an in-place path edit repoints the index at a NEW
@@ -217,29 +209,25 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       const pathEdited = currentPath !== loadedSourcePathRef.current;
       if (!pathEdited && settingsReadyRef.current) {
         try {
-          await fetch("/backend/calibration/settings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source_path_idx: sourcePathIdx,
-              settings: {
-                image: {
-                  image_format: imageFormat,
-                  image_type: imageType,
-                  use_camera_subfolders: useCameraSubfolders,
-                  camera_subfolders: cameraSubfolders,
-                },
-                rig: { dt: (() => { const v = parseFloat(dt); return Number.isFinite(v) ? v : null; })() },
-                methods: {
-                  scale_factor: {
-                    px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
-                  },
+          await postJson("/backend/calibration/settings", {
+            source_path_idx: sourcePathIdx,
+            settings: {
+              image: {
+                image_format: imageFormat,
+                image_type: imageType,
+                use_camera_subfolders: useCameraSubfolders,
+                camera_subfolders: cameraSubfolders,
+              },
+              rig: { dt: (() => { const v = parseFloat(dt); return Number.isFinite(v) ? v : null; })() },
+              methods: {
+                scale_factor: {
+                  px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
                 },
               },
-            }),
+            },
           });
         } catch (e) {
-          console.error("persist calibration settings failed", e);
+          console.error("persist calibration settings failed", errorMessage(e));
         }
       }
       if (pathEdited) {
@@ -260,17 +248,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const validate = useCallback(async () => {
     setValidating(true);
     try {
-      const res = await fetch(`${BASE}/validate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          camera, source_path_idx: sourcePathIdx,
-          image_format: imageFormat, image_type: imageType, frame_total: 1,
-        }),
-      });
-      setValidation(await res.json());
+      setValidation(await postJson(`${BASE}/validate`, {
+        camera, source_path_idx: sourcePathIdx,
+        image_format: imageFormat, image_type: imageType, frame_total: 1,
+      }));
     } catch (e) {
-      setValidation({ valid: false, error: String(e) });
+      setValidation({ valid: false, error: errorMessage(e) });
     } finally {
       setValidating(false);
     }
@@ -475,15 +458,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const isActive = config?.calibration?.active === "scale_factor";
   const setAsActive = useCallback(async () => {
     try {
-      const res = await fetch("/backend/update_config", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ calibration: { active: "scale_factor" } }),
-      });
-      const json = await res.json();
-      if (res.ok && json.updated?.calibration) {
+      const json = await postJson("/backend/update_config", { calibration: { active: "scale_factor" } });
+      if (json.updated?.calibration) {
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
-    } catch (e) { console.error("set active failed", e); }
+    } catch (e) { console.error("set active failed", errorMessage(e)); }
   }, [config, updateConfig]);
 
   const clickActive = pickMode !== "none" || gcIsSelecting;

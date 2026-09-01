@@ -20,6 +20,7 @@ import {
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
 import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
+import { postJson, errorMessage } from "@/lib/api";
 
 interface DotboardCalibrationProps {
   config: any;
@@ -196,20 +197,14 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   // Set as active calibration method
   const setAsActiveMethod = useCallback(async () => {
     try {
-      const res = await fetch("/backend/update_config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          calibration: { active: "dotboard" },
-        }),
+      const json = await postJson("/backend/update_config", {
+        calibration: { active: "dotboard" },
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to set active method");
       if (json.updated?.calibration) {
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (err) {
-      console.error("Failed to set active calibration method:", err);
+      console.error("Failed to set active calibration method:", errorMessage(err));
     }
   }, [config.calibration, updateConfig]);
 

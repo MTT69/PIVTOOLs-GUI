@@ -11,6 +11,7 @@ import ColormapSelect from "@/components/shared/ColormapSelect";
 import { unitsForVar, wallScaleDivisor } from "@/lib/plotUnits";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { isNanReasonVar, nanReasonEntries, nanReasonLabel, NanReasonPipeline } from "@/lib/nanReasonCodes";
+import { fetchJson, postJson, errorMessage } from "@/lib/api";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -202,13 +203,9 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
     setSelectedCameras(cameras);
     // Save to config.yaml
     try {
-      await fetch(`${backendUrl}/update_config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merging: { cameras } }),
-      });
+      await postJson(`${backendUrl}/update_config`, { merging: { cameras } });
     } catch (e) {
-      console.error("Failed to save merging cameras to config:", e);
+      console.error("Failed to save merging cameras to config:", errorMessage(e));
     }
   }, [backendUrl]);
 
@@ -235,17 +232,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
         body.frame_idx = frameIdx;
       }
 
-      const response = await fetch(`${backendUrl}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to start merging");
-      }
+      const data = await postJson(`${backendUrl}${endpoint}`, body);
 
       if (frameIdx !== undefined) {
         // Single frame merge - completed immediately
@@ -257,10 +244,10 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
         setMergingJobId(data.job_id);
         setJobStatus("running");
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error starting merge:", error);
       setJobStatus("failed");
-      setJobDetails({ error: error.message });
+      setJobDetails({ error: errorMessage(error) });
       setMerging(false);
     }
   }, [backendUrl, basePathIdx, selectedCameras, maxFrameCount, effectiveTypeName, configEndpoint]);
@@ -273,8 +260,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
 
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`${backendUrl}/merge_vectors/status/${mergingJobId}`);
-        const data = await response.json();
+        const data = await fetchJson(`${backendUrl}/merge_vectors/status/${mergingJobId}`);
 
         setJobStatus(data.status);
         setJobDetails(data);
@@ -285,6 +271,10 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
         }
       } catch (error) {
         console.error("Error polling merge status:", error);
+        setJobStatus("failed");
+        setJobDetails({ error: errorMessage(error) });
+        setMerging(false);
+        clearInterval(pollInterval);
       }
     }, 1000);
 

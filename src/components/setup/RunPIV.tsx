@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { usePivJobContext } from '@/contexts/PivJobContext';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 // Helper to display a user-friendly path name
 const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
@@ -98,14 +99,12 @@ const RunPIV: React.FC<RunPIVProps> = ({
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch('/backend/memory_check');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+        const json = await fetchJson('/backend/memory_check');
         if (seq !== memoryCheckSeqRef.current) return;
         setMemoryWarning(json.warning || null);
       } catch (err) {
         if (seq !== memoryCheckSeqRef.current) return;
-        console.error('memory_check failed:', err);
+        console.error('memory_check failed:', errorMessage(err));
         setMemoryWarning(null);
       }
     }, 400);
@@ -162,31 +161,22 @@ const RunPIV: React.FC<RunPIVProps> = ({
     try {
       const url = `/backend/check_output_exists?active_paths=${activePaths.join(',')}&mode=${mode}`;
       console.log('[RunPIV] Checking for existing output:', url);
-      const checkRes = await fetch(url);
-      console.log('[RunPIV] Check response status:', checkRes.status);
+      const data = await fetchJson(url);
+      console.log('[RunPIV] Check response data:', data);
 
-      if (checkRes.ok) {
-        const data = await checkRes.json();
-        console.log('[RunPIV] Check response data:', data);
-
-        if (data.exists) {
-          // Data exists - show confirmation dialog
-          console.log('[RunPIV] Data exists, showing dialog');
-          setShowOverwriteDialog(true);
-          setIsCheckingOutput(false);
-          return; // Don't run yet - wait for user confirmation
-        } else {
-          // No existing data - run directly
-          console.log('[RunPIV] No existing data, running directly');
-          await startJob(mode, settings);
-        }
+      if (data.exists) {
+        // Data exists - show confirmation dialog
+        console.log('[RunPIV] Data exists, showing dialog');
+        setShowOverwriteDialog(true);
+        setIsCheckingOutput(false);
+        return; // Don't run yet - wait for user confirmation
       } else {
-        // If check fails, just run anyway
-        console.log('[RunPIV] Check failed, running anyway');
+        // No existing data - run directly
+        console.log('[RunPIV] No existing data, running directly');
         await startJob(mode, settings);
       }
     } catch (error) {
-      console.error("[RunPIV] Error checking for existing output:", error);
+      console.error("[RunPIV] Error checking for existing output:", errorMessage(error));
       // On error, just run anyway
       await startJob(mode, settings);
     } finally {
@@ -202,24 +192,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
     try {
       // Clear existing output data for selected paths and cameras
       console.log('[RunPIV] Clearing output for paths:', activePaths, 'cameras:', config?.paths?.camera_numbers);
-      const clearRes = await fetch('/backend/clear_output', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          active_paths: activePaths,
-          camera_numbers: config?.paths?.camera_numbers || [],
-          mode: mode
-        })
+      const result = await postJson('/backend/clear_output', {
+        active_paths: activePaths,
+        camera_numbers: config?.paths?.camera_numbers || [],
+        mode: mode
       });
-
-      if (clearRes.ok) {
-        const result = await clearRes.json();
-        console.log('[RunPIV] Clear result:', result);
-      } else {
-        console.error("[RunPIV] Failed to clear output data:", clearRes.status);
-      }
+      console.log('[RunPIV] Clear result:', result);
     } catch (error) {
-      console.error("[RunPIV] Error clearing output:", error);
+      console.error("[RunPIV] Error clearing output:", errorMessage(error));
     } finally {
       setIsCheckingOutput(false);
     }
@@ -258,26 +238,19 @@ const RunPIV: React.FC<RunPIVProps> = ({
           frame: '1',
           is_uncalibrated: '1',
         });
-        const res = await fetch(`/backend/plot/check_vars?${params.toString()}`);
-
-        // Only process if the response is OK
-        if (res.ok) {
-          const json = await res.json();
-          const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
-          const filtered = (json.vars || []).filter((v: string) => allowed.includes(v));
-          if (filtered.length > 0) {
-            setFrameVars(filtered);
-            // Only update varType if current one is not in the list
-            setVarType(prevVarType => filtered.includes(prevVarType) ? prevVarType : filtered[0]);
-          } else {
-            setFrameVars(allowed);
-          }
+        const json = await fetchJson(`/backend/plot/check_vars?${params.toString()}`);
+        const allowed = ["ux", "uy", "nan_mask", "peak_mag"];
+        const filtered = (json.vars || []).filter((v: string) => allowed.includes(v));
+        if (filtered.length > 0) {
+          setFrameVars(filtered);
+          // Only update varType if current one is not in the list
+          setVarType(prevVarType => filtered.includes(prevVarType) ? prevVarType : filtered[0]);
         } else {
-          // If frame doesn't exist yet, just keep the default vars
-          console.log("Frame not ready yet, using default variables");
+          setFrameVars(allowed);
         }
       } catch (error) {
-        console.log("Waiting for frames to be available...", error);
+        // If frame doesn't exist yet, just keep the default vars
+        console.log("Waiting for frames to be available...", errorMessage(error));
         // Don't throw error, just keep the default variables
       } finally {
         setFrameVarsLoading(false);

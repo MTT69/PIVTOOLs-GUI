@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 // Types for data source checking
 interface DataSourceInfo {
@@ -115,13 +116,10 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   useEffect(() => {
     const fetchConstraints = async () => {
       try {
-        const res = await fetch(`${backendUrl}/video/constraints`);
-        if (res.ok) {
-          const data = await res.json();
-          setConstraints(data);
-        }
+        const data = await fetchJson<VideoConstraints>(`${backendUrl}/video/constraints`);
+        setConstraints(data);
       } catch (err) {
-        console.error("Error fetching video constraints:", err);
+        console.error("Error fetching video constraints:", errorMessage(err));
       }
     };
     fetchConstraints();
@@ -247,10 +245,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
     setDataSourcesLoading(true);
     try {
-      const response = await fetch(
+      const data = await fetchJson(
         `${backendUrl}/video/check_data_sources?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}`
       );
-      const data = await response.json();
 
       if (data.success && data.available) {
         setDataSources(data.available);
@@ -263,7 +260,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         setDataSources(null);
       }
     } catch (error) {
-      console.error('Error checking data sources:', error);
+      console.error('Error checking data sources:', errorMessage(error));
       setDataSources(null);
     } finally {
       setDataSourcesLoading(false);
@@ -280,10 +277,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
     setRunsLoading(true);
     try {
-      const response = await fetch(
+      const data = await fetchJson(
         `${backendUrl}/video/check_runs?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}&data_source=${dataSource}&var=${type}`
       );
-      const data = await response.json();
 
       if (data.success && data.runs) {
         setAvailableRuns(data.runs);
@@ -295,7 +291,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         setHighestRun(1);
       }
     } catch (error) {
-      console.error('Error checking available runs:', error);
+      console.error('Error checking available runs:', errorMessage(error));
       setAvailableRuns([1]);
       setHighestRun(1);
     } finally {
@@ -313,10 +309,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
     setVariablesLoading(true);
     try {
-      const response = await fetch(
+      const data = await fetchJson(
         `${backendUrl}/video/available_variables?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}&data_source=${dataSource}`
       );
-      const data = await response.json();
 
       if (data.success && data.variables) {
         setAvailableVariables(data.variables);
@@ -336,7 +331,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         }
       }
     } catch (error) {
-      console.error('Error checking available variables:', error);
+      console.error('Error checking available variables:', errorMessage(error));
       // Keep default variables on error
     } finally {
       setVariablesLoading(false);
@@ -425,13 +420,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
     try {
       console.log(`Fetching videos from: ${effectiveDir}`);
-      const response = await fetch(`${backendUrl}/video/list_videos?base_path=${encodeURIComponent(effectiveDir)}`);
-
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await fetchJson(`${backendUrl}/video/list_videos?base_path=${encodeURIComponent(effectiveDir)}`);
       console.log(`Found ${data.videos?.length || 0} videos`);
 
       if (data.videos?.length) {
@@ -443,7 +432,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         setAvailableVideosMeta([]);
       }
     } catch (error) {
-      console.error('Error fetching videos:', error);
+      console.error('Error fetching videos:', errorMessage(error));
       setAvailableVideos([]);
       setAvailableVideosMeta([]);
     } finally {
@@ -469,22 +458,11 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     };
 
     try {
-      const response = await fetch(`${backendUrl}/video/config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configParams),
-      });
-
-      if (!response.ok) {
-        console.error('Failed to update video config');
-        return false;
-      }
-
-      const result = await response.json();
+      const result = await postJson(`${backendUrl}/video/config`, configParams);
       console.log('Video config updated:', result.updated);
       return true;
     } catch (error) {
-      console.error('Error updating video config:', error);
+      console.error('Error updating video config:', errorMessage(error));
       return false;
     }
   };
@@ -509,25 +487,12 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         params.test_frames = 50;
       }
       const url = `${backendUrl}/video/start_video`;
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(params),
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to start video creation');
-      }
-      
+
+      await postJson(url, params);
+
       // Polling
       const pollStatus = () => {
-        fetch(`${backendUrl}/video/video_status`)
-          .then(res => res.json())
+        fetchJson(`${backendUrl}/video/video_status`)
           .then(status => {
             setVideoStatus(status);
             if (status.processing) {
@@ -555,15 +520,15 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
             setCreating(false);
             setVideoResult({
               success: false,
-              message: 'Error polling status.'
+              message: `Error polling status: ${errorMessage(err)}`
             });
           });
       };
       pollStatus();
-    } catch (error: any) {
+    } catch (error) {
       setVideoResult({
         success: false,
-        message: `Error: ${error.message}`
+        message: `Error: ${errorMessage(error)}`
       });
       setCreating(false);
     }
@@ -572,26 +537,21 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Handle cancel
   const handleCancelVideo = async () => {
     try {
-      const response = await fetch(`${backendUrl}/video/cancel_video`, {
+      await fetchJson(`${backendUrl}/video/cancel_video`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
-      if (!response.ok) {
-        throw new Error('Failed to cancel video');
-      }
       setVideoStatus({ processing: false, progress: 0, status: 'canceled' });
       setVideoResult({
         success: false,
         message: 'Video creation canceled.'
       });
       setCreating(false);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Cancel error', error);
       setVideoResult({
         success: false,
-        message: `Error canceling: ${error.message}`
+        message: `Error canceling: ${errorMessage(error)}`
       });
     }
   };
@@ -599,23 +559,15 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   // Delete a video file
   const handleDeleteVideo = async (videoPath: string) => {
     try {
-      const response = await fetch(`${backendUrl}/video/delete_video`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: videoPath }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to delete video');
-      }
+      await postJson(`${backendUrl}/video/delete_video`, { path: videoPath }, { method: 'DELETE' });
       // Refresh the list
       if (selectedVideo === videoPath) {
         setSelectedVideo('');
       }
       fetchAvailableVideos();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Delete error:', error);
-      alert(`Failed to delete video: ${error.message}`);
+      alert(`Failed to delete video: ${errorMessage(error)}`);
     }
   };
 
@@ -656,17 +608,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         params.test_frames = 50;
       }
 
-      const response = await fetch(`${backendUrl}/video/start_batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to start batch video creation');
-      }
+      const result = await postJson(`${backendUrl}/video/start_batch`, params);
 
       const parentJobId = result.parent_job_id;
       console.log(`Batch video creation started! Parent job: ${parentJobId}, ${result.processed_targets} targets`);
@@ -674,8 +616,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
       // Poll batch status
       const pollBatchStatus = async () => {
         try {
-          const statusRes = await fetch(`${backendUrl}/video/batch_status/${parentJobId}`);
-          const statusData = await statusRes.json();
+          const statusData = await fetchJson<BatchJobStatus>(`${backendUrl}/video/batch_status/${parentJobId}`);
 
           setBatchJobStatus(statusData);
           setVideoStatus({
@@ -710,17 +651,17 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
           setCreating(false);
           setVideoResult({
             success: false,
-            message: 'Error polling batch status.',
+            message: `Error polling batch status: ${errorMessage(err)}`,
           });
         }
       };
 
       pollBatchStatus();
-    } catch (error: any) {
+    } catch (error) {
       console.error('Batch video error:', error);
       setVideoResult({
         success: false,
-        message: `Error: ${error.message}`,
+        message: `Error: ${errorMessage(error)}`,
       });
       setCreating(false);
     }

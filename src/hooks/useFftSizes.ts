@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { fetchJson, errorMessage } from '@/lib/api';
 
 /**
  * Valid PIV window axis lengths, served by the backend from the single source of
@@ -30,12 +31,8 @@ let cachedPromise: Promise<FftSizePayload> | null = null;
 
 function loadFftSizes(): Promise<FftSizePayload> {
   if (!cachedPromise) {
-    cachedPromise = fetch('/backend/fft_sizes')
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`/backend/fft_sizes returned ${res.status}`);
-        }
-        const data = await res.json();
+    cachedPromise = fetchJson('/backend/fft_sizes')
+      .then((data) => {
         if (!Array.isArray(data?.sizes)) {
           throw new Error('/backend/fft_sizes response missing "sizes" array');
         }
@@ -101,7 +98,7 @@ export function useFftSizes(): UseFftSizesResult {
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(err instanceof Error ? err.message : errorMessage(err));
           setLoading(false);
         }
       });

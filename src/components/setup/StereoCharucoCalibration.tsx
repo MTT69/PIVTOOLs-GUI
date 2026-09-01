@@ -15,6 +15,7 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
+import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -166,20 +167,14 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   // Set as active calibration method
   const setAsActiveMethod = async () => {
     try {
-      const res = await fetch("/backend/update_config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          calibration: { active: "stereo_charuco" },
-        }),
+      const json = await postJson("/backend/update_config", {
+        calibration: { active: "stereo_charuco" },
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to set active method");
       if (json.updated?.calibration) {
         updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
       }
     } catch (err) {
-      console.error("Failed to set active calibration method:", err);
+      console.error("Failed to set active calibration method:", errorMessage(err));
     }
   };
 

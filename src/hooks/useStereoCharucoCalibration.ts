@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 /**
  * Detection data for a single stereo ChArUco frame (on-demand overlay).
@@ -209,15 +210,10 @@ export function useStereoCharucoCalibration(
 
   // Validate one camera via calibration (all formats).
   const validateOne = useCallback(async (cam: number): Promise<CameraValidationResult> => {
-    const res = await fetch('/backend/calibration/validate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        camera: cam, source_path_idx: sourcePathIdx,
-        image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
-      }),
+    return postJson('/backend/calibration/validate', {
+      camera: cam, source_path_idx: sourcePathIdx,
+      image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
     });
-    return res.json();
   }, [sourcePathIdx, imageFormat, imageType, frameTotal]);
 
   const validateImages = useCallback(async () => {
@@ -236,8 +232,8 @@ export function useStereoCharucoCalibration(
         error: v1.error || v2.error,
       });
     } catch (e) {
-      const err: CameraValidationResult = { valid: false, found_count: 0, error: String(e) };
-      setValidation({ valid: false, cam1: err, cam2: err, matching_count: 0, error: String(e) });
+      const err: CameraValidationResult = { valid: false, found_count: 0, error: errorMessage(e) };
+      setValidation({ valid: false, cam1: err, cam2: err, matching_count: 0, error: errorMessage(e) });
     } finally {
       setValidating(false);
     }
@@ -276,14 +272,13 @@ export function useStereoCharucoCalibration(
     settingsReadyRef.current = false;
     const seq = ++settingsSeqRef.current;
     try {
-      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
-      const data = await res.json();
+      const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${idx}`);
       if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
-      if (!res.ok || !data.settings) {
+      if (!data.settings) {
         // Guard stays CLOSED: the form still holds another source's values and
         // an open guard would let the debounced save write them into THIS
         // source's sidecar. Surface the failure instead of console-only.
-        setDetectError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        setDetectError(`Failed to load calibration settings: ${data.error ?? 'no settings in response'}`);
         return;
       }
       applySettings(data.settings);
@@ -293,7 +288,7 @@ export function useStereoCharucoCalibration(
       settingsReadyRef.current = true;
     } catch (e) {
       if (seq !== settingsSeqRef.current) return;
-      setDetectError(`Failed to load calibration settings: ${String(e)}`);
+      setDetectError(`Failed to load calibration settings: ${errorMessage(e)}`);
     }
   }, [applySettings]);
 
@@ -302,11 +297,8 @@ export function useStereoCharucoCalibration(
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/backend/config');
-        if (res.ok) {
-          const cal = (await res.json()).calibration || {};
-          if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-        }
+        const cal = (await fetchJson('/backend/config')).calibration || {};
+        if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
       } catch (e) {
         console.error('Failed to load config:', e);
       }
@@ -332,12 +324,8 @@ export function useStereoCharucoCalibration(
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
       try {
-        await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            calibration: { calibration_sources: calibrationSources, active: 'stereo_charuco' },
-          }),
+        await postJson('/backend/update_config', {
+          calibration: { calibration_sources: calibrationSources, active: 'stereo_charuco' },
         });
       } catch (e) {
         console.error('Failed to save config:', e);
@@ -348,39 +336,35 @@ export function useStereoCharucoCalibration(
       // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
       if (!pathEdited && settingsReadyRef.current) {
         try {
-          await fetch('/backend/calibration/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_path_idx: sourcePathIdx,
-              settings: {
-                image: {
-                  image_format: imageFormat,
-                  image_type: imageType,
-                  // null when unset (dt idiom) — never persist the UI fallback
-                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
-                  use_camera_subfolders: useCameraSubfolders,
-                  camera_subfolders: cameraSubfolders,
-                },
-                rig: {
-                  camera_pair: [cam1, cam2],
-                  dt: numOrNull(dt),
-                  datum_frame: datumFrame,
-                  interpolator,
-                  piv_type: pivType,
-                },
-                methods: {
-                  charuco: {
-                    squares_h: numOrNull(squaresH),
-                    squares_v: numOrNull(squaresV),
-                    square_size: numOrNull(squareSize),
-                    marker_ratio: numOrNull(markerRatio),
-                    aruco_dict: arucoDict,
-                    min_corners: numOrNull(minCorners),
-                  },
+          await postJson('/backend/calibration/settings', {
+            source_path_idx: sourcePathIdx,
+            settings: {
+              image: {
+                image_format: imageFormat,
+                image_type: imageType,
+                // null when unset (dt idiom) — never persist the UI fallback
+                n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                use_camera_subfolders: useCameraSubfolders,
+                camera_subfolders: cameraSubfolders,
+              },
+              rig: {
+                camera_pair: [cam1, cam2],
+                dt: numOrNull(dt),
+                datum_frame: datumFrame,
+                interpolator,
+                piv_type: pivType,
+              },
+              methods: {
+                charuco: {
+                  squares_h: numOrNull(squaresH),
+                  squares_v: numOrNull(squaresV),
+                  square_size: numOrNull(squareSize),
+                  marker_ratio: numOrNull(markerRatio),
+                  aruco_dict: arucoDict,
+                  min_corners: numOrNull(minCorners),
                 },
               },
-            }),
+            },
           });
         } catch (e) {
           console.error('Failed to save calibration settings:', e);
@@ -444,21 +428,16 @@ export function useStereoCharucoCalibration(
   const generateStereoModel = useCallback(async (clicks?: WorldFrameClicks | null, opts?: { forceRedetect?: boolean }) => {
     setJobStatus({ status: 'running', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: frameTotal(), stage: 'calibrating' });
     try {
-      const res = await fetch('/backend/calibration/generate_model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stereo: true, camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx, board: BOARD,
-          board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
-          image_format: imageFormat, image_type: imageType,
-          // Generate stamps dt into the model record; empty is omitted so the
-          // backend falls to the saved rig.dt or fails loudly (never a default).
-          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
-          clicks: clicks || undefined,
-          force_redetect: opts?.forceRedetect || undefined,
-        }),
+      const data = await postJson('/backend/calibration/generate_model', {
+        stereo: true, camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), datum_frame: datumFrame, frame_total: frameTotal(),
+        image_format: imageFormat, image_type: imageType,
+        // Generate stamps dt into the model record; empty is omitted so the
+        // backend falls to the saved rig.dt or fails loudly (never a default).
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
+        clicks: clicks || undefined,
+        force_redetect: opts?.forceRedetect || undefined,
       });
-      const data = await res.json();
       if (data.success) {
         setStereoModel(toStereoModel(data));
         setJobStatus({
@@ -471,7 +450,7 @@ export function useStereoCharucoCalibration(
         setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: data.error });
       }
     } catch (e) {
-      setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: String(e) });
+      setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: errorMessage(e) });
     }
   }, [cam1, cam2, sourcePathIdx, boardParams, datumFrame, frameTotal, imageFormat, imageType, dt]);
 
@@ -479,9 +458,8 @@ export function useStereoCharucoCalibration(
   const loadModel = useCallback(async () => {
     setModelLoading(true);
     try {
-      const res = await fetch(`/backend/calibration/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`);
-      const data = await res.json();
-      if (res.ok && data.exists) {
+      const data = await fetchJson(`/backend/calibration/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`);
+      if (data.exists) {
         setStereoModel(toStereoModel(data));
         setLoadedWorldFrame(data.world_frame ?? null);
         // Seed geometry from the model (self-describing sidecar) rather than config.
@@ -524,15 +502,10 @@ export function useStereoCharucoCalibration(
   // On-demand board detection for the overlay on a given frame of a camera.
   const detectFrame = useCallback(async (frame: number, cam: number) => {
     try {
-      const res = await fetch('/backend/calibration/detect_frame', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera: cam, source_path_idx: sourcePathIdx, frame, board: BOARD,
-          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-        }),
+      const data = await postJson('/backend/calibration/detect_frame', {
+        camera: cam, source_path_idx: sourcePathIdx, frame, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
       });
-      const data = await res.json();
       if (data.success) {
         const entry = { grid_points: data.image_points, grid_indices: data.grid_indices };
         const setter = cam === cam1 ? setDetectionsCam1 : setDetectionsCam2;
@@ -542,7 +515,7 @@ export function useStereoCharucoCalibration(
         setDetectError(data.error || `No board detected on Cam${cam} frame ${frame}`);
       }
     } catch (e) {
-      setDetectError(`Detection failed on Cam${cam} frame ${frame}: ${String(e)}`);
+      setDetectError(`Detection failed on Cam${cam} frame ${frame}: ${errorMessage(e)}`);
     }
   }, [cam1, sourcePathIdx, boardParams, imageFormat, imageType]);
 
@@ -555,16 +528,11 @@ export function useStereoCharucoCalibration(
     try {
       for (const cam of [cam1, cam2]) {
         try {
-          const res = await fetch('/backend/calibration/detect_views', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
-              board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-              frame_total: frameTotal(),
-            }),
+          const data = await postJson('/backend/calibration/detect_views', {
+            camera: cam, source_path_idx: sourcePathIdx, board: BOARD,
+            board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+            frame_total: frameTotal(),
           });
-          const data = await res.json();
           if (data.success) {
             const next: Record<string, StereoCharucoFrameDetection> = {};
             for (const [f, v] of Object.entries(data.frames as Record<string, any>)) {
@@ -576,7 +544,7 @@ export function useStereoCharucoCalibration(
             errs.push(`Cam${cam}: ${data.error || 'detection failed'}`);
           }
         } catch (e) {
-          errs.push(`Cam${cam}: ${String(e)}`);
+          errs.push(`Cam${cam}: ${errorMessage(e)}`);
         }
       }
       setDetectError(errs.length ? errs.join('; ') : null);
@@ -592,23 +560,18 @@ export function useStereoCharucoCalibration(
   ) => {
     setReconstructJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
-      const res = await fetch('/backend/calibration/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, interpolator,
-          // Empty dt is omitted: apply falls back to the model-stamped dt.
-          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
-          // Omit active_paths → backend applies to all configured base paths.
-          ...(activePaths ? { active_paths: activePaths } : {}),
-        }),
+      const data = await postJson('/backend/calibration/apply', {
+        stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
+        camera_pair: [cam1, cam2], type_name: typeName, interpolator,
+        // Empty dt is omitted: apply falls back to the model-stamped dt.
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
+        // Omit active_paths → backend applies to all configured base paths.
+        ...(activePaths ? { active_paths: activePaths } : {}),
       });
-      const data = await res.json();
       if (data.job_id) setReconstructJobId(data.job_id);
       else setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error });
     } catch (e) {
-      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
+      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
     }
   }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
@@ -620,16 +583,14 @@ export function useStereoCharucoCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
-        const data = await res.json();
-        if (res.ok) {
-          setReconstructJobStatus(readApplyJobStatus(data));
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
-          }
+        const data = await fetchJson(`/backend/calibration/apply/status/${reconstructJobId}`);
+        setReconstructJobStatus(readApplyJobStatus(data));
+        if (data.status === 'completed' || data.status === 'failed') {
+          if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
         }
       } catch (e) {
-        // best-effort polling
+        setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
+        if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
       }
     };
     poll();

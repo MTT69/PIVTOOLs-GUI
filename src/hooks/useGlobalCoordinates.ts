@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 export interface OverlapPair {
   camera_a: number;
@@ -86,14 +87,13 @@ export function useGlobalCoordinates(
     readyRef.current = false;
     (async () => {
       try {
-        const res = await fetch(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
-        const data = await res.json();
+        const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
         if (seq !== seqRef.current) return;  // superseded by a newer load
-        if (!res.ok || !data.settings) {
+        if (!data.settings) {
           // Guard stays CLOSED: the form still holds another source's picks and
           // an open guard would let the debounced save write them into THIS
           // source's sidecar. Surface the failure instead of console-only.
-          setGlobalError(`Failed to load global coordinates: ${data.error ?? res.status}`);
+          setGlobalError(`Failed to load global coordinates: ${data.error ?? 'no settings in response'}`);
           return;
         }
         const gc = data.settings.global_coordinates || {};
@@ -118,7 +118,7 @@ export function useGlobalCoordinates(
         readyRef.current = true;
       } catch (e) {
         if (seq !== seqRef.current) return;
-        setGlobalError(`Failed to load global coordinates: ${String(e)}`);
+        setGlobalError(`Failed to load global coordinates: ${errorMessage(e)}`);
       }
     })();
   }, [sourcePathIdx]);
@@ -175,16 +175,12 @@ export function useGlobalCoordinates(
         };
 
         try {
-          await fetch('/backend/calibration/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_path_idx: sourcePathIdx,
-              settings: { global_coordinates: payload },
-            }),
+          await postJson('/backend/calibration/settings', {
+            source_path_idx: sourcePathIdx,
+            settings: { global_coordinates: payload },
           });
         } catch (e) {
-          console.error('Failed to save global coordinates:', e);
+          console.error('Failed to save global coordinates:', errorMessage(e));
         }
       }, 300);
     },
@@ -264,27 +260,22 @@ export function useGlobalCoordinates(
       setSavingGlobal(true);
       setGlobalError(null);
       try {
-        const res = await fetch('/backend/calibration/global/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            board,
-            source_path_idx: srcIdx,
-            datum_camera: 1,
-            datum_pixel: datumPixel,
-            datum_physical: [parseFloat(datumPhysicalX) || 0, parseFloat(datumPhysicalY) || 0],
-            overlap_pairs: overlapPairs.filter(p => p.pixel_on_a && p.pixel_on_b),
-          }),
+        const data = await postJson('/backend/calibration/global/save', {
+          board,
+          source_path_idx: srcIdx,
+          datum_camera: 1,
+          datum_pixel: datumPixel,
+          datum_physical: [parseFloat(datumPhysicalX) || 0, parseFloat(datumPhysicalY) || 0],
+          overlap_pairs: overlapPairs.filter(p => p.pixel_on_a && p.pixel_on_b),
         });
-        const data = await res.json();
         if (data.error || !data.success) {
           setGlobalError(data.error || 'Failed to save global frame');
           return null;
         }
         setSavedShifts(data as GlobalShiftResult);
         return data as GlobalShiftResult;
-      } catch (e: any) {
-        setGlobalError(String(e));
+      } catch (e) {
+        setGlobalError(errorMessage(e));
         return null;
       } finally {
         setSavingGlobal(false);

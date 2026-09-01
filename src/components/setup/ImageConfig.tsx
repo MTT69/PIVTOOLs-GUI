@@ -12,6 +12,7 @@ import { Plus, Minus, Image as ImageIcon, Info, CheckCircle, XCircle } from "luc
 import { useConfigUpdate, PatternValidation, ValidationState } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
 import { cn } from "@/lib/utils";
+import { fetchJson } from "@/lib/api";
 
 // Helper to detect image type from format pattern
 const detectImageType = (pattern: string | undefined): string => {
@@ -184,11 +185,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   useEffect(() => {
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch('/backend/preview_frame_pairs?count=5');
-        if (response.ok) {
-          const data = await response.json();
-          setFramePairPreview(data);
-        }
+        const data = await fetchJson('/backend/preview_frame_pairs?count=5');
+        setFramePairPreview(data);
       } catch {
         // Ignore errors
       }

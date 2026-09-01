@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode } from 'react';
+import { fetchJson, postJson, errorMessage, ApiError } from '@/lib/api';
 
 const POLL_INTERVAL_MS = 1000;
 const IMAGE_INTERVAL_MS = 3000;
@@ -212,13 +213,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         }
 
         // Query backend to check if job is still running
-        const response = await fetch(`/backend/piv_status?job_id=${data.jobId}`);
-        if (!response.ok) {
-          localStorage.removeItem(storageKey);
-          return;
-        }
-
-        const status = await response.json();
+        const status = await fetchJson(`/backend/piv_status?job_id=${data.jobId}`);
         if (status.running) {
           // Progress is reported against the path pairs the job was launched with.
           // A record without them (written by an older build) cannot be scored, so
@@ -242,7 +237,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           localStorage.removeItem(storageKey);
         }
       } catch (e) {
-        console.error(`Failed to check stored ${mode} job:`, e);
+        console.error(`Failed to check stored ${mode} job:`, errorMessage(e));
         localStorage.removeItem(storageKey);
       }
     };
@@ -264,14 +259,13 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
     // the log fetch is cheap and must not inherit the scan's latency.
     const pollLogs = async () => {
       try {
-        const res = await fetch(`/backend/piv_logs?job_id=${jobId}&lines=${LOG_TAIL_LINES}`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
+        const data = await fetchJson(`/backend/piv_logs?job_id=${jobId}&lines=${LOG_TAIL_LINES}`);
+        if (cancelled) return;
         const newLogs = data.logs || '';
         // Bail out of the re-render (and the auto-scroll effect) when unchanged.
         setInstantaneousJob(prev => (prev.logs === newLogs ? prev : { ...prev, logs: newLogs }));
       } catch (error) {
-        console.error('Failed to fetch PIV logs:', error);
+        console.error('Failed to fetch PIV logs:', errorMessage(error));
       }
     };
 
@@ -289,10 +283,15 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         if (settings.cmap !== 'default') params.set('cmap', settings.cmap);
         params.set('job_id', jobId);
 
-        const [statusRes, jobStatusRes] = await Promise.all([
-          fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
-          fetch(`/backend/piv_status?job_id=${jobId}`),
+        const [statusResult, jobStatusResult] = await Promise.allSettled([
+          fetchJson(`/backend/get_uncalibrated_count?${params.toString()}`),
+          fetchJson(`/backend/piv_status?job_id=${jobId}`),
         ]);
+        // One endpoint failing is tolerated (the other's data still lands); both
+        // failing means the backend is unreachable — surface it via the catch below.
+        if (statusResult.status === 'rejected' && jobStatusResult.status === 'rejected') {
+          throw statusResult.reason;
+        }
 
         // The effect can tear down while these are in flight (cancel, or a new job
         // started straight after this one). Anything below would be this job's
@@ -300,9 +299,8 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         if (cancelled) return;
 
         let jobRunning = true;
-        if (jobStatusRes.ok) {
-          const jobStatus = await jobStatusRes.json();
-          jobRunning = jobStatus.running ?? true;
+        if (jobStatusResult.status === 'fulfilled') {
+          jobRunning = jobStatusResult.value.running ?? true;
         }
 
         // null means "this poll told us nothing" — keep the previous value instead
@@ -312,8 +310,8 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         let currentDatasetIdx: number | null = null;
         let availableFrames: number[] = [];
 
-        if (statusRes.ok) {
-          const data = await statusRes.json();
+        if (statusResult.status === 'fulfilled') {
+          const data = statusResult.value;
           currentProgress = Math.round(data.percent ?? 0);
           datasetInfo = {
             number: data.dataset_number ?? null,
@@ -331,7 +329,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
             instantaneousAvailableFramesRef.current = availableFrames;
           }
         } else {
-          console.error(`PIV progress poll failed: ${statusRes.status} ${statusRes.statusText}`);
+          console.error(`PIV progress poll failed: ${errorMessage(statusResult.reason)}`);
         }
 
         // Update status image — only when on PIV tab and interval elapsed
@@ -351,16 +349,16 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
             imageParams.delete('active_paths');
             imageParams.set('basepath_idx', String(currentDatasetIdx));
             imageParams.set('index', String(frameToShow));
-            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
-
-            if (imageRes.ok) {
-              const data = await imageRes.json();
+            try {
+              const data = await fetchJson(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
               if (data.image) {
                 newStatusImage = { src: data.image, error: null };
                 instantaneousLastImageUpdateRef.current = now;
               }
-            } else if (imageRes.status !== 404) {
-              newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
+            } catch (imageErr) {
+              if (!(imageErr instanceof ApiError && imageErr.status === 404)) {
+                newStatusImage = { src: null, error: `Image Error: ${errorMessage(imageErr)}` };
+              }
             }
           }
         }
@@ -392,7 +390,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           };
         });
       } catch (error) {
-        console.error('PIV status poll failed:', error);
+        console.error('PIV status poll failed:', errorMessage(error));
         if (cancelled) return;
         setInstantaneousJob(prev => ({
           ...prev,
@@ -428,13 +426,12 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
 
     const pollLogs = async () => {
       try {
-        const res = await fetch(`/backend/piv_logs?job_id=${jobId}&lines=${LOG_TAIL_LINES}`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
+        const data = await fetchJson(`/backend/piv_logs?job_id=${jobId}&lines=${LOG_TAIL_LINES}`);
+        if (cancelled) return;
         const newLogs = data.logs || '';
         setEnsembleJob(prev => (prev.logs === newLogs ? prev : { ...prev, logs: newLogs }));
       } catch (error) {
-        console.error('Failed to fetch ensemble logs:', error);
+        console.error('Failed to fetch ensemble logs:', errorMessage(error));
       }
     };
 
@@ -452,25 +449,29 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         if (settings.cmap !== 'default') params.set('cmap', settings.cmap);
         params.set('job_id', jobId);
 
-        const [statusRes, jobStatusRes] = await Promise.all([
-          fetch(`/backend/get_uncalibrated_count?${params.toString()}`),
-          fetch(`/backend/piv_status?job_id=${jobId}`),
+        const [statusResult, jobStatusResult] = await Promise.allSettled([
+          fetchJson(`/backend/get_uncalibrated_count?${params.toString()}`),
+          fetchJson(`/backend/piv_status?job_id=${jobId}`),
         ]);
+        // One endpoint failing is tolerated (the other's data still lands); both
+        // failing means the backend is unreachable — surface it via the catch below.
+        if (statusResult.status === 'rejected' && jobStatusResult.status === 'rejected') {
+          throw statusResult.reason;
+        }
 
         // See the instantaneous effect: a late commit would land on another job.
         if (cancelled) return;
 
         let jobRunning = true;
-        if (jobStatusRes.ok) {
-          const jobStatus = await jobStatusRes.json();
-          jobRunning = jobStatus.running ?? true;
+        if (jobStatusResult.status === 'fulfilled') {
+          jobRunning = jobStatusResult.value.running ?? true;
         }
 
         let currentProgress = 0;
         let currentDatasetIdx: number | null = null;
         let availableFrames: number[] = [];
-        if (statusRes.ok) {
-          const data = await statusRes.json();
+        if (statusResult.status === 'fulfilled') {
+          const data = statusResult.value;
           currentProgress = Math.round(data.percent ?? 0);
           // The ensemble payload comes from log scraping and carries no per-dataset
           // position, so this pins the preview to the FIRST selected dataset for the
@@ -489,7 +490,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
             ensembleAvailableFramesRef.current = availableFrames;
           }
         } else {
-          console.error(`Ensemble progress poll failed: ${statusRes.status} ${statusRes.statusText}`);
+          console.error(`Ensemble progress poll failed: ${errorMessage(statusResult.reason)}`);
         }
 
         // Update status image — only when on PIV tab and interval elapsed
@@ -507,16 +508,16 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
             imageParams.delete('active_paths');
             imageParams.set('basepath_idx', String(currentDatasetIdx));
             imageParams.set('index', String(frameToShow));
-            const imageRes = await fetch(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
-
-            if (imageRes.ok) {
-              const data = await imageRes.json();
+            try {
+              const data = await fetchJson(`/backend/plot/get_uncalibrated_image?${imageParams.toString()}`);
               if (data.image) {
                 newStatusImage = { src: data.image, error: null };
                 ensembleLastImageUpdateRef.current = now;
               }
-            } else if (imageRes.status !== 404) {
-              newStatusImage = { src: null, error: `Image Error: ${imageRes.statusText}` };
+            } catch (imageErr) {
+              if (!(imageErr instanceof ApiError && imageErr.status === 404)) {
+                newStatusImage = { src: null, error: `Image Error: ${errorMessage(imageErr)}` };
+              }
             }
           }
         }
@@ -541,7 +542,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           };
         });
       } catch (error) {
-        console.error('Ensemble status poll failed:', error);
+        console.error('Ensemble status poll failed:', errorMessage(error));
         if (cancelled) return;
         setEnsembleJob(prev => ({
           ...prev,
@@ -584,21 +585,11 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
     availableFramesRef.current = [];
 
     try {
-      const response = await fetch('/backend/run_piv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourcePathIdx: settings.sourcePathIdx,
-          active_paths: settings.activePaths,
-          mode: mode,
-        }),
+      const data = await postJson('/backend/run_piv', {
+        sourcePathIdx: settings.sourcePathIdx,
+        active_paths: settings.activePaths,
+        mode: mode,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to start PIV: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       const jobId = data.job_id;
 
       // Store job ID in localStorage for persistence across page refresh
@@ -618,11 +609,11 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         // Snapshot: the job's denominator must not follow later checkbox changes.
         activePaths: settings.activePaths,
       }));
-    } catch (error: any) {
+    } catch (error) {
       setJob(prev => ({
         ...prev,
         isLoading: false,
-        statusImage: { src: null, error: error.message || 'Error starting PIV' },
+        statusImage: { src: null, error: `Failed to start PIV: ${errorMessage(error)}` },
       }));
       throw error;
     }
@@ -638,15 +629,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
     setJob(prev => ({ ...prev, isLoading: true }));
 
     try {
-      const response = await fetch('/backend/cancel_run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: job.jobId }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to cancel PIV: ${response.statusText}`);
-      }
+      await postJson('/backend/cancel_run', { job_id: job.jobId });
 
       localStorage.removeItem(storageKey);
 
@@ -660,7 +643,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         datasetTotal: 0,
         datasetLabel: null,
       }));
-    } catch (error: any) {
+    } catch (error) {
       setJob(prev => ({ ...prev, isLoading: false }));
       throw error;
     }

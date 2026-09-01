@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
 
 /**
  * Stepped (dual-level) board STEREO calibration on the calibration backend.
@@ -317,12 +318,11 @@ export function useStereoSteppedCalibration(
         };
         const tick = async () => {
           try {
-            const r = await fetch(statusUrl);
-            const d = (await r.json()) as JobStatus;
+            const d = await fetchJson<JobStatus>(statusUrl);
             onUpdate?.(d);
             if (d.status === 'completed' || d.status === 'failed') { finish(d); return; }
           } catch (e) {
-            console.error('job poll failed:', e);
+            finish({ status: 'failed', error: errorMessage(e) });
           }
         };
         handle = setInterval(tick, 500);
@@ -335,17 +335,12 @@ export function useStereoSteppedCalibration(
   // ---------- Validate one camera (calibration, all formats) ----------
   const validateOne = useCallback(async (cam: number): Promise<ValidationResult> => {
     try {
-      const res = await fetch('/backend/calibration/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera: cam, source_path_idx: sourcePathIdx,
-          image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
-        }),
+      return await postJson('/backend/calibration/validate', {
+        camera: cam, source_path_idx: sourcePathIdx,
+        image_format: imageFormat, image_type: imageType, frame_total: frameTotal(),
       });
-      return await res.json();
     } catch (e) {
-      return { valid: false, found_count: 0, error: String(e) };
+      return { valid: false, found_count: 0, error: errorMessage(e) };
     }
   }, [sourcePathIdx, imageFormat, imageType, frameTotal]);
 
@@ -405,14 +400,13 @@ export function useStereoSteppedCalibration(
     settingsReadyRef.current = false;
     const seq = ++settingsSeqRef.current;
     try {
-      const res = await fetch(`/backend/calibration/settings?source_path_idx=${idx}`);
-      const data = await res.json();
+      const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${idx}`);
       if (seq !== settingsSeqRef.current) return;  // superseded by a newer load
-      if (!res.ok || !data.settings) {
+      if (!data.settings) {
         // Guard stays CLOSED: the form still holds another source's values and
         // an open guard would let the debounced save write them into THIS
         // source's sidecar. Surface the failure instead of console-only.
-        setModelLoadError(`Failed to load calibration settings: ${data.error ?? res.status}`);
+        setModelLoadError(`Failed to load calibration settings: ${data.error ?? 'no settings in response'}`);
         return;
       }
       applySettings(data.settings);
@@ -422,7 +416,7 @@ export function useStereoSteppedCalibration(
       settingsReadyRef.current = true;
     } catch (e) {
       if (seq !== settingsSeqRef.current) return;
-      setModelLoadError(`Failed to load calibration settings: ${String(e)}`);
+      setModelLoadError(`Failed to load calibration settings: ${errorMessage(e)}`);
     }
   }, [applySettings]);
 
@@ -430,11 +424,8 @@ export function useStereoSteppedCalibration(
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/backend/config');
-        if (res.ok) {
-          const cal = (await res.json()).calibration || {};
-          if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
-        }
+        const cal = (await fetchJson('/backend/config')).calibration || {};
+        if (cal.calibration_sources !== undefined) setCalibrationSources(cal.calibration_sources);
       } catch (e) {
         console.error('Failed to load config:', e);
       }
@@ -480,12 +471,8 @@ export function useStereoSteppedCalibration(
     if (configDebounceRef.current) clearTimeout(configDebounceRef.current);
     configDebounceRef.current = setTimeout(async () => {
       try {
-        await fetch('/backend/update_config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            calibration: { calibration_sources: calibrationSources, active: 'stereo_stepped' },
-          }),
+        await postJson('/backend/update_config', {
+          calibration: { calibration_sources: calibrationSources, active: 'stereo_stepped' },
         });
       } catch (e) {
         console.error('Failed to save config:', e);
@@ -496,45 +483,41 @@ export function useStereoSteppedCalibration(
       // hydrated from (mid source-switch or mid path-edit) — rehydrate instead.
       if (!pathEdited && settingsReadyRef.current) {
         try {
-          await fetch('/backend/calibration/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_path_idx: sourcePathIdx,
-              settings: {
-                image: {
-                  image_format: imageFormat,
-                  image_type: imageType,
-                  // null when unset (dt idiom) — never persist the UI fallback
-                  n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
-                  use_camera_subfolders: useCameraSubfolders,
-                  camera_subfolders: cameraSubfolders,
+          await postJson('/backend/calibration/settings', {
+            source_path_idx: sourcePathIdx,
+            settings: {
+              image: {
+                image_format: imageFormat,
+                image_type: imageType,
+                // null when unset (dt idiom) — never persist the UI fallback
+                n_views: numOrNull(numImages) != null ? parseInt(numImages) : null,
+                use_camera_subfolders: useCameraSubfolders,
+                camera_subfolders: cameraSubfolders,
+              },
+              rig: {
+                camera_pair: [cam1, cam2],
+                dt: numOrNull(dt),
+                datum_frame: datumFrame,
+                interpolator,
+                piv_type: pivType,
+              },
+              methods: {
+                // Shared physical board geometry (read by both stepped tabs).
+                stepped: {
+                  dot_spacing_mm: numOrNull(dotSpacingMm),
+                  step_height_mm: numOrNull(stepHeightMm),
+                  board_thickness_mm: numOrNull(boardThicknessMm),
                 },
-                rig: {
-                  camera_pair: [cam1, cam2],
-                  dt: numOrNull(dt),
-                  datum_frame: datumFrame,
-                  interpolator,
-                  piv_type: pivType,
-                },
-                methods: {
-                  // Shared physical board geometry (read by both stepped tabs).
-                  stepped: {
-                    dot_spacing_mm: numOrNull(dotSpacingMm),
-                    step_height_mm: numOrNull(stepHeightMm),
-                    board_thickness_mm: numOrNull(boardThicknessMm),
-                  },
-                  // Stereo-only SELECTIONS. Clicks (fiducials/clicked_level/pose_levels)
-                  // are NOT settings — they live in the sidecar inputs.mat and restore
-                  // via restoreSequence.
-                  stepped_stereo: {
-                    stereo_config: stereoConfig,
-                    model_type: modelType,
-                    fix_k2: fixK2,
-                  },
+                // Stereo-only SELECTIONS. Clicks (fiducials/clicked_level/pose_levels)
+                // are NOT settings — they live in the sidecar inputs.mat and restore
+                // via restoreSequence.
+                stepped_stereo: {
+                  stereo_config: stereoConfig,
+                  model_type: modelType,
+                  fix_k2: fixK2,
                 },
               },
-            }),
+            },
           });
         } catch (e) {
           console.error('Failed to save calibration settings:', e);
@@ -618,22 +601,17 @@ export function useStereoSteppedCalibration(
     setDetectionProgress(0);
 
     try {
-      const res = await fetch('/backend/calibration/stepped/detect_sequence', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_path_idx: sourcePathIdx,
-          cameras: [cam1, cam2],
-          num_frames: nFrames,
-          start_frame_idx: 1,
-          datum_frame_idx: datumFrame,
-          board_params: boardParams(),
-          image_format: imageFormat,
-          image_type: imageType,
-        }),
+      const data = await postJson('/backend/calibration/stepped/detect_sequence', {
+        source_path_idx: sourcePathIdx,
+        cameras: [cam1, cam2],
+        num_frames: nFrames,
+        start_frame_idx: 1,
+        datum_frame_idx: datumFrame,
+        board_params: boardParams(),
+        image_format: imageFormat,
+        image_type: imageType,
       });
-      const data = await res.json();
-      if (!res.ok || !data.job_id) {
+      if (!data.job_id) {
         setSequenceStatus('error');
         setSequenceError(data.error || 'Failed to start sequence detection');
         return;
@@ -668,7 +646,7 @@ export function useStereoSteppedCalibration(
       setHasSidecar(true);  // detect_sequence persisted the detections to the sidecar
     } catch (e) {
       setSequenceStatus('error');
-      setSequenceError(String(e));
+      setSequenceError(errorMessage(e));
     }
   }, [sourcePathIdx, cam1, cam2, frameTotal, datumFrame, boardParams, imageFormat, imageType, pollJob, clickedLevel]);
 
@@ -685,12 +663,9 @@ export function useStereoSteppedCalibration(
         return null;
       }
       try {
-        const res = await fetch('/backend/calibration/stepped/snap_fiducial', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sequence_id: sequenceId, camera: cam, click_x: clickX, click_y: clickY }),
+        const data = await postJson('/backend/calibration/stepped/snap_fiducial', {
+          sequence_id: sequenceId, camera: cam, click_x: clickX, click_y: clickY,
         });
-        const data = await res.json();
         if (data.snapped_x !== undefined && data.snapped_y !== undefined) {
           const sx = data.snapped_x as number;
           const sy = data.snapped_y as number;
@@ -705,7 +680,7 @@ export function useStereoSteppedCalibration(
         return null;
       } catch (e) {
         console.error('snap_fiducial error:', e);
-        setSequenceError(String(e));
+        setSequenceError(errorMessage(e));
         return null;
       }
     },
@@ -808,13 +783,8 @@ export function useStereoSteppedCalibration(
 
     setFitJobStatus({ status: 'starting', progress: 0 });
     try {
-      const res = await fetch('/backend/calibration/stepped/generate_model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.job_id) {
+      const data = await postJson('/backend/calibration/stepped/generate_model', body);
+      if (!data.job_id) {
         setFitJobStatus({ status: 'failed', error: data.error || 'Failed to start model generation.' });
         return;
       }
@@ -849,7 +819,7 @@ export function useStereoSteppedCalibration(
         loadModelRef.current?.(done.stereo_config);
       }
     } catch (e) {
-      setFitJobStatus({ status: 'failed', error: String(e) });
+      setFitJobStatus({ status: 'failed', error: errorMessage(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sequenceId, hasSidecar, cam1, cam2, sourcePathIdx, fiducials, clickedLevel, poseLevels,
@@ -862,11 +832,10 @@ export function useStereoSteppedCalibration(
     setModelLoading(true);
     setModelLoadError(null);
     try {
-      const res = await fetch(
+      const data = await fetchJson(
         `/backend/calibration/model?stereo=1&board=${BOARD}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
       );
-      const data = await res.json();
-      if (res.ok && data.exists) {
+      if (data.exists) {
         setStereoModel(prev => ({
           model_type: data.model_type === 'polynomial3d' ? 'polynomial3d' : 'pinhole',
           rms_cam1: data.rms_cam1,
@@ -917,10 +886,9 @@ export function useStereoSteppedCalibration(
   // restored clicks are authoritative for this source, superseding the mount-only config load.
   const restoreSequence = useCallback(async () => {
     try {
-      const res = await fetch(
+      const data = await fetchJson(
         `/backend/calibration/stepped/restore_sequence?camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`,
       );
-      const data = await res.json();
       if (!data?.exists) {
         setHasSidecar(false);
         resetSourceState();  // no sidecar for this source: clear stale live state (keep config clicks)
@@ -1001,13 +969,9 @@ export function useStereoSteppedCalibration(
           pose_levels: poseLevels[cam] ?? {},
         };
       }
-      fetch('/backend/calibration/stepped/inputs/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx,
-          cameras, stereo_config: stereoConfig,
-        }),
+      postJson('/backend/calibration/stepped/inputs/save', {
+        camera_pair: [cam1, cam2], source_path_idx: sourcePathIdx,
+        cameras, stereo_config: stereoConfig,
       }).catch(e => console.error('persist stepped clicks failed:', e));
     }, 400);
     return () => { if (persistClicksRef.current) clearTimeout(persistClicksRef.current); };
@@ -1020,22 +984,17 @@ export function useStereoSteppedCalibration(
   ) => {
     setReconstructJobStatus({ status: 'starting', progress: 0, processed_units: 0, total_units: 0 });
     try {
-      const res = await fetch('/backend/calibration/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
-          camera_pair: [cam1, cam2], type_name: typeName, interpolator,
-          // Empty dt is omitted: apply falls back to the model-stamped dt.
-          ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
-          ...(activePaths ? { active_paths: activePaths } : {}),
-        }),
+      const data = await postJson('/backend/calibration/apply', {
+        stereo: true, board: BOARD, source_path_idx: sourcePathIdx,
+        camera_pair: [cam1, cam2], type_name: typeName, interpolator,
+        // Empty dt is omitted: apply falls back to the model-stamped dt.
+        ...(numOrNull(dt) != null ? { dt: numOrNull(dt) } : {}),
+        ...(activePaths ? { active_paths: activePaths } : {}),
       });
-      const data = await res.json();
       if (data.job_id) setReconstructJobId(data.job_id);
       else setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: data.error || 'Failed to start reconstruction.' });
     } catch (e) {
-      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: String(e) });
+      setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
     }
   }, [sourcePathIdx, cam1, cam2, dt, interpolator]);
 
@@ -1047,16 +1006,14 @@ export function useStereoSteppedCalibration(
     }
     const poll = async () => {
       try {
-        const res = await fetch(`/backend/calibration/apply/status/${reconstructJobId}`);
-        const data = await res.json();
-        if (res.ok) {
-          setReconstructJobStatus(readApplyJobStatus(data));
-          if (data.status === 'completed' || data.status === 'failed') {
-            if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
-          }
+        const data = await fetchJson(`/backend/calibration/apply/status/${reconstructJobId}`);
+        setReconstructJobStatus(readApplyJobStatus(data));
+        if (data.status === 'completed' || data.status === 'failed') {
+          if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
         }
-      } catch {
-        // best-effort polling
+      } catch (e) {
+        setReconstructJobStatus({ status: 'failed', progress: 0, processed_units: 0, total_units: 0, error: errorMessage(e) });
+        if (reconstructPollRef.current) { clearInterval(reconstructPollRef.current); reconstructPollRef.current = null; }
       }
     };
     poll();
@@ -1068,11 +1025,9 @@ export function useStereoSteppedCalibration(
   const fetchPoseDetection = useCallback(async (cam: number, frameIdx: number) => {
     if (!sequenceId) return;
     try {
-      const res = await fetch(
+      const data = await fetchJson<SteppedDetection>(
         `/backend/calibration/stepped/sequence_pose_detection?sequence_id=${sequenceId}&camera=${cam}&frame_idx=${frameIdx}`,
       );
-      if (!res.ok) return;
-      const data = (await res.json()) as SteppedDetection;
       if (data.ok) setDetectionDataFor(cam, data);
     } catch (e) {
       console.error('Failed to fetch pose detection:', e);
@@ -1088,12 +1043,9 @@ export function useStereoSteppedCalibration(
   ): Promise<string | null> => {
     if (!sequenceId) return null;
     try {
-      const res = await fetch('/backend/calibration/stepped/identify_pose_level', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sequence_id: sequenceId, camera: cam, frame_idx: frameIdx, click_x: clickX, click_y: clickY }),
+      const data = await postJson('/backend/calibration/stepped/identify_pose_level', {
+        sequence_id: sequenceId, camera: cam, frame_idx: frameIdx, click_x: clickX, click_y: clickY,
       });
-      const data = await res.json();
       if (!data.level) return null;
       const datumLabel = clickedLevel[cam] || 'peak';
       return data.level === 'A' ? datumLabel : (datumLabel === 'peak' ? 'trough' : 'peak');

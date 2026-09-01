@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchJson } from "@/lib/api";
 
 const BASE = "/backend/calibration";
 
@@ -40,8 +41,7 @@ export function CalibrationFigureGallery({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${BASE}/figures?${queryStr}`);
-        const data = await res.json();
+        const data = await fetchJson(`${BASE}/figures?${queryStr}`);
         if (!cancelled) {
           setFigures(data.figures || []);
           setBust(Date.now());

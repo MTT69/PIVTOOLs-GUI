@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Github, HelpCircle, Settings, Menu, X, ClipboardCheck } from 'lucide-react';
+import { Github, HelpCircle, Menu, X, ClipboardCheck } from 'lucide-react';
 
 export default function Navigation() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -30,14 +30,6 @@ export default function Navigation() {
           </div>
           
           <div className="hidden md:flex items-center space-x-4">
-            <a 
-              href="#" 
-              className="text-gray-600 hover:text-soton-blue px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2"
-              onClick={() => {}}
-            >
-              <Settings size={18} />
-              Settings
-            </a>
             <a
               href="/pivtools-experimental-setup-checklist.pdf"
               target="_blank"
@@ -80,14 +72,6 @@ export default function Navigation() {
         {isOpen && (
           <div className="md:hidden">
             <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3 bg-white rounded-lg shadow-lg">
-              <a
-                href="#"
-                className="text-gray-600 hover:text-soton-blue block px-3 py-2 rounded-md text-base font-medium flex items-center gap-2"
-                onClick={() => setIsOpen(false)}
-              >
-                <Settings size={18} />
-                Settings
-              </a>
               <a
                 href="/pivtools-experimental-setup-checklist.pdf"
                 target="_blank"

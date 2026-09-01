@@ -18,6 +18,7 @@ import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { MarkerPoint } from "@/components/viewer/zoomableCanvas";
+import { postJson, errorMessage } from "@/lib/api";
 
 export type WorldFrameRole = "origin" | "x_axis" | "y_axis";
 
@@ -61,20 +62,15 @@ export function useWorldFrame({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/backend/calibration/detect_datum", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          camera, source_path_idx: sourcePathIdx, datum_frame: datumFrame, board,
-          board_params: boardParams(), image_format: imageFormat, image_type: imageType,
-        }),
+      const data = await postJson("/backend/calibration/detect_datum", {
+        camera, source_path_idx: sourcePathIdx, datum_frame: datumFrame, board,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
       });
-      const data = await res.json();
       if (!data.success) setError(data.error || "Board not detected on the datum frame");
       setReady(!!data.success);
       return !!data.success;
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
       return false;
     } finally {
       setBusy(false);
@@ -92,12 +88,7 @@ export function useWorldFrame({
     const role = mode;
     setMode("none");
     try {
-      const res = await fetch("/backend/calibration/snap_fiducial", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ camera, click_x: px, click_y: py }),
-      });
-      const data = await res.json();
+      const data = await postJson("/backend/calibration/snap_fiducial", { camera, click_x: px, click_y: py });
       if (data.snapped_x !== undefined) {
         setClicks(prev => ({ ...prev, [role]: [data.snapped_x, data.snapped_y] }));
         // Auto-advance origin -> +X -> +Y so a single "Set Origin" starts the sequence.
@@ -107,7 +98,7 @@ export function useWorldFrame({
         setError(data.error || "Could not snap to a detected dot");
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   }, [mode, camera]);
 
