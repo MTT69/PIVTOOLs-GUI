@@ -10,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler } from "lucide-react";
 import { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
-import { clearCalibrationFrameCache, monoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
@@ -127,6 +127,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }
   const [validation, setValidation] = useState<SFValidation | null>(null);
   const [validating, setValidating] = useState(false);
+  const [viewerRefreshKey, setViewerRefreshKey] = useState('');
 
   // --- Multi-camera global coordinates (shared chain, per-source sidecar) -------
   const gc = useGlobalCoordinates(cameraOptions, sourcePathIdx);
@@ -249,16 +250,38 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const validate = useCallback(async () => {
     setValidating(true);
     try {
-      setValidation(await postJson(`${BASE}/validate`, {
+      const result = await postJson(`${BASE}/validate`, {
         camera, source_path_idx: sourcePathIdx,
         image_format: imageFormat, image_type: imageType, frame_total: 1,
-      }));
+      });
+      setValidation(result);
+      // This tab used to clear the frame cache but never warm it, even though its
+      // viewer mounts as soon as the source validates -- so every frame it showed
+      // was a cold decode. Built here, once, and handed to both the warmup and the
+      // viewer so the two share one key namespace.
+      const refreshKey = calibrationViewerRefreshKey({
+        sourcePath: calibrationSources[sourcePathIdx] ?? '',
+        imageFormat, imageType,
+        useCameraSubfolders, cameraSubfolders,
+        valid: Boolean(result?.valid),
+      });
+      setViewerRefreshKey(refreshKey);
+      if (result?.valid) {
+        warmCalibrationFrameCache({
+          backendUrl: "/backend",
+          cameras: cameraOptions,
+          primaryCamera: camera,
+          sourcePathIdx,
+          refreshKey,
+        });
+      }
     } catch (e) {
       setValidation({ valid: false, error: errorMessage(e) });
     } finally {
       setValidating(false);
     }
-  }, [camera, sourcePathIdx, imageFormat, imageType]);
+  }, [camera, sourcePathIdx, imageFormat, imageType, cameraOptions,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Debounced past the 500 ms config persist above: source dir + subfolders are resolved
   // from config on the backend, so validation must run after the persist lands.
@@ -280,7 +303,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     clearCalibrationFrameCache();
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, sourcePathIdx, imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+  }, [sourcePathIdx, imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Image-driven interactions cannot survive the viewer unmounting.
   useEffect(() => {
@@ -685,7 +708,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             sourcePathIdx={sourcePathIdx}
             camera={viewCamera}
             numImages={typeof validation?.found_count === "number" ? validation.found_count : 1}
-            refreshKey={monoViewerRefreshKey(validation)}
+            refreshKey={viewerRefreshKey}
             onFrameChange={handleFrameChange}
             externalFrame={viewFrame}
             externalCamera={gcIsSelecting && gcViewerTarget ? gcViewerTarget.camera : undefined}

@@ -15,7 +15,6 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { stereoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
@@ -85,6 +84,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
 
     // Validation
     validation,
+    viewerRefreshKey,
     validating,
 
     // Calibration job tracking
@@ -101,6 +101,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     detectionsCam2,
     modelLoading,
     detectError,
+    detectionsStale,
     detecting,
     hasModel,
 
@@ -147,18 +148,21 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   const wfOnDatum = wfActive && onDatumFrame;
   const wfIsSelecting = wfOnDatum && wf.mode !== "none";
 
-  // When a saved stereo model loads, restore its world frame (cam1) + show detected markers.
+  // When a saved stereo model loads, restore its world frame (cam1) + show the overlay.
+  // The dots themselves are restored from inputs.mat by the hook's own effect,
+  // independently of whether a model exists -- detections survive a model delete,
+  // and re-detecting them here was the whole cost this change removes.
   React.useEffect(() => {
     if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    detectFrame(currentFrame, cam1);
-    detectFrame(currentFrame, cam2);
     setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasModel, loadedWorldFrame]);
 
   // Local state
-  const [showImageViewer, setShowImageViewer] = useState(false);
+  // Open by default (2026-09-16): frames are warmed on validation and the dot
+  // overlay is restored from the sidecar, so the viewer costs nothing to show.
+  const [showImageViewer, setShowImageViewer] = useState(true);
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const reconstructTypeName = calibration.pivType;
@@ -556,7 +560,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
               numImages={parseInt(numImages) || 10}
-              refreshKey={stereoViewerRefreshKey(validation)}
+              refreshKey={viewerRefreshKey}
               stereoParams={{ cam1, cam2 }}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
@@ -667,6 +671,12 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               <p className="text-xs text-muted-foreground mt-2">
                 Set the coordinate frame before generating: open the viewer on Camera {cam1}, click <strong>Detect Markers</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
               </p>
+            )}
+
+            {detectionsStale && (
+              <div className="text-sm text-gray-500">
+                {detectionsStale}
+              </div>
             )}
 
             {detectError && (

@@ -32,6 +32,10 @@ interface JointMultiCameraProps {
   imageType: string;
   modelType: "pinhole" | "polynomial";
   validationValid: boolean;
+  // The parent tab's frame-cache key namespace. This component used to build its
+  // own ad-hoc `joint-...` string, so it never hit an entry the parent's warmup
+  // had already fetched and every frame it showed was a cold decode.
+  viewerRefreshKey: string;
   // Datum frame (1-based) inherited from the page's "Datum Frame" setting — the joint wizard does
   // not re-ask for it.
   datumFrame?: number;
@@ -129,6 +133,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   imageType,
   modelType,
   validationValid,
+  viewerRefreshKey,
   datumFrame,
   dt = null,
   dotSpacingMm = 0,
@@ -151,7 +156,9 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
 
   const [viewerCamera, setViewerCamera] = useState<number>(cameraOptions[0] ?? 1);
   const [currentFrame, setCurrentFrame] = useState<number>(1);
-  const [showViewer, setShowViewer] = useState(false);
+  // Open by default: the frames are warmed on validation and the overlay is a cached
+  // read, so there is nothing to wait for behind a button.
+  const [showViewer, setShowViewer] = useState(true);
 
   // getCameraOptions() can return a fresh array each parent render; key effects off the stable
   // comma-string so they don't refire (clearing the overlay / re-fetching the model) every render.
@@ -232,7 +239,10 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   // that feed the spec change, so the overlay never shows a stale grid.
   useEffect(() => {
     clearResolve();
-  }, [board, sourcePathIdx, numImages, imageFormat, imageType, dotSpacingMm, camerasKey, clearResolve]);
+    // viewerRefreshKey: rebuilt by every validate with the source PATH folded in, so an
+    // in-place path edit at the same index (which changes nothing else here) drops the
+    // previous folder's grid instead of drawing it over the new folder's images.
+  }, [board, sourcePathIdx, numImages, imageFormat, imageType, dotSpacingMm, camerasKey, viewerRefreshKey, clearResolve]);
 
   // Load any saved joint model for display (and refresh after a generate completes).
   const modelQuery = useMemo(
@@ -284,12 +294,12 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
       return;
     }
     if (!validationValid || resolveData || resolving) return;
-    const key = `${sourcePathIdx}|${camerasKey}|${board}`;
+    const key = `${sourcePathIdx}|${camerasKey}|${board}|${viewerRefreshKey}`;
     if (cachedProbeRef.current === key) return; // one probe per open per source/camera set
     cachedProbeRef.current = key;
     void resolveGrid({ ...requestBody(), cached_only: true });
   }, [showViewer, validationValid, resolveData, resolving, sourcePathIdx, camerasKey, board,
-      resolveGrid, requestBody]);
+      viewerRefreshKey, resolveGrid, requestBody]);
 
   // Preview = detect every image + resolve the live grid, AND cache the datum detection so
   // world-frame clicks snap immediately. Detections are cached (in memory + on disk), so the first
@@ -879,7 +889,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={effectiveCamera}
               numImages={numImages}
-              refreshKey={`joint-${board}-${sourcePathIdx}-${imageFormat}`}
+              refreshKey={viewerRefreshKey}
               onFrameChange={handleFrameChange}
               savedDetections={jointDetections}
               showSavedOverlay={true}

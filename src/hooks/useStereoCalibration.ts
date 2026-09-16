@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
-import { clearCalibrationFrameCache, warmCalibrationFrameCache, stereoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Detection data for a single stereo frame (on-demand overlay).
@@ -116,6 +116,8 @@ interface SidecarSettings {
     image_format?: string;
     image_type?: string;
     n_views?: number | null;
+    use_camera_subfolders?: boolean;
+    camera_subfolders?: string[];
   };
   rig?: {
     camera_pair?: [number, number];
@@ -174,6 +176,11 @@ export function useStereoCalibration(
   // Validation
   const [validation, setValidation] = useState<StereoValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
+  // The viewer's cache-key namespace. Built in validateImages so there is ONE
+  // construction site shared by the warmup and the viewer (see
+  // calibrationViewerRefreshKey); empty until the first validate returns.
+  const [viewerRefreshKey, setViewerRefreshKey] = useState('');
+
 
   // Synchronous generate status (v1 shape)
   const [jobStatus, setJobStatus] = useState<StereoJobStatus | null>(null);
@@ -189,6 +196,10 @@ export function useStereoCalibration(
   const [detectionsCam2, setDetectionsCam2] = useState<Record<string, StereoFrameDetection>>({});
   const [modelLoading, setModelLoading] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
+  // Set when the sidecar holds detections made under DIFFERENT settings. A muted
+  // hint, not detectError: a stale sidecar on tab open is a normal state, and an
+  // amber warning on every open would train the user to ignore that channel.
+  const [detectionsStale, setDetectionsStale] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
 
@@ -232,6 +243,14 @@ export function useStereoCalibration(
   // pair comes from `fromSettings.rig.camera_pair` when supplied.
   const validateImages = useCallback(async (fromSettings?: SidecarSettings) => {
     setValidating(true);
+    // The effective source identity, carrying `fromSettings` past the stale
+    // first-render closure exactly as validateOne does below, so the cache key
+    // can never describe a different source than the one just validated.
+    const effFormat = fromSettings?.image?.image_format ?? imageFormat;
+    const effType = fromSettings?.image?.image_type ?? imageType;
+    const effUseSubfolders =
+      fromSettings?.image?.use_camera_subfolders ?? useCameraSubfolders;
+    const effSubfolders = fromSettings?.image?.camera_subfolders ?? cameraSubfolders;
     try {
       const pair = fromSettings?.rig?.camera_pair;
       const [c1, c2] = Array.isArray(pair) && pair.length >= 2
@@ -250,11 +269,25 @@ export function useStereoCalibration(
         error: v1.error || v2.error,
       };
       setValidation(result);
+      // Built once, here, and handed to both the warmup and the viewer (via the
+      // hook's return) so the two cannot land in different key namespaces.
+      const refreshKey = calibrationViewerRefreshKey({
+        sourcePath: calibrationSources[sourcePathIdx] ?? '',
+        imageFormat: effFormat,
+        imageType: effType,
+        useCameraSubfolders: effUseSubfolders,
+        cameraSubfolders: effSubfolders,
+        valid: Boolean(result.valid),
+      });
+      setViewerRefreshKey(refreshKey);
       if (result.valid) {
-        // Fill the shared frame cache for both cameras before the viewer is opened.
+        // Both cameras of the pair; c1 first because it is the one on screen.
         warmCalibrationFrameCache({
-          backendUrl: '/backend', cameras: [c1, c2], sourcePathIdx,
-          refreshKey: stereoViewerRefreshKey(result),
+          backendUrl: '/backend',
+          cameras: [c1, c2],
+          primaryCamera: c1,
+          sourcePathIdx,
+          refreshKey,
         });
       }
     } catch (e) {
@@ -263,7 +296,8 @@ export function useStereoCalibration(
     } finally {
       setValidating(false);
     }
-  }, [cam1, cam2, validateOne]);
+  }, [cam1, cam2, validateOne, sourcePathIdx, imageFormat, imageType,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Hydrate the form from a loaded (or server-seeded) settings dict. fix_k2 is
   // hydrated only when explicitly stored — its default is contextual (ON here).
@@ -434,7 +468,7 @@ export function useStereoCalibration(
     } : v));
     setDetectError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, imageFormat, imageType, numImages, cam1, cam2,
+  }, [sourcePathIdx, imageFormat, imageType, numImages,
       calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Map a calibration stereo model/generate response to the card shape.
@@ -519,6 +553,49 @@ export function useStereoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, cam1, cam2, sourcePathIdx]);
 
+  // Load the detections already stored in inputs.mat instead of re-detecting.
+  // The overlay a tab paints when it opens is a READ: the points were written by
+  // the last Detect Dots or solve, and the backend returns them only while its
+  // det_key still matches the current board geometry, format and view count.
+  const restoreDetections = useCallback(async () => {
+    try {
+      const data = await postJson('/backend/calibration/restore_detections', {
+        stereo: true, camera_pair: [cam1, cam2],
+        source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+        frame_total: frameTotal(),
+      });
+      if (data.exists && data.fresh) {
+        // ONE response fills BOTH maps: the pair is detected and persisted as a
+        // single set under one det_key, so a half-restored pair is never valid.
+        for (const cam of [cam1, cam2]) {
+          const mine = data.by_camera?.[String(cam)];
+          const next: Record<string, StereoFrameDetection> = {};
+          for (const [f, v] of Object.entries((mine?.frames ?? {}) as Record<string, any>)) {
+            next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
+          }
+          (cam === cam1 ? setDetectionsCam1 : setDetectionsCam2)(next);
+        }
+        setDetectionsStale(null);
+        return;
+      }
+      // Stale or absent: blank overlay. Points under a mismatched det_key must
+      // never be drawn -- generate_model would refuse to reuse them, so the
+      // overlay would misrepresent what Generate is about to solve.
+      setDetectionsCam1({});
+      setDetectionsCam2({});
+      setDetectionsStale(
+        data.exists && !data.fresh ? `Saved dots were detected with different settings${data.stored?.n_views ? ` (${data.stored.n_views} views)` : ''}. Press Detect Dots to re-detect.` : null,
+      );
+    } catch (e) {
+      // A probe that fires on every tab open must never surface as an error.
+      console.error('restore_detections failed:', e);
+      setDetectionsCam1({});
+      setDetectionsCam2({});
+      setDetectionsStale(null);
+    }
+  }, [cam1, cam2, sourcePathIdx, boardParams, imageFormat, imageType, frameTotal]);
+
   // The overlay is only valid for the inputs that produced it: an image format / type or
   // board-geometry edit changes what Detect Dots returns (and its det_key), so the drawn
   // dots go stale the moment the edit lands. Camera / source clears live in the effect above.
@@ -527,8 +604,17 @@ export function useStereoCalibration(
     setDetectionsCam1({});
     setDetectionsCam2({});
     setDetectError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageFormat, imageType, dotSpacingMm]);
+    // Debounced: the probe loadmats every stored point set, so without this a
+    // keystroke in the geometry field would fire one full sidecar read each.
+    const t = setTimeout(() => { void restoreDetections(); }, 400);
+    return () => clearTimeout(t);
+    // viewerRefreshKey is a dependency on purpose. Every validate rebuilds it with
+    // the source PATH folded in, and an in-place edit of the path at the same
+    // index changes none of restoreDetections' own inputs -- without this the
+    // previous folder's dots stayed drawn on the new folder's images. Keying on
+    // the validate result also orders the restore after the debounced config
+    // save, which the backend needs because it resolves the source by index.
+  }, [configLoaded, restoreDetections, viewerRefreshKey]);
 
   // On-demand board detection for the overlay on a given frame of the active camera.
   const detectFrame = useCallback(async (frame: number, cam: number) => {
@@ -666,7 +752,8 @@ export function useStereoCalibration(
     dotSpacingMm, setDotSpacingMm, dt, setDt, datumFrame, setDatumFrame,
     fixK2, setFixK2, showFixK2: frameTotal() < 3,
     pivType, setPivType,
-    validation, validating, validateImages,
+    validation, validating, validateImages, viewerRefreshKey,
+    restoreDetections, detectionsStale,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     reconstructJobStatus, isReconstructing: reconstructJobStatus?.status === 'running' || reconstructJobStatus?.status === 'starting',
     stereoModel, detectionsCam1, detectionsCam2, modelLoading, detectError, detecting, hasModel: stereoModel !== null,

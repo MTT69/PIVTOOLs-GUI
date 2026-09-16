@@ -25,7 +25,6 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
-import { stereoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { MarkerPoint } from "@/components/viewer/zoomableCanvas";
 import { postJson, errorMessage } from "@/lib/api";
 
@@ -119,6 +118,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
 
     // Validation
     validation,
+    viewerRefreshKey,
     validating,
 
     // Sequence state
@@ -1047,7 +1047,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 sourcePathIdx={sourcePathIdx}
                 camera={viewerCamera}
                 numImages={parseInt(numImages) || 10}
-                refreshKey={stereoViewerRefreshKey(validation)}
+                refreshKey={viewerRefreshKey}
                 stereoParams={{ cam1, cam2 }}
                 calibrationParams={{}}
                 pointSelectMode={fiducialSelectMode || labelTarget !== null}

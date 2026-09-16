@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
-import { clearCalibrationFrameCache, warmCalibrationFrameCache, stereoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Stepped (dual-level) board STEREO calibration on the calibration backend.
@@ -179,6 +179,8 @@ interface SidecarSettings {
     image_format?: string;
     image_type?: string;
     n_views?: number | null;
+    use_camera_subfolders?: boolean;
+    camera_subfolders?: string[];
   };
   rig?: {
     camera_pair?: [number, number];
@@ -241,6 +243,11 @@ export function useStereoSteppedCalibration(
   // ---------- Validation (both cameras) ----------
   const [validation, setValidation] = useState<StereoValidation | null>(null);
   const [validating, setValidating] = useState(false);
+  // The viewer's cache-key namespace. Built in validateImages so there is ONE
+  // construction site shared by the warmup and the viewer (see
+  // calibrationViewerRefreshKey); empty until the first validate returns.
+  const [viewerRefreshKey, setViewerRefreshKey] = useState('');
+
 
   // ---------- Single shared sequence (both cameras) ----------
   const [sequenceId, setSequenceId] = useState<string | null>(null);
@@ -372,6 +379,14 @@ export function useStereoSteppedCalibration(
   // pre-hydration, so the pair comes from `fromSettings.rig.camera_pair`.
   const validateImages = useCallback(async (fromSettings?: SidecarSettings) => {
     setValidating(true);
+    // The effective source identity, carrying `fromSettings` past the stale
+    // first-render closure exactly as validateOne does below, so the cache key
+    // can never describe a different source than the one just validated.
+    const effFormat = fromSettings?.image?.image_format ?? imageFormat;
+    const effType = fromSettings?.image?.image_type ?? imageType;
+    const effUseSubfolders =
+      fromSettings?.image?.use_camera_subfolders ?? useCameraSubfolders;
+    const effSubfolders = fromSettings?.image?.camera_subfolders ?? cameraSubfolders;
     try {
       const pair = fromSettings?.rig?.camera_pair;
       const [c1, c2] = Array.isArray(pair) && pair.length >= 2
@@ -380,17 +395,32 @@ export function useStereoSteppedCalibration(
       const [v1, v2] = await Promise.all([validateOne(c1, fromSettings), validateOne(c2, fromSettings)]);
       const result: StereoValidation = { cam1: v1, cam2: v2, valid: Boolean(v1.valid && v2.valid) };
       setValidation(result);
+      // Built once, here, and handed to both the warmup and the viewer (via the
+      // hook's return) so the two cannot land in different key namespaces.
+      const refreshKey = calibrationViewerRefreshKey({
+        sourcePath: calibrationSources[sourcePathIdx] ?? '',
+        imageFormat: effFormat,
+        imageType: effType,
+        useCameraSubfolders: effUseSubfolders,
+        cameraSubfolders: effSubfolders,
+        valid: Boolean(result.valid),
+      });
+      setViewerRefreshKey(refreshKey);
       if (result.valid) {
-        // Fill the shared frame cache for both cameras before the viewer is opened.
+        // Both cameras of the pair; c1 first because it is the one on screen.
         warmCalibrationFrameCache({
-          backendUrl: '/backend', cameras: [c1, c2], sourcePathIdx,
-          refreshKey: stereoViewerRefreshKey(result),
+          backendUrl: '/backend',
+          cameras: [c1, c2],
+          primaryCamera: c1,
+          sourcePathIdx,
+          refreshKey,
         });
       }
     } finally {
       setValidating(false);
     }
-  }, [validateOne, cam1, cam2]);
+  }, [validateOne, cam1, cam2, sourcePathIdx, imageFormat, imageType,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // False while the form is (re)hydrating from a source's sidecar. The debounced
   // save must never write the form into a source it wasn't hydrated from.
@@ -492,6 +522,10 @@ export function useStereoSteppedCalibration(
   // Latest loadModel — the debounced saveConfig reloads through this ref because
   // loadModel is defined below it (can't be a saveConfig dependency).
   const loadModelRef = useRef<((resolvedConfig?: string) => Promise<void>) | null>(null);
+  // Same late-binding pattern: restoreSequence is defined after saveConfig, which
+  // must call it on an in-place path edit (the pair/source effect below does not
+  // re-run, because the index is unchanged).
+  const restoreSequenceRef = useRef<(() => Promise<void>) | null>(null);
 
   // Clear the sequence/detection state for a source change (stale pixels).
   const resetSourceState = useCallback(() => {
@@ -574,6 +608,9 @@ export function useStereoSteppedCalibration(
         loadModelRef.current?.();
         const s = await loadSettings(sourcePathIdx);
         validateImages(s ?? undefined);
+        // The config save above has landed, so the backend now resolves this
+        // index to the new directory: read its sidecar sequence, if any.
+        void restoreSequenceRef.current?.();
       } else {
         validateImages();
       }
@@ -608,7 +645,7 @@ export function useStereoSteppedCalibration(
       cam2: v.cam2 ? { ...v.cam2, valid: false, error: undefined } : v.cam2,
     } : v));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, imageFormat, imageType, numImages, cam1, cam2,
+  }, [sourcePathIdx, imageFormat, imageType, numImages,
       calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Clear the sequence state when source index or the pair changes (stale pixels).
@@ -987,6 +1024,7 @@ export function useStereoSteppedCalibration(
       setHasSidecar(false);
     }
   }, [cam1, cam2, sourcePathIdx, resetSourceState]);
+  restoreSequenceRef.current = restoreSequence;
 
   // ---------- Auto-load the saved model + restore the sidecar overlay on pair/source change ----------
   useEffect(() => {
@@ -1167,7 +1205,7 @@ export function useStereoSteppedCalibration(
     fixK2, setFixK2, showFixK2: frameTotal() < 3 && modelType === 'pinhole',
 
     // Validation
-    validation, validating, validateImages,
+    validation, validating, validateImages, viewerRefreshKey,
 
     // Sequence state
     sequenceId, sequenceStatus, sequencePoses, sequenceError, detectionProgress,

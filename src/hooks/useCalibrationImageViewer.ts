@@ -22,9 +22,15 @@ export interface CalibrationFrame {
 export type CalibrationViewerImageFormat = 'jpeg' | 'png';
 
 /**
- * The viewer's initial image settings. Exported so `warmCalibrationFrameCache`
- * fetches under the SAME cache key the viewer will look up on its first paint —
- * a warmup under different settings would be silently useless.
+ * The viewer's initial image settings.
+ *
+ * `DEFAULT_VIEWER_IMAGE_FORMAT` is exported so `warmCalibrationFrameCache`
+ * fetches under the SAME cache key the viewer looks up on its first paint — a
+ * warmup under a different format would be silently useless.
+ *
+ * `DEFAULT_VIEWER_AUTO_LIMITS` is only the initial state of the viewer's
+ * Auto-scale toggle. It is NOT part of the cache key or the URL: the calibration
+ * route returns the same bytes either way (see `frameUrl`).
  */
 export const DEFAULT_VIEWER_IMAGE_FORMAT: CalibrationViewerImageFormat = 'jpeg';
 export const DEFAULT_VIEWER_AUTO_LIMITS = true;
@@ -34,19 +40,26 @@ export const DEFAULT_VIEWER_AUTO_LIMITS = true;
 //
 // Radix Tabs unmounts inactive tab content, so a per-mount buffer died on every
 // tab switch and refetched frame 1 (+ its prefetch window) on the way back. The
-// cache key carries every render-relevant setting (source, camera, frame,
-// jpeg/png, auto-limits, and the tab's refreshKey = validated camera path), so a
-// source or setup change simply stops matching; the hooks also clear the cache
-// outright when a validation-relevant input changes (see the calibration hooks'
-// "clear stale validation" effects).
+// cache key carries every setting that changes what a frame LOOKS like: source,
+// camera, frame, jpeg/png, and the tab's refreshKey (the source-level identity —
+// see calibrationViewerRefreshKey). A source or setup change simply stops
+// matching; the hooks also clear the cache outright when a validation-relevant
+// input changes (see the calibration hooks' "clear stale validation" effects).
 // ---------------------------------------------------------------------------
 
 /** Byte budget on the base64 payloads. PNG entries at 4872x3248 run 10+ MB. */
 const FRAME_CACHE_MAX_BYTES = 80 * 1024 * 1024;
 /** Secondary cap so many small JPEG frames cannot grow the Map without bound. */
 const FRAME_CACHE_MAX_ENTRIES = 40;
-/** Frames per camera fetched by the post-validation warmup. */
-const WARMUP_FRAME_LIMIT = 12;
+/**
+ * Frames per camera fetched by the post-validation warmup.
+ *
+ * Five, not twelve: the warmup now covers EVERY camera rather than only the one
+ * on screen, and the viewer prefetches +/-PREFETCH_WINDOW as the user navigates,
+ * so a deep per-camera warm mostly bought frames nobody looked at while the
+ * server decoded them one at a time.
+ */
+const WARMUP_FRAME_LIMIT = 5;
 /** Parallel warmup fetches — the backend decodes each frame on request. */
 const WARMUP_CONCURRENCY = 2;
 /** Frames ahead of the current one that a mounted viewer prefetches. */
@@ -70,10 +83,11 @@ function frameCacheKey(
   camera: number,
   frameIdx: number,
   imageFormat: CalibrationViewerImageFormat,
-  autoLimits: boolean,
   refreshKey: string | undefined,
 ): string {
-  return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${autoLimits}-${refreshKey || ''}`;
+  // No autoLimits: the calibration route ignores it and the bytes are identical
+  // either way, so keeping it here only split the cache in half.
+  return `${sourcePathIdx}-${camera}-${frameIdx}-${imageFormat}-${refreshKey || ''}`;
 }
 
 // calibration serves every board/geometry from one JSON frame endpoint (a
@@ -85,9 +99,13 @@ function frameUrl(
   camera: number,
   frameIdx: number,
   imageFormat: CalibrationViewerImageFormat,
-  autoLimits: boolean,
 ): string {
-  return `${backendUrl}/calibration/frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+  // auto_limits is deliberately absent: `frame_json` never read it. It always
+  // encodes the same image and always returns vmin_pct/vmax_pct, and the window
+  // is applied client-side by ZoomableCanvas. (The PIV route in app.py DOES
+  // honour the flag -- it gates whether the stats are computed at all -- which
+  // is presumably where this was copied from.)
+  return `${backendUrl}/calibration/frame?camera=${camera}&idx=${frameIdx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}`;
 }
 
 function cacheGet(key: string): CalibrationFrame | undefined {
@@ -182,33 +200,64 @@ export function clearCalibrationFrameCache(): void {
 }
 
 /**
- * The viewer `refreshKey` for a single-camera tab. Components pass this to
- * `CalibrationImageViewer` and the hooks pass it to `warmCalibrationFrameCache`;
- * one definition keeps the two cache-key namespaces identical.
+ * What makes a source's frames look the way they do — deliberately WITHOUT the
+ * camera.
  */
-export function monoViewerRefreshKey(
-  validation: { camera_path?: string; valid?: boolean } | null | undefined,
-): string {
-  return `${validation?.camera_path}-${validation?.valid}`;
+export interface CalibrationViewerSource {
+  /** `calibrationSources[sourcePathIdx]`, so an in-place path edit re-keys. */
+  sourcePath: string;
+  imageFormat: string;
+  imageType: string;
+  useCameraSubfolders: boolean;
+  cameraSubfolders: string[];
+  valid: boolean;
 }
 
-/** Stereo counterpart of `monoViewerRefreshKey` (both camera paths). */
-export function stereoViewerRefreshKey(
-  validation: {
-    cam1?: { camera_path?: string } | null;
-    cam2?: { camera_path?: string } | null;
-    valid?: boolean;
-  } | null | undefined,
-): string {
-  return `${validation?.cam1?.camera_path}-${validation?.cam2?.camera_path}-${validation?.valid}`;
+/**
+ * The viewer `refreshKey`: everything the frame URL does NOT carry.
+ *
+ * The backend reads image format, type and camera subfolders from the source's
+ * settings sidecar, so two frames at the same URL can be different pixels after
+ * such an edit. Those inputs live here; `sourcePathIdx`, `camera`, `frameIdx`,
+ * and `imageFormat` (jpeg/png) is already a separate field of `frameCacheKey`,
+ * so repeating them would only split entries.
+ *
+ * CAMERA-INDEPENDENT ON PURPOSE. This used to be `${validation.camera_path}-...`,
+ * and `camera_path` is built per camera, so the key changed on every camera
+ * switch and re-keyed the whole cache — the entries were still in memory but no
+ * longer reachable. Dropping `camera` from the hooks' `clearCalibrationFrameCache`
+ * dependency arrays does nothing on its own while that is true.
+ *
+ * Carrying every invalidating input here also makes the cache self-invalidating,
+ * so correctness no longer depends on an effect firing in the right order — the
+ * same reasoning as the vector viewer's prefetch key (day-one gotcha #6).
+ *
+ * Each hook builds this ONCE and hands the result to both
+ * `warmCalibrationFrameCache` and its component's `CalibrationImageViewer`, so
+ * the warm and the read cannot land in different namespaces.
+ */
+export function calibrationViewerRefreshKey(source: CalibrationViewerSource): string {
+  // Subfolders only reach the resolved path when the flag is on, so an edit to a
+  // disabled list must not re-key.
+  const subfolders = source.useCameraSubfolders ? source.cameraSubfolders.join('|') : '';
+  return [
+    source.sourcePath,
+    source.imageFormat,
+    source.imageType,
+    String(source.useCameraSubfolders),
+    subfolders,
+    String(source.valid),
+  ].join('~');
 }
 
 export interface WarmCalibrationFrameCacheArgs {
   backendUrl: string;
-  /** Every camera the tab's viewer can show (both cameras of a stereo pair). */
+  /** Every camera the tab's viewer can show, not only the one on screen. */
   cameras: number[];
+  /** The camera actually on screen. Its frames are fetched first. */
+  primaryCamera: number;
   sourcePathIdx: number;
-  /** Exactly what the tab's viewer will receive — build it with the helpers above. */
+  /** Exactly what the tab's viewer will receive — build it with the helper above. */
   refreshKey: string;
 }
 
@@ -222,7 +271,7 @@ export interface WarmCalibrationFrameCacheArgs {
  * warmup must never surface an error the validation itself did not.
  */
 export function warmCalibrationFrameCache({
-  backendUrl, cameras, sourcePathIdx, refreshKey,
+  backendUrl, cameras, primaryCamera, sourcePathIdx, refreshKey,
 }: WarmCalibrationFrameCacheArgs): void {
   warmupController?.abort();
   const controller = new AbortController();
@@ -230,8 +279,8 @@ export function warmCalibrationFrameCache({
   const { signal } = controller;
 
   const load = (camera: number, idx: number) => loadFrame(
-    frameCacheKey(sourcePathIdx, camera, idx, DEFAULT_VIEWER_IMAGE_FORMAT, DEFAULT_VIEWER_AUTO_LIMITS, refreshKey),
-    frameUrl(backendUrl, sourcePathIdx, camera, idx, DEFAULT_VIEWER_IMAGE_FORMAT, DEFAULT_VIEWER_AUTO_LIMITS),
+    frameCacheKey(sourcePathIdx, camera, idx, DEFAULT_VIEWER_IMAGE_FORMAT, refreshKey),
+    frameUrl(backendUrl, sourcePathIdx, camera, idx, DEFAULT_VIEWER_IMAGE_FORMAT),
     signal,
   );
   const report = (camera: number, idx: number, e: unknown) => {
@@ -240,24 +289,25 @@ export function warmCalibrationFrameCache({
     }
   };
 
-  (async () => {
-    // Frame 1 per camera: learns each camera's frame count.
-    const frameCounts = new Map<number, number>();
-    await Promise.all(cameras.map(async (camera) => {
-      try {
-        const first = await load(camera, 1);
-        frameCounts.set(camera, first.frameCount);
-      } catch (e) {
-        report(camera, 1, e);
-      }
-    }));
-    if (signal.aborted) return;
+  const frameCounts = new Map<number, number>();
 
+  /** Frame 1 also carries the frame count, so it must lead for every camera. */
+  const learn = async (camera: number) => {
+    try {
+      const first = await load(camera, 1);
+      frameCounts.set(camera, first.frameCount);
+    } catch (e) {
+      report(camera, 1, e);
+    }
+  };
+
+  const drain = async (order: number[]) => {
     const jobs: { camera: number; idx: number }[] = [];
-    for (let idx = 2; idx <= WARMUP_FRAME_LIMIT; idx++) {
-      for (const camera of cameras) {
-        const total = frameCounts.get(camera);
-        if (total !== undefined && idx <= total) jobs.push({ camera, idx });
+    for (const camera of order) {
+      const total = frameCounts.get(camera);
+      if (total === undefined) continue;
+      for (let idx = 2; idx <= Math.min(WARMUP_FRAME_LIMIT, total); idx++) {
+        jobs.push({ camera, idx });
       }
     }
     const worker = async () => {
@@ -270,6 +320,23 @@ export function warmCalibrationFrameCache({
       }
     };
     await Promise.all(Array.from({ length: WARMUP_CONCURRENCY }, worker));
+  };
+
+  (async () => {
+    // The camera on screen is warmed to completion first, and its frame 1 runs
+    // uncontended. Fetching every camera's frame 1 in one Promise.all made the
+    // frame the user is actually waiting for queue behind cameras they are not
+    // looking at — on a 4-camera rig, a 4x slower first paint.
+    const others = cameras.filter((c) => c !== primaryCamera);
+    await learn(primaryCamera);
+    if (signal.aborted) return;
+    await drain([primaryCamera]);
+    if (signal.aborted) return;
+
+    // Then the rest, so a camera switch finds them already cached.
+    await Promise.all(others.map(learn));
+    if (signal.aborted) return;
+    await drain(others);
   })();
 }
 
@@ -308,12 +375,12 @@ export function useCalibrationImageViewer(
   const frameCountRef = useRef<number>(0);
 
   const getCacheKey = useCallback((frameIdx: number) => {
-    return frameCacheKey(sourcePathIdx, camera, frameIdx, imageFormat, autoLimits, refreshKey);
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, refreshKey]);
+    return frameCacheKey(sourcePathIdx, camera, frameIdx, imageFormat, refreshKey);
+  }, [sourcePathIdx, camera, imageFormat, refreshKey]);
 
   const buildFrameUrl = useCallback((frameIdx: number) => {
-    return frameUrl(backendUrl, sourcePathIdx, camera, frameIdx, imageFormat, autoLimits);
-  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits]);
+    return frameUrl(backendUrl, sourcePathIdx, camera, frameIdx, imageFormat);
+  }, [backendUrl, camera, sourcePathIdx, imageFormat]);
 
   // Cancel this instance's prefetch requests
   const cancelPrefetches = useCallback(() => {
@@ -417,7 +484,7 @@ export function useCalibrationImageViewer(
   // the tab-switch survival the module-scope cache exists for.
   useEffect(() => {
     cancelPrefetches();
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches, backendUrl, refreshKey]);
+  }, [sourcePathIdx, camera, imageFormat, cancelPrefetches, backendUrl, refreshKey]);
 
   return {
     // Image state

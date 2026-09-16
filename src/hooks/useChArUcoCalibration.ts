@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ApplyJobStatus, readApplyJobStatus } from '@/lib/applyJob';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
-import { clearCalibrationFrameCache, warmCalibrationFrameCache, monoViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
+import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from '@/hooks/useCalibrationImageViewer';
 
 /**
  * Detection data for a single frame (on-demand overlay).
@@ -130,6 +130,8 @@ interface SidecarSettings {
     image_format?: string;
     image_type?: string;
     n_views?: number | null;
+    use_camera_subfolders?: boolean;
+    camera_subfolders?: string[];
   };
   rig?: {
     camera_pair?: [number, number];
@@ -189,6 +191,11 @@ export function useChArUcoCalibration(
   // Validation
   const [validation, setValidation] = useState<CharucoValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
+  // The viewer's cache-key namespace. Built in validateImages so there is ONE
+  // construction site shared by the warmup and the viewer (see
+  // calibrationViewerRefreshKey); empty until the first validate returns.
+  const [viewerRefreshKey, setViewerRefreshKey] = useState('');
+
 
   // Synchronous generate status (v1 shape)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
@@ -203,6 +210,10 @@ export function useChArUcoCalibration(
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
+  // Set when the sidecar holds detections made under DIFFERENT settings. A muted
+  // hint, not detectError: a stale sidecar on tab open is a normal state, and an
+  // amber warning on every open would train the user to ignore that channel.
+  const [detectionsStale, setDetectionsStale] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
 
@@ -246,19 +257,42 @@ export function useChArUcoCalibration(
   // and flash a spurious red "Pattern is empty" failure.
   const validateImages = useCallback(async (fromSettings?: SidecarSettings) => {
     setValidating(true);
+    // The effective source identity, carrying `fromSettings` past the stale
+    // first-render closure exactly as the validate POST does, so the cache key
+    // can never describe a different source than the one just validated.
+      const effFormat = fromSettings?.image?.image_format ?? imageFormat;
+      const effType = fromSettings?.image?.image_type ?? imageType;
+      const effUseSubfolders =
+        fromSettings?.image?.use_camera_subfolders ?? useCameraSubfolders;
+      const effSubfolders = fromSettings?.image?.camera_subfolders ?? cameraSubfolders;
     try {
       const result: CharucoValidationResult = await postJson('/backend/calibration/validate', {
         camera, source_path_idx: sourcePathIdx,
-        image_format: fromSettings?.image?.image_format ?? imageFormat,
-        image_type: fromSettings?.image?.image_type ?? imageType,
+        image_format: effFormat,
+        image_type: effType,
         frame_total: fromSettings?.image?.n_views ?? frameTotal(),
       });
       setValidation(result);
+      // Built once, here, and handed to both the warmup and the viewer (via the
+      // hook's return) so the two cannot land in different key namespaces.
+      const refreshKey = calibrationViewerRefreshKey({
+        sourcePath: calibrationSources[sourcePathIdx] ?? '',
+        imageFormat: effFormat,
+        imageType: effType,
+        useCameraSubfolders: effUseSubfolders,
+        cameraSubfolders: effSubfolders,
+        valid: Boolean(result.valid),
+      });
+      setViewerRefreshKey(refreshKey);
       if (result.valid) {
-        // Fill the shared frame cache before the viewer is opened.
+        // EVERY camera the tab can show, not just the one on screen, so a camera
+        // switch is a cache hit instead of a cold decode.
         warmCalibrationFrameCache({
-          backendUrl: '/backend', cameras: [camera], sourcePathIdx,
-          refreshKey: monoViewerRefreshKey(result),
+          backendUrl: '/backend',
+          cameras: cameraOptions,
+          primaryCamera: camera,
+          sourcePathIdx,
+          refreshKey,
         });
       }
     } catch (e) {
@@ -266,7 +300,8 @@ export function useChArUcoCalibration(
     } finally {
       setValidating(false);
     }
-  }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal]);
+  }, [camera, sourcePathIdx, imageFormat, imageType, frameTotal, cameraOptions,
+      calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Hydrate the form from a loaded (or server-seeded) settings dict. Every field
   // is present in the response (template + seed) — no frontend fallback defaults.
@@ -433,7 +468,7 @@ export function useChArUcoCalibration(
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     setDetectError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, sourcePathIdx, imageFormat, imageType, numImages,
+  }, [sourcePathIdx, imageFormat, imageType, numImages,
       calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Map a calibration mono model/generate response to the v1 card shape. The
@@ -572,6 +607,42 @@ export function useChArUcoCalibration(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, camera, sourcePathIdx]);
 
+  // Load the detections already stored in inputs.mat instead of re-detecting.
+  // The overlay a tab paints when it opens is a READ: the points were written by
+  // the last Detect Dots or solve, and the backend returns them only while its
+  // det_key still matches the current board geometry, format and view count.
+  const restoreDetections = useCallback(async () => {
+    try {
+      const data = await postJson('/backend/calibration/restore_detections', {
+        camera, source_path_idx: sourcePathIdx, board: BOARD,
+        board_params: boardParams(), image_format: imageFormat, image_type: imageType,
+        frame_total: frameTotal(),
+      });
+      if (data.exists && data.fresh) {
+        const mine = data.by_camera?.[String(camera)];
+        const next: Record<string, FrameDetection> = {};
+        for (const [f, v] of Object.entries((mine?.frames ?? {}) as Record<string, any>)) {
+          next[Number(f)] = { grid_points: v.image_points, grid_indices: v.grid_indices };
+        }
+        setDetections(next);
+        setDetectionsStale(null);
+        return;
+      }
+      // Stale or absent: blank overlay. Points under a mismatched det_key must
+      // never be drawn -- generate_model would refuse to reuse them, so the
+      // overlay would misrepresent what Generate is about to solve.
+      setDetections({});
+      setDetectionsStale(
+        data.exists && !data.fresh ? `Saved dots were detected with different settings${data.stored?.n_views ? ` (${data.stored.n_views} views)` : ''}. Press Detect Dots to re-detect.` : null,
+      );
+    } catch (e) {
+      // A probe that fires on every tab open must never surface as an error.
+      console.error('restore_detections failed:', e);
+      setDetections({});
+      setDetectionsStale(null);
+    }
+  }, [camera, sourcePathIdx, boardParams, imageFormat, imageType, frameTotal]);
+
   // The overlay is only valid for the inputs that produced it: an image format / type or
   // board-geometry edit changes what Detect Dots returns (and its det_key), so the drawn
   // dots go stale the moment the edit lands. Camera / source clears live in the effect above.
@@ -579,8 +650,17 @@ export function useChArUcoCalibration(
     if (!configLoaded) return;
     setDetections({});
     setDetectError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageFormat, imageType, squaresH, squaresV, squareSize, markerRatio, arucoDict, minCorners]);
+    // Debounced: the probe loadmats every stored point set, so without this a
+    // keystroke in the geometry field would fire one full sidecar read each.
+    const t = setTimeout(() => { void restoreDetections(); }, 400);
+    return () => clearTimeout(t);
+    // viewerRefreshKey is a dependency on purpose. Every validate rebuilds it with
+    // the source PATH folded in, and an in-place edit of the path at the same
+    // index changes none of restoreDetections' own inputs -- without this the
+    // previous folder's dots stayed drawn on the new folder's images. Keying on
+    // the validate result also orders the restore after the debounced config
+    // save, which the backend needs because it resolves the source by index.
+  }, [configLoaded, restoreDetections, viewerRefreshKey]);
 
   // On-demand board detection for the overlay on a given frame.
   const detectFrame = useCallback(async (frame: number) => {
@@ -702,7 +782,8 @@ export function useChArUcoCalibration(
     markerRatio, setMarkerRatio, arucoDict, setArucoDict, minCorners, setMinCorners,
     dt, setDt, datumFrame, setDatumFrame,
     modelType, setModelType, pivType, setPivType,
-    validation, validating, validateImages,
+    validation, validating, validateImages, viewerRefreshKey,
+    restoreDetections, detectionsStale,
     jobStatus, isCalibrating: jobStatus?.status === 'running' || jobStatus?.status === 'starting',
     multiCameraJobStatus, isMultiCameraCalibrating: multiCameraJobStatus?.status === 'running' || multiCameraJobStatus?.status === 'starting',
     vectorJobStatus, isVectorCalibrating: vectorJobStatus?.status === 'running' || vectorJobStatus?.status === 'starting',

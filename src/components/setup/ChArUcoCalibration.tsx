@@ -14,7 +14,6 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { monoViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -81,6 +80,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
     // Validation
     validation,
+    viewerRefreshKey,
     validating,
 
     // Single camera job tracking
@@ -101,6 +101,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     modelLoading,
     modelLoadError,
     detectError,
+    detectionsStale,
     detecting,
     hasModel,
 
@@ -149,17 +150,21 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
 
-  // When a saved model loads, restore its world frame + show the detected markers.
+  // When a saved model loads, restore its world frame + show the overlay.
+  // The dots themselves are restored from inputs.mat by the hook's own effect,
+  // independently of whether a model exists -- detections survive a model delete,
+  // and re-detecting them here was the whole cost this change removes.
   React.useEffect(() => {
     if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    detectFrame(currentFrame);
     setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasModel, loadedWorldFrame]);
 
   // Local state
-  const [showImageViewer, setShowImageViewer] = useState(false);
+  // Open by default (2026-09-16): frames are warmed on validation and the dot
+  // overlay is restored from the sidecar, so the viewer costs nothing to show.
+  const [showImageViewer, setShowImageViewer] = useState(true);
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const vectorTypeName = calibration.pivType;
@@ -525,6 +530,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               imageType={imageType}
               modelType={modelType}
               validationValid={!!validation?.valid}
+              viewerRefreshKey={viewerRefreshKey}
               datumFrame={parseInt(datumFrame) || 1}
               dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
@@ -569,7 +575,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               sourcePathIdx={sourcePathIdx}
               camera={camera}
               numImages={parseInt(numImages) || 10}
-              refreshKey={monoViewerRefreshKey(validation)}
+              refreshKey={viewerRefreshKey}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
               showSavedOverlay={showOverlay}
@@ -686,6 +692,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <div className="text-sm text-red-600 flex items-center gap-1">
                 <AlertTriangle className="h-4 w-4" />
                 {modelLoadError}
+              </div>
+            )}
+
+            {detectionsStale && (
+              <div className="text-sm text-gray-500">
+                {detectionsStale}
               </div>
             )}
 
