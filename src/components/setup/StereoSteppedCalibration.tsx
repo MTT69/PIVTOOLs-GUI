@@ -469,7 +469,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved.</p>
+                <p className="text-xs text-muted-foreground mt-1">Picks which calibration source this tab edits, one per PIV source path (Settings → Directories). Models are saved in the calibration source folder.</p>
               </div>
               <div>
                 <Label className="text-sm font-medium">Camera 1 (world reference)</Label>

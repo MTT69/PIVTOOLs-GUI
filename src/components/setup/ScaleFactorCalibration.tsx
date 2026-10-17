@@ -48,20 +48,26 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const c2 = useCalibrationApi();
 
   // --- Source + image selection -------------------------------------------------
-  // The source LIST is the config pointer; everything else hydrates from the
-  // per-source settings sidecar (GET /calibration/settings) below.
+  // The source LIST is the config pointer, fetched from the backend on mount (the
+  // `config` prop is not kept in sync by the other calibration tabs); everything
+  // else hydrates from the per-source settings sidecar (GET /calibration/settings).
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
   const [camera, setCamera] = useState(cameraOptions[0] || 1);
   const [imageFormat, setImageFormat] = useState<string>('');
   const [imageType, setImageType] = useState<string>('standard');
-  const [calibrationSources, setCalibrationSources] = useState<string[]>(
-    () => config?.calibration?.calibration_sources || []);
+  const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
+  // Opens once the source list has loaded. Gates hydration and every write: an
+  // unknown list must never be persisted back over the real one.
+  const [configLoaded, setConfigLoaded] = useState(false);
+  // A failed source-list load leaves the gate closed for good, so it gets its own
+  // alert: `validation` is cleared by other effects and only renders with images on.
+  const [sourcesLoadError, setSourcesLoadError] = useState<string | null>(null);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState<boolean>(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [frameIdx, setFrameIdx] = useState(1);
-  // Image-less mode: a CLI-made model (or one whose images moved) can be loaded,
-  // edited numerically and re-generated without any calibration images on disk —
-  // the backend takes the image size from the existing model (explicit use_image flag).
+  // Image-less mode: the uniform pixel->mm map needs no image, so a model can be
+  // typed in, generated and re-edited with no calibration images on disk (explicit
+  // use_image flag; the proof figure is skipped).
   const [useImages, setUseImages] = useState(true);
 
   // --- Scale-factor params (persist to the sidecar; NO frontend defaults) --------
@@ -158,9 +164,31 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // Bumped to force a rehydrate + model reload after an in-place path edit
   // (sourcePathIdx alone doesn't change in that case).
   const [sourceReloadTick, setSourceReloadTick] = useState(0);
+
+  // Load the source list (config pointer) on mount.
   useEffect(() => {
+    (async () => {
+      try {
+        const cal = (await fetchJson('/backend/config')).calibration || {};
+        const sources: string[] = Array.isArray(cal.calibration_sources) ? cal.calibration_sources : [];
+        setCalibrationSources(sources);
+        // The persist effect can fire before the first hydrate returns; without
+        // this it would read the still-empty ref as an in-place path edit.
+        loadedSourcePathRef.current = sources[0] ?? '';
+        setConfigLoaded(true);
+      } catch (e) {
+        setSourcesLoadError(errorMessage(e));
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!configLoaded) return;
     settingsReadyRef.current = false;
     const seq = ++settingsSeqRef.current;
+    // No source path yet: there is no sidecar to read. The persist effect below
+    // saves the path once typed and bumps `sourceReloadTick` to rehydrate.
+    if (!(calibrationSources[sourcePathIdx] ?? '').trim()) return;
     (async () => {
       try {
         const data = await fetchJson(`/backend/calibration/settings?source_path_idx=${sourcePathIdx}`);
@@ -191,11 +219,14 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, sourceReloadTick]);
+  }, [configLoaded, sourcePathIdx, sourceReloadTick]);
 
   // --- Persist (debounced): source list to config.yaml, the rest to the sidecar ---
+  // The source list saves as soon as it has loaded — NOT only after a sidecar
+  // hydrate, which needs a saved source path to succeed. The sidecar write keeps
+  // its own `settingsReadyRef` guard below.
   useEffect(() => {
-    if (!settingsEpoch) return;  // nothing hydrated yet
+    if (!configLoaded) return;
     const t = setTimeout(async () => {
       try {
         await postJson("/backend/update_config", {
@@ -244,7 +275,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders,
-      pxPerMm, dt, settingsEpoch, sourcePathIdx]);
+      pxPerMm, dt, settingsEpoch, sourcePathIdx, configLoaded]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
@@ -285,13 +316,19 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   // Debounced past the 500 ms config persist above: source dir + subfolders are resolved
   // from config on the backend, so validation must run after the persist lands.
-  // With images off there is nothing to validate — clearing the result also drops the
-  // alert and makes `dims` fall back to the model's stored image size.
+  // With images off, or before a source path is set, there is nothing to validate —
+  // clearing the result also drops the alert.
   useEffect(() => {
-    if (!useImages) { setValidation(null); return; }
+    if (!configLoaded) return;
+    if (!useImages || !(calibrationSources[sourcePathIdx] ?? '').trim()) {
+      setValidation(null);
+      setValidating(false);
+      return;
+    }
     const t = setTimeout(validate, 800);
     return () => clearTimeout(t);
-  }, [validate, useImages, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+  }, [validate, useImages, calibrationSources, sourcePathIdx, useCameraSubfolders, cameraSubfolders,
+      configLoaded]);
 
   // Clear a stale validation error the instant an input changes and enter a pending state; the
   // debounced re-validate above then refreshes it. Validation is resolved by the backend from
@@ -316,14 +353,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useImages]);
 
-  // Image dimensions for overlay geometry: validation reports [W, H]; a restored/generated
-  // model carries image_width/height as a fallback before validation completes.
+  // Image dimensions for overlay geometry: validation reports [W, H].
   const dims: { w: number; h: number } | null =
     validation?.valid && Array.isArray(validation.image_size)
       ? { w: Number(validation.image_size[0]), h: Number(validation.image_size[1]) }
-      : result?.image_width
-        ? { w: result.image_width, h: result.image_height }
-        : null;
+      : null;
 
   // Apply-poll timer; cleared on unmount so a switched-away tab stops polling.
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -424,7 +458,14 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }
 
   // --- Generate -----------------------------------------------------------------
+  const sourcePathSet = Boolean((calibrationSources[sourcePathIdx] ?? '').trim());
   const generate = useCallback(async () => {
+    if (!sourcePathSet) {
+      c2.setError(useImages
+        ? "Set the calibration images location first."
+        : "Set the calibration folder first — the model is saved there.");
+      return;
+    }
     if (!originPx) {
       c2.setError(useImages
         ? "Pick the origin on the image first."
@@ -455,7 +496,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     if (data) {
       setResult(data);
     }
-  }, [originPx, originMmX, originMmY, pxPerMm, dt, xDir, yDir, swapAxes, frameIdx,
+  }, [sourcePathSet, originPx, originMmX, originMmY, pxPerMm, dt, xDir, yDir, swapAxes, frameIdx,
       imageFormat, imageType, useImages, locator]);
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
@@ -513,14 +554,26 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             <p className="text-xs text-muted-foreground ml-10">
               {useImages
                 ? "Pick the origin and measure scale on calibration images."
-                : "No images required — edit the saved model numerically; image size is taken from the existing model."}
+                : "No images required. Type the origin, scale and Δt."}
             </p>
           </div>
 
-          {/* Section 1: Calibration Source Path (primary input) */}
-          {useImages && (
+          {sourcesLoadError && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Calibration sources did not load</AlertTitle>
+              <AlertDescription>
+                {sourcesLoadError} — nothing on this tab can load or save. Reload the page once the backend is reachable.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Section 1: Calibration Source Path (primary input). Shown in both modes:
+              the model is saved under this folder, images or not. */}
           <div className="space-y-2">
-            <Label className="text-sm font-medium">Calibration Images Location</Label>
+            <Label className="text-sm font-medium">
+              {useImages ? "Calibration Images Location" : "Calibration Folder"}
+            </Label>
             <Input
               value={calibrationSources[sourcePathIdx] || ""}
               onChange={e => {
@@ -529,14 +582,15 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 newSources[sourcePathIdx] = e.target.value;
                 setCalibrationSources(newSources);
               }}
-              placeholder="/path/to/calibration/images"
+              placeholder={useImages ? "/path/to/calibration/images" : "/path/to/calibration/folder"}
               className="font-mono"
             />
             <p className="text-xs text-muted-foreground">
-              Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path.
+              {useImages
+                ? "Full path to directory containing calibration images. Camera subfolders (if enabled) are relative to this path. The model is saved in this folder."
+                : "The model is saved in this folder. No images are required."}
             </p>
           </div>
-          )}
 
           {/* Section 2: Base path + camera */}
           <div className="grid md:grid-cols-2 gap-4">
@@ -550,7 +604,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground mt-1">Where calibration models are saved. Configured in Settings → Directories.</p>
+              <p className="text-xs text-muted-foreground mt-1">Picks which calibration source this tab edits, one per PIV source path (Settings → Directories). Models are saved in the calibration source folder.</p>
             </div>
             <div>
               <Label className="text-sm font-medium">Camera</Label>
@@ -842,11 +896,13 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
           {/* Actions */}
           <div className="border-t pt-4 flex gap-2 items-center flex-wrap">
-            <Button onClick={generate} disabled={c2.busy || !originPx}
+            <Button onClick={generate} disabled={c2.busy || !originPx || !sourcePathSet}
                     className="bg-blue-600 hover:bg-blue-700 text-white"
-                    title={!originPx
-                      ? (useImages ? "Pick the origin first" : "Enter the origin pixel coordinates first")
-                      : undefined}>
+                    title={!sourcePathSet
+                      ? (useImages ? "Set the calibration images location first" : "Set the calibration folder first")
+                      : !originPx
+                        ? (useImages ? "Pick the origin first" : "Enter the origin pixel coordinates first")
+                        : undefined}>
               {c2.busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating…</> : "Generate Model"}
             </Button>
 
