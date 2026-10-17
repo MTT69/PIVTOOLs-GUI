@@ -43,6 +43,8 @@ export interface SC2Status {
   window_size: number;
   overlap: number;
   source?: string;
+  /** Number of bakes the total sheet spans (null for a block that predates the counter). */
+  n_bakes: number | null;
   figures?: string[];
 }
 

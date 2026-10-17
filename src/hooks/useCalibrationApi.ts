@@ -20,13 +20,6 @@ export interface V2Detected {
   frameCount?: number;
 }
 
-export interface V2Measure {
-  distance_mm: number;
-  distance_px: number;
-  world_p1: Pt;
-  world_p2: Pt;
-}
-
 const BASE = "/backend/calibration";
 
 function qs(o: Record<string, any>): string {
@@ -163,20 +156,6 @@ export function useCalibrationApi() {
     }
   }, []);
 
-  const measure = useCallback(async (body: any): Promise<V2Measure | null> => {
-    try {
-      const data = await postJson(`${BASE}/measure`, body);
-      if (data.error) {
-        setError(data.error);
-        return null;
-      }
-      return data as V2Measure;
-    } catch (e: any) {
-      setError(errorMessage(e));
-      return null;
-    }
-  }, []);
-
   const listFigures = useCallback(async (query: Record<string, any>): Promise<string[]> => {
     try {
       const data = await fetchJson(`${BASE}/figures?${qs(query)}`);
@@ -246,7 +225,7 @@ export function useCalibrationApi() {
 
   return {
     busy, error, setError,
-    detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel, measure,
+    detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel,
     listFigures, figureUrl, validateSource, globalCompute, startApply, applyStatus,
   };
 }
