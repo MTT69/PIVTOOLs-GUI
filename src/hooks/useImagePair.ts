@@ -2,6 +2,30 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { RawImage, DType, decodeTypedArray, percentileFromRaw } from '@/lib/imageUtils';
 import { fetchJson, errorMessage } from '@/lib/api';
 
+/** How the server chose a frame's auto display window. */
+export type DisplayMethod = 'particle' | 'percentile_fallback';
+
+/** Per-frame display stats returned by the backend, all in the frame's intensity units (counts). */
+export interface DisplayStats {
+  black: number;     // auto window lower bound
+  white: number;     // auto window upper bound
+  method: DisplayMethod;
+  enc_lo: number;    // intensity at 8-bit level 0 of the encoded image
+  enc_hi: number;    // intensity at 8-bit level 255
+  data_min: number;  // frame minimum
+  data_max: number;  // frame maximum
+}
+
+/** Manual display window (counts) the server encodes; null = auto window. */
+export interface DisplayBounds {
+  vmin: number;
+  vmax: number;
+}
+
+/** Position of an intensity within the encoded image, as % of its 8-bit range (canvas units). */
+export const countsToPct = (stats: DisplayStats, counts: number): number =>
+  100 * (counts - stats.enc_lo) / (stats.enc_hi - stats.enc_lo);
+
 // Prefetch buffer for smooth playback
 interface PrefetchedFrame {
   index: number;
@@ -9,12 +33,17 @@ interface PrefetchedFrame {
   imgB: string | null;
   vmin: number;
   vmax: number;
+  stats: { A: DisplayStats; B: DisplayStats } | null;
 }
 
 // Constants for cache management
 const MAX_CACHE_SIZE = 30;
 const PREFETCH_WINDOW = 5; // Frames to prefetch ahead (reduced for lighter load)
 const PINNED_FRAME = 1; // Frame 1 should always stay in cache
+
+// A frame's auto window as % of its encoded 8-bit range; full range when the response had no stats
+const autoWindowPct = (s: DisplayStats | undefined): [number, number] =>
+  s ? [countsToPct(s, s.black), countsToPct(s, s.white)] : [0, 100];
 
 export function useImagePair(
   backendUrl: string,
@@ -23,8 +52,11 @@ export function useImagePair(
   index: number,
   imageFormat: 'jpeg' | 'png' = 'jpeg',
   autoLimits: boolean = false,
-  enabled: boolean = true  // When false, disables auto-fetching (e.g., during processed playback)
+  enabled: boolean = true,  // When false, disables auto-fetching (e.g., during processed playback)
+  displayBounds: DisplayBounds | null = null
 ) {
+  // Query suffix as a string, so a new bounds object with the same values does not refetch
+  const boundsQuery = displayBounds ? `&vmin=${displayBounds.vmin}&vmax=${displayBounds.vmax}` : '';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imgA, setImgA] = useState<string | null>(null);
@@ -34,6 +66,8 @@ export function useImagePair(
   const [metadata, setMetadata] = useState<{ bitDepth?: number, dtype?: DType, dims?: { w: number, h: number } } | null>(null);
   const [vmin, setVmin] = useState(0);
   const [vmax, setVmax] = useState(255);
+  // Per-frame (A/B) display stats in counts; null when the response carried none
+  const [stats, setStats] = useState<{ A: DisplayStats; B: DisplayStats } | null>(null);
 
   // Prefetch buffer for smooth playback
   const prefetchBufferRef = useRef<Map<string, PrefetchedFrame>>(new Map());
@@ -45,10 +79,14 @@ export function useImagePair(
   // Track the current "target" index to cancel prefetches when it changes
   const currentTargetIndexRef = useRef<number>(index);
 
+  // Frame whose images are on screen; a refetch of the same frame (display window change only)
+  // keeps them visible instead of blanking, since the client remap is already previewing the window
+  const shownFrameKeyRef = useRef<string | null>(null);
+
   // Generate cache key for prefetch buffer
   const getCacheKey = useCallback((idx: number) => {
-    return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}-${autoLimits}`;
-  }, [sourcePathIdx, camera, imageFormat, autoLimits]);
+    return `${sourcePathIdx}-${camera}-${idx}-${imageFormat}-${autoLimits}-${boundsQuery}`;
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, boundsQuery]);
 
   // Cancel all in-progress prefetch requests
   const cancelPrefetches = useCallback(() => {
@@ -103,17 +141,18 @@ export function useImagePair(
 
     try {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
-      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${idx}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}${boundsQuery}`;
       const json = await fetchJson(url, { signal });
 
-      // Store in prefetch buffer
-      // Stats are now percentages (0-100), default to full range if missing
+      // Store in prefetch buffer; vmin/vmax are frame A's auto window as % of the encode
+      const [pctLo, pctHi] = autoWindowPct(json.stats?.A);
       prefetchBufferRef.current.set(cacheKey, {
         index: idx,
         imgA: json.A || null,
         imgB: json.B || null,
-        vmin: json.stats?.A?.vmin_pct ?? 0,
-        vmax: json.stats?.A?.vmax_pct ?? 100,
+        vmin: pctLo,
+        vmax: pctHi,
+        stats: json.stats ?? null,
       });
 
       // Clean cache if it's getting too large
@@ -126,7 +165,7 @@ export function useImagePair(
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits, getCacheKey, cleanCache]);
+  }, [backendUrl, camera, sourcePathIdx, imageFormat, autoLimits, boundsQuery, getCacheKey, cleanCache]);
 
   // Prefetch surrounding frames for smooth playback
   // Does NOT cancel in-flight requests — lets existing fetches complete while adding new ones.
@@ -171,6 +210,7 @@ export function useImagePair(
       setImgB(prefetched.imgB);
       setVmin(prefetched.vmin);
       setVmax(prefetched.vmax);
+      setStats(prefetched.stats);
       setMetadata({ bitDepth: 8, dtype: 'uint8' });
       setImgARaw(null);
       setImgBRaw(null);
@@ -186,8 +226,9 @@ export function useImagePair(
     setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
 
     try {
-      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+      const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}${boundsQuery}`;
       const json = await fetchJson(url);
+      setStats(json.stats ?? null);
 
       // Check for raw image fields and meta (for 16-bit support)
       if (json.meta?.width && (json.A_raw || json.B_raw)) {
@@ -215,10 +256,11 @@ export function useImagePair(
         setImgARaw(rawA);
         setImgBRaw(rawB);
 
-        // Use server-provided stats (percentages 0-100)
+        // Use server-provided stats (auto window as % of the encode)
         if (json.stats?.A) {
-          setVmin(json.stats.A.vmin_pct);
-          setVmax(json.stats.A.vmax_pct);
+          const [lo, hi] = autoWindowPct(json.stats.A);
+          setVmin(lo);
+          setVmax(hi);
         } else if (rawA && rawA.data) {
           // Fallback: calculate from raw data as percentage
           const p1 = percentileFromRaw(rawA.data, 1);
@@ -236,10 +278,11 @@ export function useImagePair(
         setImgA(json.A);
         setImgB(json.B);
 
-        // Use server-provided stats (percentages 0-100)
+        // Use server-provided stats (auto window as % of the encode)
         if (json.stats?.A) {
-          setVmin(json.stats.A.vmin_pct);
-          setVmax(json.stats.A.vmax_pct);
+          const [lo, hi] = autoWindowPct(json.stats.A);
+          setVmin(lo);
+          setVmax(hi);
         } else {
           // Fallback to full range (0-100%)
           setVmin(0);
@@ -258,7 +301,7 @@ export function useImagePair(
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, getCacheKey, prefetchSurrounding]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, boundsQuery, getCacheKey, prefetchSurrounding]);
 
   // Auto-fetch when parameters change with abort controller for cancellation
   useEffect(() => {
@@ -286,6 +329,7 @@ export function useImagePair(
 
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
       const cacheKey = getCacheKey(index);
+      const frameKey = `${sourcePathIdx}-${camera}-${index}-${imageFormat}`;
 
       // Check prefetch buffer first
       const prefetched = prefetchBufferRef.current.get(cacheKey);
@@ -294,11 +338,13 @@ export function useImagePair(
         setImgB(prefetched.imgB);
         setVmin(prefetched.vmin);
         setVmax(prefetched.vmax);
+        setStats(prefetched.stats);
         setMetadata({ bitDepth: 8, dtype: 'uint8' });
         setImgARaw(null);
         setImgBRaw(null);
         setError(null);
         setLoading(false);
+        shownFrameKeyRef.current = frameKey;
 
         // Prefetch ahead
         prefetchSurrounding(index);
@@ -307,13 +353,17 @@ export function useImagePair(
 
       setLoading(true);
       setError(null);
-      setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
+      if (shownFrameKeyRef.current !== frameKey) {
+        setImgA(null); setImgB(null); setImgARaw(null); setImgBRaw(null);
+        shownFrameKeyRef.current = null;
+      }
 
       try {
-        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}`;
+        const url = `${backendUrl}/get_frame_pair?camera=${cameraNumber}&idx=${index}&source_path_idx=${sourcePathIdx}&format=${imageFormat}&auto_limits=${autoLimits}${boundsQuery}`;
         const json = await fetchJson(url, { signal: abortController.signal });
 
         if (cancelled) return;
+        setStats(json.stats ?? null);
 
         // Check for raw image fields and meta
         if (json.meta?.width && (json.A_raw || json.B_raw)) {
@@ -341,10 +391,11 @@ export function useImagePair(
           setImgARaw(rawA);
           setImgBRaw(rawB);
 
-          // Use server stats (percentages 0-100)
+          // Use server-provided stats (auto window as % of the encode)
           if (json.stats?.A) {
-            setVmin(json.stats.A.vmin_pct);
-            setVmax(json.stats.A.vmax_pct);
+            const [lo, hi] = autoWindowPct(json.stats.A);
+            setVmin(lo);
+            setVmax(hi);
           } else if (rawA && rawA.data) {
             // Fallback: calculate from raw data as percentage
             const p1 = percentileFromRaw(rawA.data, 1);
@@ -361,11 +412,13 @@ export function useImagePair(
           setMetadata({ bitDepth: 8, dtype: 'uint8' });
           setImgA(json.A);
           setImgB(json.B);
+          shownFrameKeyRef.current = frameKey;
 
-          // Use server-provided stats (percentages 0-100)
+          // Use server-provided stats (auto window as % of the encode)
           if (json.stats?.A) {
-            setVmin(json.stats.A.vmin_pct);
-            setVmax(json.stats.A.vmax_pct);
+            const [lo, hi] = autoWindowPct(json.stats.A);
+            setVmin(lo);
+            setVmax(hi);
           } else {
             setVmin(0);
             setVmax(100);
@@ -396,16 +449,16 @@ export function useImagePair(
       cancelled = true;
       abortController.abort();
     };
-  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, getCacheKey, prefetchSurrounding, cancelPrefetches, enabled]);
+  }, [backendUrl, sourcePathIdx, camera, index, imageFormat, autoLimits, boundsQuery, getCacheKey, prefetchSurrounding, cancelPrefetches, enabled]);
 
-  // Clear the in-memory prefetch buffer and cancel prefetches when source/camera/format changes.
+  // Clear the in-memory prefetch buffer and cancel prefetches when source/camera/format/bounds change.
   // The backend raw cache is intentionally NOT evicted on camera switch: it is LRU-bounded
   // (manage_cache_size), so keeping both cameras' frames lets toggling back hit the cache instead
   // of re-reading and re-encoding the full-resolution pair from disk.
   useEffect(() => {
     cancelPrefetches();
     prefetchBufferRef.current.clear();
-  }, [sourcePathIdx, camera, imageFormat, autoLimits, cancelPrefetches]);
+  }, [sourcePathIdx, camera, imageFormat, autoLimits, boundsQuery, cancelPrefetches]);
 
   // Check if a frame is in the prefetch cache
   const isFrameCached = useCallback((idx: number): boolean => {
@@ -425,6 +478,7 @@ export function useImagePair(
     setVmin,
     vmax,
     setVmax,
+    stats,
     reload: fetchPair,
     prefetchFrame,
     prefetchSurrounding,

@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { ApiError, fetchJson, postJson, errorMessage } from '@/lib/api';
+import type { DisplayBounds, DisplayStats } from '@/hooks/useImagePair';
 
 export type FilterType =
   | "time" | "pod"  // Batch filters
@@ -25,15 +26,21 @@ export function useImageFilters(backendUrl: string) {
   const [procLoading, setProcLoading] = useState(false);
   const [procImgA, setProcImgA] = useState<string | null>(null);
   const [procImgB, setProcImgB] = useState<string | null>(null);
-  // Stats are now percentages (0-100%)
-  const [procStats, setProcStats] = useState<{ A: { vmin_pct: number, vmax_pct: number }, B: { vmin_pct: number, vmax_pct: number } } | null>(null);
+  // Per-frame display stats in the processed frame's intensity units
+  const [procStats, setProcStats] = useState<{ A: DisplayStats, B: DisplayStats } | null>(null);
   const [needsProcessing, setNeedsProcessing] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [processingBlocked, setProcessingBlocked] = useState(false);
+  // True while the in-flight processing request runs a caller-supplied filtersOverride (a display
+  // preview, not the user's filter list), so it must not block edits to the user's filters
+  const previewInFlightRef = useRef(false);
+  // Id of the latest processing request: a response (or its loading-flag reset) from an older one,
+  // e.g. the SSMin preview still in flight when saved filters load, must not overwrite the newer one
+  const requestIdRef = useRef(0);
 
-  // Wrapper for setFilters that blocks changes during processing
+  // Wrapper for setFilters that blocks changes while the user's filters are being processed
   const setFilters = useCallback((newFilters: ImageFilter[] | ((prev: ImageFilter[]) => ImageFilter[])) => {
-    if (procLoading) {
+    if (procLoading && !previewInFlightRef.current) {
       setProcessingBlocked(true);
       return false; // Indicate filter change was blocked
     }
@@ -56,7 +63,14 @@ export function useImageFilters(backendUrl: string) {
     }
   }, [backendUrl]);
 
-  const runProcessing = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
+  // filtersOverride: process with these filters instead of the user's list (request-only, never stored)
+  // displayBounds: manual display window encoded by /filter_single_frame; null = auto. Batch (time/pod)
+  // results come from the store, encoded with the auto window, so the bounds do not apply there.
+  const runProcessing = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false, filtersOverride?: ImageFilter[], displayBounds: DisplayBounds | null = null) => {
+    const activeFilters = filtersOverride ?? filters;
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
+    previewInFlightRef.current = filtersOverride !== undefined;
     setProcLoading(true);
     setLastError(null);
     setNeedsProcessing(false);
@@ -67,7 +81,7 @@ export function useImageFilters(backendUrl: string) {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
 
       // Determine if we need batch processing (time/pod filters present)
-      const needsBatch = filters.some(f => f.type === 'time' || f.type === 'pod');
+      const needsBatch = activeFilters.some(f => f.type === 'time' || f.type === 'pod');
 
       if (needsBatch) {
         // Batch processing for time/pod filters
@@ -75,7 +89,7 @@ export function useImageFilters(backendUrl: string) {
           camera: cameraNumber,
           start_idx: index,
           count: 1,
-          filters,
+          filters: activeFilters,
           source_path_idx: sourcePathIdx,
         });
 
@@ -111,6 +125,7 @@ export function useImageFilters(backendUrl: string) {
           auto_limits: String(autoLimits),
         });
         const json = await fetchJson(`${backendUrl}/get_processed_pair?${params.toString()}`);
+        if (isStale()) return;
 
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
@@ -120,32 +135,40 @@ export function useImageFilters(backendUrl: string) {
         const json = await postJson(`${backendUrl}/filter_single_frame`, {
           camera: cameraNumber,
           frame_idx: index,
-          filters,
+          filters: activeFilters,
           source_path_idx: sourcePathIdx,
           auto_limits: autoLimits,
+          ...(displayBounds ?? {}),
         });
+        if (isStale()) return;
 
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
         if (json.stats) setProcStats(json.stats);
       }
     } catch (e) {
+      if (isStale()) return;
       console.error("Processing failed:", e);
       setLastError(errorMessage(e));
     } finally {
-      setProcLoading(false);
+      if (!isStale()) setProcLoading(false);
     }
   }, [backendUrl, filters]);
 
   // Auto-processing function that checks cache for batch filters, processes spatial filters on demand
   // NOTE: We intentionally do NOT clear images at the start - keep showing previous frame until new one is ready
   // This prevents grey flash during playback
-  const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false) => {
+  // filtersOverride, displayBounds: as in runProcessing; a non-empty override always processes
+  const autoProcessFrame = useCallback(async (camera: string, index: number, sourcePathIdx: number, autoLimits: boolean = false, filtersOverride?: ImageFilter[], displayBounds: DisplayBounds | null = null) => {
+    const activeFilters = filtersOverride ?? filters;
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
+    previewInFlightRef.current = filtersOverride !== undefined;
     setNeedsProcessing(false);
     setProcLoading(true);
 
     // If no filters, clear images and return
-    if (filters.length === 0) {
+    if (activeFilters.length === 0) {
       setProcImgA(null);
       setProcImgB(null);
       setProcStats(null);
@@ -157,7 +180,7 @@ export function useImageFilters(backendUrl: string) {
       const cameraNumber = parseInt(camera.replace(/\D/g, ''), 10);
 
       // Determine if we need batch processing (time/pod filters present)
-      const needsBatch = filters.some(f => f.type === 'time' || f.type === 'pod');
+      const needsBatch = activeFilters.some(f => f.type === 'time' || f.type === 'pod');
 
       if (needsBatch) {
         // For batch filters, try to fetch pre-processed images first
@@ -171,12 +194,14 @@ export function useImageFilters(backendUrl: string) {
         let json: any = null;
         try {
           json = await fetchJson(`${backendUrl}/get_processed_pair?${params.toString()}`);
+          if (isStale()) return;
         } catch (e) {
           // A backend non-2xx means no pre-processed images yet - signal that batch
           // processing is needed. Anything else (network, parse) is a real error for
           // the outer catch. NOTE: Don't clear images here - keep showing old image
           // during playback
           if (!(e instanceof ApiError)) throw e;
+          if (isStale()) return;
           setNeedsProcessing(true);
         }
 
@@ -198,23 +223,26 @@ export function useImageFilters(backendUrl: string) {
         const json = await postJson(`${backendUrl}/filter_single_frame`, {
           camera: cameraNumber,
           frame_idx: index,
-          filters,
+          filters: activeFilters,
           source_path_idx: sourcePathIdx,
           auto_limits: autoLimits,
+          ...(displayBounds ?? {}),
         });
+        if (isStale()) return;
 
         setProcImgA(json.A ?? null);
         setProcImgB(json.B ?? null);
         if (json.stats) setProcStats(json.stats);
       }
     } catch (e) {
+      if (isStale()) return;
       console.error("Auto-processing failed:", e);
       setLastError(errorMessage(e));
       // Clear processed images on error
       setProcImgA(null);
       setProcImgB(null);
     } finally {
-      setProcLoading(false);
+      if (!isStale()) setProcLoading(false);
     }
   }, [backendUrl, filters]);
 

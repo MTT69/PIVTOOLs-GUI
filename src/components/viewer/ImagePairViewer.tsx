@@ -17,13 +17,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useImagePair } from '@/hooks/useImagePair';
-import { useImageFilters } from '@/hooks/useImageFilters';
+import { useImagePair, countsToPct, DisplayBounds, DisplayStats } from '@/hooks/useImagePair';
+import { useImageFilters, ImageFilter } from '@/hooks/useImageFilters';
 import { FilterSelector, FilterEditor } from '@/components/FilterComponents';
 import ZoomableCanvas from './zoomableCanvas';
 import * as Slider from '@radix-ui/react-slider';
 import { basename, cn } from "@/lib/utils";
 import { postJson, errorMessage } from "@/lib/api";
+import { useNumericInput } from '@/hooks/useNumericInput';
 
 interface ImagePairViewerProps {
   backendUrl?: string;
@@ -31,6 +32,28 @@ interface ImagePairViewerProps {
   onFiltersChange?: (filters: any[]) => Promise<void>;
   updateConfig?: (path: string[], value: any) => void;
 }
+
+// Shown in the processed panel when the user's filter list is empty. Request-only: never enters
+// the `filters` state, so it is never saved to config.
+const DEFAULT_PREVIEW_FILTERS: ImageFilter[] = [{ type: 'ssmin', size: [7, 7] }];
+
+// The display-range slider track spans exactly the committed window (it re-zooms on release), so a
+// drag can only narrow it; widening is via the Full button, Auto Scale or the number boxes.
+// Windows at least SLIDER_WHOLE_COUNTS wide step in whole counts; narrower ones (e.g. processed
+// frames) in SLIDER_STEPS steps across the track.
+const SLIDER_WHOLE_COUNTS = 100;
+const SLIDER_STEPS = 1000;
+const sliderStep = (lo: number, hi: number) => (hi - lo >= SLIDER_WHOLE_COUNTS ? 1 : (hi - lo) / SLIDER_STEPS);
+// Round a bound to the slider's resolution for a window this wide (1/SLIDER_STEPS of it): whole
+// counts for wide raw windows, enough decimals for narrow float windows (e.g. normalised outputs)
+// that a fixed precision would collapse. Also strips float noise such as 399.99900000000002.
+const MAX_DISPLAY_DECIMALS = 12;
+const roundToWindow = (x: number, width: number) => {
+  if (!(width > 0) || !Number.isFinite(width)) return x;
+  const decimals = Math.min(MAX_DISPLAY_DECIMALS, Math.max(0, Math.ceil(-Math.log10(width / SLIDER_STEPS))));
+  return Number(x.toFixed(decimals));
+};
+const formatCounts = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(2));
 
 // Loading spinner component
 const LoadingSpinner = ({ className = "" }: { className?: string }) => (
@@ -56,19 +79,26 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   const [rawToggle, setRawToggle] = useState<"A" | "B">("A");
   const [procToggle, setProcToggle] = useState<"A" | "B">("A");
 
-  // Contrast values as percentages (0-100%)
+  // Display window in the frame's intensity units (counts): the slider thumbs. While a thumb is
+  // dragged the canvas remaps the current image; on release the window is committed to
+  // rawBounds/procBounds and the server re-encodes exactly that window.
   const [rawVmin, setRawVmin] = useState(0);
-  const [rawVmax, setRawVmax] = useState(100);
+  const [rawVmax, setRawVmax] = useState(0);
   const [procVmin, setProcVmin] = useState(0);
-  const [procVmax, setProcVmax] = useState(100);
+  const [procVmax, setProcVmax] = useState(0);
 
   // Auto-scale toggles (enabled by default)
   const [rawAutoScale, setRawAutoScale] = useState(true);
   const [procAutoScale, setProcAutoScale] = useState(true);
 
-  // Track if user has manually adjusted sliders for current image
-  const [rawManuallyAdjusted, setRawManuallyAdjusted] = useState(false);
-  const [procManuallyAdjusted, setProcManuallyAdjusted] = useState(false);
+  // Committed manual windows; persist across frames while auto scale is off
+  const [rawBounds, setRawBounds] = useState<DisplayBounds | null>(null);
+  const [procBounds, setProcBounds] = useState<DisplayBounds | null>(null);
+  // Slider track [lo, hi]: the committed window, held separately so it stays put during a drag
+  const [rawTrack, setRawTrack] = useState<[number, number]>([0, 1]);
+  const [procTrack, setProcTrack] = useState<[number, number]>([0, 1]);
+  const rawDisplayBounds = useMemo(() => (rawAutoScale ? null : rawBounds), [rawAutoScale, rawBounds]);
+  const procDisplayBounds = useMemo(() => (procAutoScale ? null : procBounds), [procAutoScale, procBounds]);
 
   // Image format: jpeg for speed (default), png for precise viewing
   const [imageFormat, setImageFormat] = useState<'jpeg' | 'png'>('jpeg');
@@ -107,13 +137,27 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // --- Hooks for Logic ---
   // Disable raw fetching during processed playback to avoid bandwidth competition
   const rawFetchEnabled = !(playing && playbackSource === "processed");
-  const { loading, error, imgARaw, imgBRaw, imgA, imgB, vmin: autoVmin, vmax: autoVmax, metadata, prefetchSurrounding, isFrameCached } =
-    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, rawAutoScale, rawFetchEnabled);
+  // autoLimits is passed as a constant: no image-pair route reads auto_limits, and keying the fetch on
+  // the auto toggle would refetch the same image when a drag switches auto off. The window is carried
+  // by rawDisplayBounds.
+  const { loading, error, imgARaw, imgBRaw, imgA, imgB, stats: rawStatsAB, metadata, prefetchSurrounding, isFrameCached } =
+    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, true, rawFetchEnabled, rawDisplayBounds);
   const {
     filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame,
     procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage,
     needsProcessing, lastError, processingBlocked, cancelProcessing, clearProcessingBlocked
   } = useImageFilters(backendUrl);
+
+  // With an empty filter list the processed panel previews SSMin; otherwise it shows the user's filters
+  const previewActive = filters.length === 0;
+  const previewOverride = previewActive ? DEFAULT_PREVIEW_FILTERS : undefined;
+  // Check if any temporal filters are present
+  const hasTemporalFilters = useMemo(() => {
+    return filters.some(f => f.type === 'time' || f.type === 'pod');
+  }, [filters]);
+  // Time/POD results come from the /filter store, encoded at the auto window only, so a manual window
+  // is a client remap there and must not be sent (or trigger a refetch)
+  const procRequestBounds = hasTemporalFilters ? null : procDisplayBounds;
 
   // Memoize camera options and initialize camera
   const cameraOptions = useMemo(() => {
@@ -161,49 +205,22 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // Skip during playback when synced to "raw" to avoid unnecessary processing and flashing
   useEffect(() => {
     const fetchProcessedForCurrentFrame = async () => {
-      // Skip processing calls during playback if:
-      // 1. No filters are applied
-      // 2. Playback is synced to "raw" (processed panel should just show last available frame)
-      if (playing && (filters.length === 0 || playbackSource === "raw")) {
+      // Skip processing calls during playback synced to "raw" (processed panel should just show
+      // last available frame). An empty filter list still renders, via the SSMin preview override.
+      if (playing && playbackSource === "raw") {
         return;
       }
 
-      if (filters.length > 0) {
-        await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx, procAutoScale);
-      }
+      await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx, true, previewOverride, procRequestBounds);
     };
 
     fetchProcessedForCurrentFrame();
-  }, [camera, index, sourcePathIdx, autoProcessFrame, filters.length, procAutoScale, playing, playbackSource]);
-
-  // Reset manual adjustment flags when auto-scale is re-enabled
-  useEffect(() => {
-    if (rawAutoScale) {
-      setRawManuallyAdjusted(false);
-    }
-  }, [rawAutoScale]);
-
-  useEffect(() => {
-    if (procAutoScale) {
-      setProcManuallyAdjusted(false);
-    }
-  }, [procAutoScale]);
-
-  // Reset manual adjustment flags when image changes
-  useEffect(() => {
-    setRawManuallyAdjusted(false);
-    setProcManuallyAdjusted(false);
-  }, [sourcePathIdx, camera, index]);
+  }, [camera, index, sourcePathIdx, autoProcessFrame, previewOverride, procRequestBounds, playing, playbackSource]);
 
   // Sync frame input value with index
   useEffect(() => {
     setFrameInputValue(String(index));
   }, [index]);
-
-  // Check if any temporal filters are present
-  const hasTemporalFilters = useMemo(() => {
-    return filters.some(f => f.type === 'time' || f.type === 'pod');
-  }, [filters]);
 
   // Show toast when there's an error from filter processing
   useEffect(() => {
@@ -216,33 +233,32 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
     }
   }, [lastError]);
 
-  // Update slider values when server-provided auto-contrast values change
-  useEffect(() => {
-    if (rawAutoScale && !rawManuallyAdjusted) {
-      setRawVmin(autoVmin);
-      setRawVmax(autoVmax);
-    }
-  }, [autoVmin, autoVmax, rawAutoScale, rawManuallyAdjusted]);
+  // Stats of the frame each panel shows (A or B)
+  const rawStats: DisplayStats | null = rawStatsAB?.[rawToggle] ?? null;
+  const procFrameStats: DisplayStats | null = procStats?.[procToggle] ?? null;
 
-  // Auto-contrast for processed images (percentages 0-100%)
+  // Auto scale: the thumbs follow the server's auto window for the shown frame
   useEffect(() => {
-    if (procAutoScale && !procManuallyAdjusted) {
-      if (procStats) {
-        // Use server stats if available (now percentages)
-        if (procToggle === 'A' && procStats.A) {
-          setProcVmin(procStats.A.vmin_pct ?? 0);
-          setProcVmax(procStats.A.vmax_pct ?? 100);
-        } else if (procToggle === 'B' && procStats.B) {
-          setProcVmin(procStats.B.vmin_pct ?? 0);
-          setProcVmax(procStats.B.vmax_pct ?? 100);
-        }
-      } else if (procImgA || procImgB) {
-        // Fallback to full range (0-100%) if no stats
-        setProcVmin(0);
-        setProcVmax(100);
-      }
+    if (rawAutoScale && rawStats) {
+      const width = rawStats.white - rawStats.black;
+      const lo = roundToWindow(rawStats.black, width);
+      const hi = roundToWindow(rawStats.white, width);
+      setRawVmin(lo);
+      setRawVmax(hi);
+      setRawTrack([lo, hi]);
     }
-  }, [procStats, procImgA, procImgB, procAutoScale, procManuallyAdjusted, procToggle]);
+  }, [rawAutoScale, rawStats]);
+
+  useEffect(() => {
+    if (procAutoScale && procFrameStats) {
+      const width = procFrameStats.white - procFrameStats.black;
+      const lo = roundToWindow(procFrameStats.black, width);
+      const hi = roundToWindow(procFrameStats.white, width);
+      setProcVmin(lo);
+      setProcVmax(hi);
+      setProcTrack([lo, hi]);
+    }
+  }, [procAutoScale, procFrameStats]);
 
   // Save filters to config when they change (debounced to avoid excessive updates)
   useEffect(() => {
@@ -286,8 +302,64 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   }, [filters, backendUrl, updateConfig]);
 
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
-  // Contrast is now percentage-based (0-100%), independent of bit depth
-  const maxVal = 100;
+  const rawTrackWidth = rawTrack[1] - rawTrack[0];
+  const procTrackWidth = procTrack[1] - procTrack[0];
+  const rawStep = sliderStep(rawTrack[0], rawTrack[1]);
+  const procStep = sliderStep(procTrack[0], procTrack[1]);
+  // Full range of the shown frame, from 0 for camera counts (data_min if a filter went negative)
+  const rawFull: [number, number] | null = rawStats ? [Math.min(0, rawStats.data_min), rawStats.data_max] : null;
+  const procFull: [number, number] | null = procFrameStats ? [Math.min(0, procFrameStats.data_min), procFrameStats.data_max] : null;
+
+  // Canvas contrast is % of the encoded image, which spans enc_lo..enc_hi counts
+  const rawPct = (c: number) => (rawStats ? countsToPct(rawStats, c) : c);
+  const procPct = (c: number) => (procFrameStats ? countsToPct(procFrameStats, c) : c);
+
+  // Commit a manual window (the server re-encodes it, the track zooms to it); auto scale goes off
+  const commitRaw = (vmin: number, vmax: number) => {
+    setRawAutoScale(false);
+    setRawVmin(vmin);
+    setRawVmax(vmax);
+    setRawBounds({ vmin, vmax });
+    setRawTrack([vmin, vmax]);
+  };
+  const commitProc = (vmin: number, vmax: number) => {
+    setProcAutoScale(false);
+    setProcVmin(vmin);
+    setProcVmax(vmax);
+    setProcBounds({ vmin, vmax });
+    setProcTrack([vmin, vmax]);
+  };
+
+  // Turning auto off keeps the current (auto) window as the manual one; turning it on drops it
+  const toggleRawAuto = (on: boolean) => {
+    setRawAutoScale(on);
+    setRawBounds(on || rawVmax <= rawVmin ? null : { vmin: rawVmin, vmax: rawVmax });
+  };
+  const toggleProcAuto = (on: boolean) => {
+    setProcAutoScale(on);
+    setProcBounds(on || procVmax <= procVmin ? null : { vmin: procVmin, vmax: procVmax });
+  };
+
+  // Bound inputs: string-buffered so decimals can be typed; committed on blur/Enter when changed.
+  const rawVminInput = useNumericInput({
+    configValue: rawVmin, defaultValue: rawVmin, mode: 'float', min: rawFull?.[0], max: rawVmax - rawStep,
+    onCommit: (val) => { const v = roundToWindow(val, rawTrackWidth); if (v !== rawVmin) commitRaw(v, rawVmax); },
+  });
+  const rawVmaxInput = useNumericInput({
+    configValue: rawVmax, defaultValue: rawVmax, mode: 'float', min: rawVmin + rawStep,
+    onCommit: (val) => { const v = roundToWindow(val, rawTrackWidth); if (v !== rawVmax) commitRaw(rawVmin, v); },
+  });
+  const procVminInput = useNumericInput({
+    configValue: procVmin, defaultValue: procVmin, mode: 'float', min: procFull?.[0], max: procVmax - procStep,
+    onCommit: (val) => { const v = roundToWindow(val, procTrackWidth); if (v !== procVmin) commitProc(v, procVmax); },
+  });
+  const procVmaxInput = useNumericInput({
+    configValue: procVmax, defaultValue: procVmax, mode: 'float', min: procVmin + procStep,
+    onCommit: (val) => { const v = roundToWindow(val, procTrackWidth); if (v !== procVmax) commitProc(procVmin, v); },
+  });
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur();
+  };
 
   // Track when images start/finish loading (but not during playback)
   useEffect(() => {
@@ -333,8 +405,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             frameReady = isFrameCached(nextIdx);
           } else {
             // Processed mode: check if processed images are ready
-            // Only advance when processing is complete (or no filters configured)
-            frameReady = !procLoading && (procImgA !== null || filters.length === 0);
+            // Only advance when processing is complete (empty filter list renders the SSMin preview)
+            frameReady = !procLoading && procImgA !== null;
           }
 
           // Only advance if next frame data is ready
@@ -370,7 +442,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
         }
       };
     }
-  }, [playing, maxFrames, playbackSpeed, prefetchSurrounding, playbackSource, isFrameCached, procLoading, procImgA, filters.length]);
+  }, [playing, maxFrames, playbackSpeed, prefetchSurrounding, playbackSource, isFrameCached, procLoading, procImgA]);
 
   return (
     <Card>
@@ -405,7 +477,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 />
               ))}
             </div>
-            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, procAutoScale)} disabled={procLoading || filters.length === 0}>
+            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, true, undefined, procRequestBounds)} disabled={procLoading || filters.length === 0}>
               {procLoading ? "Processing..." : "Test Filters"}
             </Button>
         </div>
@@ -593,7 +665,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="raw">Raw</SelectItem>
-                <SelectItem value="processed" disabled={filters.length === 0}>
+                <SelectItem value="processed">
                   Processed
                 </SelectItem>
               </SelectContent>
@@ -610,7 +682,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 raw={rawToggle === 'A' ? imgARaw : rawToggle === 'B' ? imgBRaw : undefined}
                 src={rawToggle === 'A' ? (imgARaw ? undefined : imgA) : rawToggle === 'B' ? (imgBRaw ? undefined : imgB) : undefined}
                 error={error}
-                vmin={rawVmin} vmax={rawVmax} colormap={colormap} title={`Raw Image ${rawToggle}`}
+                vmin={rawPct(rawVmin)} vmax={rawPct(rawVmax)} colormap={colormap} title={`Raw Image ${rawToggle}`}
                 useGrid={useGrid} gridSize={gridSize} gridThickness={gridThickness}
                 zoomLevel={zoomLevel} panX={panX} panY={panY} onZoomChange={(zl, px, py) => { setZoomLevel(zl); setPanX(px); setPanY(py); }}
               />
@@ -632,7 +704,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <span className={cn("text-sm font-medium", rawToggle === "B" ? "text-primary" : "text-muted-foreground")}>B</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Switch id="raw-auto-scale" checked={rawAutoScale} onCheckedChange={setRawAutoScale} />
+                  <Switch id="raw-auto-scale" checked={rawAutoScale} onCheckedChange={toggleRawAuto} />
                   <Label htmlFor="raw-auto-scale" className="text-sm">Auto Scale</Label>
                 </div>
               </div>
@@ -702,26 +774,22 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Input type="text" inputMode="numeric" value={rawVmin} min={0} max={rawVmax} onChange={e => {
-                  setRawManuallyAdjusted(true);
-                  setRawAutoScale(false);
-                  const val = Math.min(Number(e.target.value), rawVmax);
-                  setRawVmin(val);
-                  if (val > rawVmax) setRawVmax(val);
-                }} className="w-20 h-8" />
+                <Input type="text" inputMode="decimal" {...rawVminInput} onKeyDown={blurOnEnter} disabled={!rawStats} className="w-20 h-8" />
                 <div className="w-full min-w-0">
                   <Slider.Root
                     className="relative flex items-center select-none touch-none w-full h-5"
-                    min={0}
-                    max={maxVal}
-                    step={1}
+                    min={rawTrack[0]}
+                    max={rawTrack[1]}
+                    step={rawStep}
+                    minStepsBetweenThumbs={1}
                     value={[rawVmin, rawVmax]}
-                    onValueChange={([min, max]) => {
-                      setRawManuallyAdjusted(true);
+                    disabled={!rawStats || rawTrackWidth <= 0}
+                    onValueChange={([lo, hi]) => {
                       setRawAutoScale(false);
-                      setRawVmin(min);
-                      setRawVmax(max);
+                      setRawVmin(roundToWindow(lo, rawTrackWidth));
+                      setRawVmax(roundToWindow(hi, rawTrackWidth));
                     }}
+                    onValueCommit={([lo, hi]) => commitRaw(roundToWindow(lo, rawTrackWidth), roundToWindow(hi, rawTrackWidth))}
                   >
                     <Slider.Track className="bg-gray-200 relative grow rounded-full h-[3px]">
                       <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
@@ -730,14 +798,27 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
                   </Slider.Root>
                 </div>
-                <Input type="text" inputMode="numeric" value={rawVmax} min={rawVmin} max={maxVal} onChange={e => {
-                  setRawManuallyAdjusted(true);
-                  setRawAutoScale(false);
-                  const val = Math.max(Number(e.target.value), rawVmin);
-                  setRawVmax(val);
-                  if (val < rawVmin) setRawVmin(val);
-                }} className="w-20 h-8" />
+                <Input type="text" inputMode="decimal" {...rawVmaxInput} onKeyDown={blurOnEnter} disabled={!rawStats} className="w-20 h-8" />
               </div>
+              {rawStats && rawFull && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Display range in counts · frame range {formatCounts(rawStats.data_min)}–{formatCounts(rawStats.data_max)}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7"
+                    disabled={rawVmin === rawFull[0] && rawVmax === rawFull[1]}
+                    onClick={() => commitRaw(rawFull[0], rawFull[1])}
+                  >
+                    Full
+                  </Button>
+                </div>
+              )}
+              {rawAutoScale && rawStats?.method === 'percentile_fallback' && (
+                <p className="text-xs text-muted-foreground">Auto: no particles found — percentile window</p>
+              )}
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => downloadImage('raw', 'A', imgA || '', index, camera)} disabled={!imgA && !imgARaw}>
@@ -754,8 +835,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               <ZoomableCanvas
                 raw={undefined}
                 src={procToggle === 'A' ? procImgA : procImgB}
-                vmin={procVmin}
-                vmax={procVmax}
+                vmin={procPct(procVmin)}
+                vmax={procPct(procVmax)}
                 colormap={colormap}
                 title={`Processed Image ${procToggle}`}
                 useGrid={useGrid} gridSize={gridSize} gridThickness={gridThickness}
@@ -772,19 +853,17 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <p className="text-gray-600 text-sm mb-3">Frame not yet processed</p>
                   <Button
                     size="sm"
-                    onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, procAutoScale)}
+                    onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, true, undefined, procRequestBounds)}
                   >
                     Test Filters
                   </Button>
                 </div>
               )}
-              {!procLoading && !needsProcessing && !procImgA && !procImgB && filters.length === 0 && !playing && (
-                <div className="absolute inset-0 bg-gray-50/80 flex flex-col items-center justify-center rounded-lg">
-                  <p className="text-gray-500 text-sm">No filters configured</p>
-                </div>
-              )}
             </div>
             <div className="space-y-3 p-3 border rounded-md">
+                {previewActive && (
+                  <p className="text-xs text-muted-foreground">Default preview: SSMin 7×7 — not in your filter list</p>
+                )}
                 <div className="flex items-center gap-2 justify-between">
                   <div className="flex items-center gap-2">
                     <span className={cn("text-sm font-medium", procToggle === "A" ? "text-primary" : "text-muted-foreground")}>A</span>
@@ -796,47 +875,62 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                     <span className={cn("text-sm font-medium", procToggle === "B" ? "text-primary" : "text-muted-foreground")}>B</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Switch id="proc-auto-scale" checked={procAutoScale} onCheckedChange={setProcAutoScale} />
+                    <Switch id="proc-auto-scale" checked={procAutoScale} onCheckedChange={toggleProcAuto} />
                     <Label htmlFor="proc-auto-scale" className="text-sm">Auto Scale</Label>
                   </div>
                 </div>
               <div className="flex items-center gap-2">
-                <Input type="text" inputMode="numeric" value={procVmin} min={0} max={procVmax} onChange={e => {
-                  setProcManuallyAdjusted(true);
-                  setProcAutoScale(false);
-                  const val = Math.min(Number(e.target.value), procVmax);
-                  setProcVmin(val);
-                  if (val > procVmax) setProcVmax(val);
-                }} className="w-20 h-8" />
+                <Input type="text" inputMode="decimal" {...procVminInput} onKeyDown={blurOnEnter} disabled={!procFrameStats} className="w-20 h-8" />
                 <div className="w-full min-w-0">
                   <Slider.Root
                     className="relative flex items-center select-none touch-none w-full h-5"
-                    min={0}
-                    max={maxVal}
-                    step={1}
+                    min={procTrack[0]}
+                    max={procTrack[1]}
+                    step={procStep}
+                    minStepsBetweenThumbs={1}
                     value={[procVmin, procVmax]}
-                    onValueChange={([min, max]) => {
-                      setProcManuallyAdjusted(true);
+                    disabled={!procFrameStats || procTrackWidth <= 0}
+                    onValueChange={([lo, hi]) => {
                       setProcAutoScale(false);
-                      setProcVmin(min);
-                      setProcVmax(max);
+                      setProcVmin(roundToWindow(lo, procTrackWidth));
+                      setProcVmax(roundToWindow(hi, procTrackWidth));
                     }}
+                    onValueCommit={([lo, hi]) => commitProc(roundToWindow(lo, procTrackWidth), roundToWindow(hi, procTrackWidth))}
                   >
                     <Slider.Track className="bg-gray-200 relative grow rounded-full h-[3px]">
                       <Slider.Range className="absolute bg-blue-500 rounded-full h-full" />
                     </Slider.Track>
-                    <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 focus:shadow-[0_0_0_5px] focus:shadow-blackA8 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
-                    <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 focus:shadow-[0_0_0_5px] focus:shadow-blackA8 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
+                    <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
+                    <Slider.Thumb className="block w-5 h-5 bg-white rounded-[10px] border border-gray-300 hover:bg-gray-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50" />
                   </Slider.Root>
                 </div>
-                <Input type="text" inputMode="numeric" value={procVmax} min={procVmin} max={maxVal} onChange={e => {
-                  setProcManuallyAdjusted(true);
-                  setProcAutoScale(false);
-                  const val = Math.max(Number(e.target.value), procVmin);
-                  setProcVmax(val);
-                  if (val < procVmin) setProcVmin(val);
-                }} className="w-20 h-8" />
+                <Input type="text" inputMode="decimal" {...procVmaxInput} onKeyDown={blurOnEnter} disabled={!procFrameStats} className="w-20 h-8" />
               </div>
+              {procFrameStats && procFull && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Display range in processed intensity · frame range {formatCounts(procFrameStats.data_min)}–{formatCounts(procFrameStats.data_max)}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7"
+                    disabled={procVmin === procFull[0] && procVmax === procFull[1]}
+                    onClick={() => commitProc(procFull[0], procFull[1])}
+                  >
+                    Full
+                  </Button>
+                </div>
+              )}
+              {procAutoScale && procFrameStats?.method === 'percentile_fallback' && (
+                <p className="text-xs text-muted-foreground">Auto: no particles found — percentile window</p>
+              )}
+              {!procAutoScale && hasTemporalFilters && procFrameStats && (
+                <p className="text-xs text-muted-foreground">
+                  Time/POD filters: the window is applied to the auto-encoded image, which only holds{' '}
+                  {formatCounts(procFrameStats.enc_lo)}–{formatCounts(procFrameStats.enc_hi)}; values outside it clip.
+                </p>
+              )}
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => downloadImage('processed', 'A', procImgA || '', index, camera)} disabled={!procImgA}>
