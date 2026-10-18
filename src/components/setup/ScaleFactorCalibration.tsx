@@ -393,7 +393,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         setOriginPx([Number(m.origin_px[0]), Number(m.origin_px[1])]);
         // guard: a malformed record must not render the literal "undefined"
         setPxPerMm(m.px_per_mm == null ? "" : String(m.px_per_mm));
-        setDt(m.dt == null ? "" : String(m.dt));
+        // A model stamped without dt must not blank the field: the settings save would then
+        // write rig.dt = null over the user's value. The card still says dt is missing.
+        if (m.dt != null) setDt(String(m.dt));
         // Restore the frame the origin was picked on, so the overlay lands on the
         // same image rather than always frame 1.
         if (m.frame_idx) setFrameIdx(Number(m.frame_idx));

@@ -119,6 +119,9 @@ export interface JobStatus {
   stage?: string;
   sequence_id?: string;
   detection_stamp?: string;
+  /** False when inputs.mat could not be written (read-only source); the reason is in persist_skipped. */
+  persisted?: boolean;
+  persist_skipped?: string | null;
   frame_indices?: number[];
   datum_frame_idx?: number;
   poses?: Record<string, PoseSummary[]>;
@@ -391,8 +394,14 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
       setPoseLevelsMap({});
       setDetectionProgress(100);
       setSequenceStatus('ready');
-      setHasSidecar(true);  // detect_sequence persisted the detections to the sidecar
-      setClicksDirty(true); // the cleared labels must reach the sidecar
+      if (done.persisted === false) {
+        // Usable this session, but nothing reached inputs.mat, so clicks cannot be saved either.
+        setHasSidecar(false);
+        setClicksSaveError(`Detected, but not saved for Generate: ${done.persist_skipped}`);
+      } else {
+        setHasSidecar(true);  // detect_sequence persisted the detections to the sidecar
+        setClicksDirty(true); // the cleared labels must reach the sidecar
+      }
     } catch (e) {
       setSequenceStatus('error');
       setSequenceError(errorMessage(e));
@@ -518,7 +527,11 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
         // shows it now and reloads the saved record (world frame, stamped geometry).
         core.setGeneratedModel({ ...done, stereo_angle_deg: done.relative_angle_deg, cam1: pair[0], cam2: pair[1] });
         setResolvedStereoConfig(done.stereo_config ?? null);
-        setHasSidecar(true);
+        if (done.persisted === false) {
+          setClicksSaveError(`Model saved, but clicks not saved to inputs.mat: ${done.persist_skipped}`);
+        } else {
+          setHasSidecar(true);
+        }
       }
     } catch (e) {
       setFitJobStatus({ status: 'failed', error: errorMessage(e) });
