@@ -43,7 +43,7 @@ export interface StereoValidationResult {
   valid: boolean;
   cam1: CameraValidationResult;
   cam2: CameraValidationResult;
-  matching_count: number | 'container';
+  matching_count: number;
   error?: string;
 }
 
@@ -129,6 +129,7 @@ export function usePinholeStereoCalibration(
       if (data.success) {
         // The generate response is in request order and carries no camera fields.
         core.setGeneratedModel({ ...data, cam1: pair[0], cam2: pair[1] });
+        core.noteViewCount(data);
         setJobStatus({
           status: 'completed', progress: 100,
           processed_pairs: total, valid_pairs: data.num_pairs_used ?? 0, total_pairs: total,
@@ -144,7 +145,7 @@ export function usePinholeStereoCalibration(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameCount, cam1, cam2, dt, sourcePathIdx, adapter.board, boardParamsKey, datumFrame, nViews,
-      imageFormat, imageType, fixK2, fewViews, core.setGeneratedModel]);
+      imageFormat, imageType, fixK2, fewViews, core.setGeneratedModel, core.noteViewCount]);
 
   const stereoModel = useMemo(() => {
     const d = core.modelData;

@@ -54,6 +54,8 @@ export default function Home() {
         ...json,
         paths: {
           base_paths: json.paths?.base_paths || [],
+          // Unset means "all paths" to the backend; calibration's apply picker starts on its first.
+          active_paths: json.paths?.active_paths,
           source_paths: json.paths?.source_paths || [],
           camera_numbers: json.paths?.camera_numbers || [],
           camera_count: json.paths?.camera_count,

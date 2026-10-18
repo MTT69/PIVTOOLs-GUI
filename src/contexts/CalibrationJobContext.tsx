@@ -7,14 +7,17 @@
  * tab switch while the backend job kept running. This provider sits above the tabs (beside
  * `PivJobProvider` in `app/page.tsx`) and owns every calibration apply job:
  *
- *   - one job per *slot* (board + calibration source + cameras), keyed by {@link slotKey};
+ *   - one job per *slot* (board + calibration source + cameras + target datasets), keyed by
+ *     {@link slotKey}. Slots sharing board, source and cameras form a *family* (one tab's apply
+ *     action): applying to dataset b while dataset a runs is a different slot, so both run;
  *   - polled here, so progress continues while the tab is hidden;
  *   - persisted to localStorage, so a page reload resumes polling (same pattern and 24 h
  *     cutoff as `PivJobContext`);
  *   - cancellable through `POST /calibration/apply/cancel/<job_id>`.
  *
  * Starting a job while its slot is running is refused here; the backend's overlap guard in
- * `apply_model` is the authority and its refusal is shown as the slot's failed status.
+ * `apply_model` (jobs whose output directories overlap) is the authority, and its refusal is shown
+ * as the new slot's failed status.
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
@@ -25,12 +28,28 @@ const POLL_INTERVAL_MS = 1000;
 const STALE_JOB_HOURS = 24;
 const STORAGE_KEY = "pivtools_calibration_jobs";
 
-/** What a job applies: the board's model for one calibration source and camera set. */
-export interface CalibrationJobSlot {
+/** Which model a job applies: the board's model for one calibration source and camera set. */
+export interface CalibrationJobFamily {
   board: string;
   sourcePathIdx: number;
   /** Stereo pair, or empty for a mono apply (the backend applies every camera of the board). */
   cameras?: number[];
+}
+
+/** One apply job: a family's model applied to these datasets. */
+export interface CalibrationJobSlot extends CalibrationJobFamily {
+  /** Indices into `paths.base_paths`, sorted ascending; sent as the request's `active_paths`. */
+  datasets: number[];
+}
+
+/** A family member that has run this session: its target datasets and latest state. */
+export interface CalibrationFamilyJob {
+  datasets: number[];
+  status: ApplyJobStatus;
+  /** True between the cancel request and the backend reporting the job settled. */
+  cancelRequested: boolean;
+  /** Why the last cancel request failed. */
+  cancelError: string | null;
 }
 
 interface SlotState {
@@ -48,10 +67,8 @@ interface StoredJob {
 }
 
 interface CalibrationJobContextType {
-  /** Latest status for the slot, or null when no job has run there this session. */
-  jobFor: (slot: CalibrationJobSlot) => ApplyJobStatus | null;
-  /** Cancel progress for the slot: request pending, and the last cancel failure if any. */
-  cancelStateFor: (slot: CalibrationJobSlot) => { requested: boolean; error: string | null };
+  /** Every slot of the family that has a status this session, in first-start order. */
+  jobsFor: (family: CalibrationJobFamily) => CalibrationFamilyJob[];
   /** POST `/calibration/apply` with `payload` and poll the job under `slot`. */
   startApply: (slot: CalibrationJobSlot, payload: Record<string, unknown>) => Promise<void>;
   /** Ask the backend to stop the slot's running job; polling reports the final state. */
@@ -60,9 +77,14 @@ interface CalibrationJobContextType {
 
 const CalibrationJobContext = createContext<CalibrationJobContextType | null>(null);
 
-/** Stable identity of a slot: board, source index and the (ordered as given) cameras. */
+/** Stable identity of a family: board, source index and the (ordered as given) cameras. */
+function familyKey(family: CalibrationJobFamily): string {
+  return `${family.board}|${family.sourcePathIdx}|${(family.cameras ?? []).join(",")}`;
+}
+
+/** Stable identity of a slot: its family key, then the target datasets. */
 export function slotKey(slot: CalibrationJobSlot): string {
-  return `${slot.board}|${slot.sourcePathIdx}|${(slot.cameras ?? []).join(",")}`;
+  return `${familyKey(slot)}|${slot.datasets.join(",")}`;
 }
 
 function failedStatus(error: string): ApplyJobStatus {
@@ -176,10 +198,19 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
     }
   }, [setSlot]);
 
-  const jobFor = useCallback((slot: CalibrationJobSlot) => slots[slotKey(slot)]?.status ?? null, [slots]);
-  const cancelStateFor = useCallback((slot: CalibrationJobSlot) => {
-    const s = slots[slotKey(slot)];
-    return { requested: s?.cancelRequested ?? false, error: s?.cancelError ?? null };
+  const jobsFor = useCallback((family: CalibrationJobFamily): CalibrationFamilyJob[] => {
+    const prefix = `${familyKey(family)}|`;
+    const out: CalibrationFamilyJob[] = [];
+    for (const [key, s] of Object.entries(slots)) {
+      if (!key.startsWith(prefix) || !s.status) continue;
+      out.push({
+        datasets: key.slice(prefix.length).split(",").map(Number),
+        status: s.status,
+        cancelRequested: s.cancelRequested,
+        cancelError: s.cancelError,
+      });
+    }
+    return out;
   }, [slots]);
 
   const startApply = useCallback(async (slot: CalibrationJobSlot, payload: Record<string, unknown>) => {
@@ -218,7 +249,7 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
   }, [setSlot]);
 
   return (
-    <CalibrationJobContext.Provider value={{ jobFor, cancelStateFor, startApply, cancelApply }}>
+    <CalibrationJobContext.Provider value={{ jobsFor, startApply, cancelApply }}>
       {children}
     </CalibrationJobContext.Provider>
   );

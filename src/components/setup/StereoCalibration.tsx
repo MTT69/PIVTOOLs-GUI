@@ -12,7 +12,8 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
@@ -59,6 +60,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setImageType,
     numImages,
     setNumImages,
+    zeroBasedIndexing,
+    setZeroBasedIndexing,
+    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
@@ -67,6 +71,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setSubfolderFor,
     applySubfolderSuggestions,
     frameCount,
+    autoViewCountText,
 
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
@@ -89,10 +94,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     isCalibrating,
 
     // Reconstruction job tracking
-    reconstructJobStatus,
+    applyJobs,
     isReconstructing,
-    applyCancelling,
-    applyCancelError,
     cancelApply,
     changedSinceGenerate,
     modelLoadError,
@@ -163,6 +166,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const reconstructTypeName = calibration.pivType;
+  // PIV datasets the saved model can be applied to (Settings → Directories).
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
   const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
@@ -311,8 +316,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 onChange={e => setNumImages(e.target.value)}
               />
               <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
+              {autoViewCountText && <p className="text-xs text-muted-foreground">{autoViewCountText}</p>}
             </div>
           </div>
+
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+            suggestedZeroBased={suggestedZeroBased} />
 
           {/* Use Camera Subfolders Toggle */}
           {(imageType === "standard" || imageType === "lavision_im7") && (
@@ -380,7 +389,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 pendingLabel="Validating…"
                 customSuccessMessage={
                   validation.valid
-                    ? `Found ${validation.matching_count === 'container' ? 'container files' : `${validation.matching_count} matching calibration image pairs`}`
+                    ? `Found ${validation.matching_count} matching calibration image pairs`
                     : undefined
                 }
               />
@@ -388,11 +397,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               {!validating && validation.cam1 && validation.cam2 && (
                 <div className="flex gap-4 text-xs text-muted-foreground">
                   <span className={validation.cam1.valid ? "text-green-600" : "text-red-500"}>
-                    Cam {cam1}: {validation.cam1.found_count === 'container' ? 'container' : `${validation.cam1.found_count} images`}
+                    Cam {cam1}: {validation.cam1.found_count} images
                     {validation.cam1.error && ` (${validation.cam1.error})`}
                   </span>
                   <span className={validation.cam2.valid ? "text-green-600" : "text-red-500"}>
-                    Cam {cam2}: {validation.cam2.found_count === 'container' ? 'container' : `${validation.cam2.found_count} images`}
+                    Cam {cam2}: {validation.cam2.found_count} images
                     {validation.cam2.error && ` (${validation.cam2.error})`}
                   </span>
                 </div>
@@ -575,8 +584,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 Re-detect
               </Button>
 
-              {/* Reconstruct 3D Vectors with type selector */}
-              <div className="flex gap-2 items-center">
+              {/* Reconstruct 3D Vectors: PIV type, cam2 interpolator, target datasets */}
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-sm font-medium">Reconstruct 3D vectors:</span>
                 <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
                   <SelectTrigger className="w-[130px]">
                     <SelectValue />
@@ -587,22 +597,15 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   </SelectContent>
                 </Select>
                 <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
-                <Button
-                  onClick={() => reconstructVectors(reconstructTypeName)}
-                  disabled={!hasModel || isReconstructing}
-                  variant="outline"
-                  className="border-green-500 text-green-700 hover:bg-green-50"
+                <ApplyDatasetButtons
+                  basePaths={basePaths}
+                  defaultIdx={defaultDatasetIdx(config)}
+                  jobs={applyJobs}
+                  onApply={datasets => reconstructVectors(reconstructTypeName, datasets)}
+                  disabled={!hasModel}
                   title={!hasModel ? "Generate or load a stereo model first" : "Reconstruct 3D velocity vectors"}
-                >
-                  {isReconstructing ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Reconstructing...
-                    </>
-                  ) : (
-                    'Reconstruct 3D Vectors'
-                  )}
-                </Button>
+                  buttonClassName="border border-green-500 bg-white text-green-700 hover:bg-green-50"
+                />
               </div>
 
               {/* Set as Active Method */}
@@ -696,25 +699,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </div>
             )}
 
-            {/* Reconstruction Job Progress */}
-            <CalibrationJobProgress job={reconstructJobStatus} title="3D Reconstruction"
-              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
-
-            {/* Reconstruction Job Completed */}
-            {reconstructJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                3D reconstruction completed!
-              </div>
-            )}
-
-            {/* Reconstruction Job Failed */}
-            {reconstructJobStatus?.status === 'failed' && (
-              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Reconstruction error: {reconstructJobStatus.error || 'Unknown error'}
-              </div>
-            )}
+            {/* 3D reconstruction progress / results, one per target dataset selection */}
+            <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="3D reconstruction"
+              onCancel={cancelApply} />
           </div>
         </CardContent>
       </Card>

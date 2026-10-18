@@ -51,7 +51,7 @@ export function useStereoCalibration(cameraOptions: number[], sourcePaths: strin
     modelLoadError: c.loadError,
     dotSpacingMm, setDotSpacingMm, fixK2, setFixK2, showFixK2: s.showFixK2,
     jobStatus: s.jobStatus, isCalibrating: s.isCalibrating, generateStereoModel: s.generateStereoModel,
-    reconstructJobStatus: c.applyJob, isReconstructing: c.applyRunning, reconstructVectors: c.startApply,
+    isReconstructing: c.applyRunning, reconstructVectors: c.startApply,
     sourcePaths,
   };
 }

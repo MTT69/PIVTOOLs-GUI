@@ -17,7 +17,6 @@ export interface V2Detected {
   width: number;
   height: number;
   frame: number;
-  frameCount?: number;
 }
 
 const BASE = "/backend/calibration";
@@ -69,7 +68,6 @@ export function useCalibrationApi() {
           width: data.width,
           height: data.height,
           frame: data.frame,
-          frameCount: data.frame_count,
         };
       } catch (e: any) {
         setError(errorMessage(e));

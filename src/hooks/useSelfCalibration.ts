@@ -111,9 +111,17 @@ export function useSelfCalibration(
 
   // Read the saved self_cal block + figure list for the current pair.
   const checkStatus = useCallback(async () => {
+    setError(null);
     try {
       const q = `stereo=1&board=${board}&camera_pair=${cam1},${cam2}&source_path_idx=${sourcePathIdx}`;
       const data = await fetchJson(`/backend/calibration/self_cal/result?${q}`);
+      if (data.success === false) {
+        // A stored block that cannot be read (e.g. stale) exists: show why, never "absent".
+        setStatus(null);
+        setFigures([]);
+        setError(data.error || 'Saved self-calibration could not be read');
+        return;
+      }
       if (data.has_self_calibration) {
         setStatus(data);
         if (data.n_images) setNImages(data.n_images);
@@ -123,8 +131,8 @@ export function useSelfCalibration(
         setStatus(null);
       }
       setFigures(Array.isArray(data.figures) ? data.figures : []);
-    } catch {
-      /* ignore on mount */
+    } catch (e) {
+      setError(`Failed to read saved self-calibration: ${errorMessage(e)}`);
     }
   }, [board, cam1, cam2, sourcePathIdx]);
 

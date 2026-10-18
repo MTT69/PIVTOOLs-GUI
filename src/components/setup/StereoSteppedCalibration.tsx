@@ -9,7 +9,8 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import {
@@ -88,6 +89,9 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setImageType,
     numImages,
     setNumImages,
+    zeroBasedIndexing,
+    setZeroBasedIndexing,
+    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
@@ -96,6 +100,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setSubfolderFor,
     applySubfolderSuggestions,
     frameCount,
+    autoViewCountText,
     sourceEpoch,
 
     // Board geometry
@@ -149,10 +154,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     hasSidecar,
 
     // Reconstruct
-    reconstructJobStatus,
+    applyJobs,
     isReconstructing,
-    applyCancelling,
-    applyCancelError,
     cancelApply,
     changedSinceGenerate,
     clicksSaveError,
@@ -227,6 +230,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const vectorTypeName = calibration.pivType;
+  // PIV datasets the saved model can be applied to (Settings → Directories).
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
   const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
@@ -544,8 +549,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   onChange={e => setNumImages(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
+                {autoViewCountText && <p className="text-xs text-muted-foreground">{autoViewCountText}</p>}
               </div>
             </div>
+
+            <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+              suggestedZeroBased={suggestedZeroBased} />
 
             {(imageType === "standard" || imageType === "lavision_im7") && (
               <div className="space-y-2">
@@ -581,7 +590,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 validation={{
                   valid: validation.valid,
                   checked: !validating,
-                  error: validation.cam1?.error || validation.cam2?.error || null,
+                  error: validation.error || validation.cam1?.error || validation.cam2?.error || null,
                 }}
                 pendingLabel="Validating…"
                 customSuccessMessage={
@@ -1127,26 +1136,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 )}
               </Button>
 
-              {/* Reconstruct 3C Vectors */}
-              <div className="flex items-center gap-1">
+              {/* Reconstruct 3C Vectors: cam2 interpolator, PIV type, target datasets */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">Reconstruct 3D vectors:</span>
                 <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
-                <Button
-                  onClick={() => reconstructVectors(vectorTypeName)}
-                  disabled={!hasModel || isReconstructing}
-                  className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-                  title={!hasModel ? "Generate or load a stereo model first" : "Reconstruct 3C vectors for the pair"}
-                >
-                  {isReconstructing ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Reconstructing…
-                    </>
-                  ) : (
-                    'Reconstruct 3D Vectors'
-                  )}
-                </Button>
                 <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isReconstructing}>
-                  <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                  <SelectTrigger className="w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1154,6 +1149,15 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                     <SelectItem value="ensemble">Ensemble</SelectItem>
                   </SelectContent>
                 </Select>
+                <ApplyDatasetButtons
+                  basePaths={basePaths}
+                  defaultIdx={defaultDatasetIdx(config)}
+                  jobs={applyJobs}
+                  onApply={datasets => reconstructVectors(vectorTypeName, datasets)}
+                  disabled={!hasModel}
+                  title={!hasModel ? "Generate or load a stereo model first" : "Reconstruct 3C vectors for the pair"}
+                  buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+                />
               </div>
             </div>
 
@@ -1177,23 +1181,9 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             )}
 
-            {/* Reconstruct progress + results */}
-            <CalibrationJobProgress job={reconstructJobStatus} title="3C Reconstruction"
-              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
-
-            {reconstructJobStatus?.status === 'completed' && (
-              <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                3C reconstruction completed ({reconstructJobStatus.total_units} datasets).
-              </div>
-            )}
-
-            {reconstructJobStatus?.status === 'failed' && (
-              <div className="p-3 border rounded bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Reconstruction error: {reconstructJobStatus.error || 'Unknown error'}
-              </div>
-            )}
+            {/* 3C reconstruction progress / results, one per target dataset selection */}
+            <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="3C reconstruction"
+              onCancel={cancelApply} />
           </div>
         </CardContent>
       </Card>

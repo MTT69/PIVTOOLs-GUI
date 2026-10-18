@@ -1018,6 +1018,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                         camera_subfolders: [],
                       });
                     }}
+                    onApplySuggestedStartIndex={(si) => {
+                      // Same path as the "First Frame Number" 0/1 buttons.
+                      setStartIndex(si);
+                      setStartIndexStr(String(si));
+                      saveConfig({ startIndex: si });
+                    }}
                   />
                   {pairingPreset !== "ab_format" && (
                     <Button

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { errorMessage, fetchJson, postJson } from '@/lib/api';
 import { isApplyJobActive } from '@/lib/applyJob';
-import { CalibrationJobSlot, useCalibrationJobs } from '@/contexts/CalibrationJobContext';
+import { CalibrationJobFamily, useCalibrationJobs } from '@/contexts/CalibrationJobContext';
 import {
   calibrationViewerRefreshKey,
   clearCalibrationFrameCache,
@@ -16,6 +16,8 @@ import {
   FrameDetection,
   ModelData,
   SidecarSettings,
+  ViewCount,
+  autoViewCountText,
   numOrNull,
   positiveIntOrNull,
 } from './shared';
@@ -67,7 +69,8 @@ const emptyValidation = (error: string): CameraValidationResult => ({ valid: fal
  *     switch and unmount;
  *   - validation of each camera, the viewer cache key and the frame-cache warmup;
  *   - the saved model (raw backend payload, mapped by the tab) and the stored detections;
- *   - the apply job, through `CalibrationJobContext` so it survives tab switches.
+ *   - the apply jobs (one per target dataset selection), through `CalibrationJobContext` so
+ *     they survive tab switches.
  *
  * Every async read is guarded: a response that a newer request or a source/camera change has
  * superseded is dropped instead of painting another selection's data.
@@ -94,6 +97,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const [imageType, setImageType] = useState('standard');
   // '' = unset: the backend resolves the count (settings, then auto-detect).
   const [numImages, setNumImages] = useState('');
+  // Sidecar image.zero_based_indexing: the first FILE is numbered 0 (frames stay 1-based).
+  const [zeroBasedIndexing, setZeroBasedIndexing] = useState(false);
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
@@ -117,6 +122,9 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const [detectionsStale, setDetectionsStale] = useState<string | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
+  // The view count the backend last resolved (detect_views / restore_detections / generate)
+  // for the current inputs; null until one reports or after an input change.
+  const [backendViewCount, setBackendViewCount] = useState<ViewCount | null>(null);
   const [showOverlay, setShowOverlay] = useState(true);
   // Bumped whenever the source, its path or the cameras change: model + detections reload.
   const [sourceEpoch, setSourceEpoch] = useState(0);
@@ -147,12 +155,11 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const boardParamsKey = JSON.stringify(adapter.boardParams);
   const nViews = positiveIntOrNull(numImages);
   const frameCount: number | null = nViews
-    ?? (validation && typeof validation.matching_count === 'number' && validation.matching_count > 0
-      ? validation.matching_count : null);
+    ?? (validation && validation.matching_count > 0 ? validation.matching_count : null);
 
   // Identity of everything a detection depends on; a response issued under another
   // identity belongs to a different selection and is dropped.
-  const detectContext = `${sourcePathIdx}|${camerasKey}|${boardParamsKey}|${imageFormat}|${imageType}|${viewerRefreshKey}`;
+  const detectContext = `${sourcePathIdx}|${camerasKey}|${boardParamsKey}|${imageFormat}|${imageType}|${zeroBasedIndexing}|${viewerRefreshKey}`;
   const detectContextRef = useRef(detectContext);
   detectContextRef.current = detectContext;
 
@@ -162,6 +169,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       image_format: imageFormat,
       image_type: imageType,
       n_views: nViews,
+      zero_based_indexing: zeroBasedIndexing,
       use_camera_subfolders: useCameraSubfolders,
       camera_subfolders: cameraSubfolders,
     },
@@ -169,8 +177,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       ? { camera, dt: numOrNull(dt), datum_frame: datumFrame, piv_type: pivType }
       : { camera_pair: [cam1, cam2], dt: numOrNull(dt), datum_frame: datumFrame, interpolator, piv_type: pivType },
     methods: adapter.methods,
-  }), [imageFormat, imageType, nViews, useCameraSubfolders, cameraSubfolders, mode, camera, cam1, cam2,
-      dt, datumFrame, interpolator, pivType, adapter.methods]);
+  }), [imageFormat, imageType, nViews, zeroBasedIndexing, useCameraSubfolders, cameraSubfolders, mode, camera,
+      cam1, cam2, dt, datumFrame, interpolator, pivType, adapter.methods]);
 
   // ---------- Hydration ----------
   const applySettings = useCallback((s: SidecarSettings) => {
@@ -178,6 +186,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     setImageFormat(img.image_format ?? '');
     if (img.image_type) setImageType(img.image_type);
     setNumImages(img.n_views == null ? '' : String(img.n_views));
+    setZeroBasedIndexing(Boolean(img.zero_based_indexing));
     setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
     setCameraSubfolders(Array.isArray(img.camera_subfolders) ? img.camera_subfolders : []);
     const rig = s.rig || {};
@@ -232,6 +241,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     const img = fromSettings?.image;
     const effFormat = img?.image_format ?? imageFormat;
     const effType = img?.image_type ?? imageType;
+    const effZeroBased = img?.zero_based_indexing ?? zeroBasedIndexing;
     const effUseSubfolders = img?.use_camera_subfolders ?? useCameraSubfolders;
     const effSubfolders = img?.camera_subfolders ?? cameraSubfolders;
     const effNViews = fromSettings ? (img?.n_views ?? null) : nViews;
@@ -254,12 +264,19 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       if (!validateSeq.isCurrent(token)) return;
       const byCam: Record<number, CameraValidationResult> = {};
       cams.forEach((cam, i) => { byCam[cam] = results[i]; });
-      const anyContainer = results.some(r => r.found_count === 'container');
+      // Views are paired by index, so with n_views left blank unequal per-camera counts are
+      // an error (same rule as the backend's pair count), never the smaller of the two.
+      const counts = results.map(r => r.found_count);
+      const countMismatch = mode === 'pair' && effNViews == null && results.every(r => r.valid)
+        && counts.some(n => n !== counts[0]);
       const result: CalibrationValidation = {
-        valid: results.every(r => r.valid),
+        valid: results.every(r => r.valid) && !countMismatch,
         cameras: byCam,
-        matching_count: anyContainer ? 'container' : Math.min(...results.map(r => Number(r.found_count) || 0)),
-        error: results.find(r => r.error)?.error,
+        matching_count: countMismatch ? 0 : Math.min(...counts),
+        error: countMismatch
+          ? `Camera ${cams[0]} has ${counts[0]} views, camera ${cams[1]} has ${counts[1]} -- `
+            + 'calibration pairs views by index, so the counts must match'
+          : results.find(r => r.error)?.error,
       };
       setValidation(result);
       // One construction site for the viewer's cache namespace, shared by the warmup.
@@ -267,6 +284,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
         sourcePath: calibrationSources[sourcePathIdx] ?? '',
         imageFormat: effFormat,
         imageType: effType,
+        zeroBasedIndexing: effZeroBased,
         useCameraSubfolders: effUseSubfolders,
         cameraSubfolders: effSubfolders,
         valid: result.valid,
@@ -285,8 +303,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     } finally {
       if (validateSeq.isCurrent(token)) setValidating(false);
     }
-  }, [validateSeq, imageFormat, imageType, useCameraSubfolders, cameraSubfolders, nViews, mode, cameras,
-      sourcePathIdx, calibrationSources, cameraOptions]);
+  }, [validateSeq, imageFormat, imageType, zeroBasedIndexing, useCameraSubfolders, cameraSubfolders, nViews,
+      mode, cameras, sourcePathIdx, calibrationSources, cameraOptions]);
   const validateRef = useRef(validateImages);
   validateRef.current = validateImages;
 
@@ -350,14 +368,30 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     const gen = hydrationGenRef.current;
     settingsSave.schedule(async (followUp) => {
       try {
-        await postJson('/backend/calibration/settings', { source_path_idx: idx, settings: JSON.parse(payload) });
-        if (gen === hydrationGenRef.current) savedPayloadRef.current = payload;
+        const sent = JSON.parse(payload);
+        const res = await postJson('/backend/calibration/settings', { source_path_idx: idx, settings: sent });
+        // The backend prunes camera_subfolders to the camera count and echoes the stored
+        // list; adopt it so the next save does not re-send the stale entries.
+        const stored = res.settings?.image?.camera_subfolders;
+        if (!Array.isArray(stored)) {
+          throw new Error('settings save response carries no image.camera_subfolders');
+        }
+        const sentSubfolders = JSON.stringify(sent.image.camera_subfolders);
+        const adopted = JSON.stringify(stored) === sentSubfolders
+          ? payload
+          : JSON.stringify({ ...sent, image: { ...sent.image, camera_subfolders: stored } });
+        if (gen === hydrationGenRef.current) {
+          savedPayloadRef.current = adopted;
+          // Only over the list that was sent: an edit made while the save was in flight wins.
+          if (adopted !== payload) setCameraSubfolders(prev => (JSON.stringify(prev) === sentSubfolders ? stored : prev));
+        }
         if (followUp) setSettingsError(null);
       } catch (e) {
         if (followUp) setSettingsError(`Failed to save calibration settings: ${errorMessage(e)}`);
         return;
       }
-      // Validation reads subfolders from the persisted sidecar, so re-validate after a save.
+      // Validation reads subfolders and 0/1 indexing from the persisted sidecar, so
+      // re-validate after a save.
       if (followUp) void validateRef.current();
     });
   }, [settingsPayload, configLoaded, calibrationSources, sourcePathIdx, settingsSave]);
@@ -405,7 +439,9 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       cameras: Object.fromEntries(Object.entries(v.cameras).map(([k, r]) => [k, { ...r, valid: false, error: undefined }])),
     } : v));
     setDetectError(null);
-  }, [sourcePathIdx, imageFormat, imageType, numImages, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+    setBackendViewCount(null);
+  }, [sourcePathIdx, imageFormat, imageType, numImages, zeroBasedIndexing, calibrationSources, useCameraSubfolders,
+      cameraSubfolders]);
 
   // ---------- Saved model ----------
   const modelUrl = mode === 'mono'
@@ -448,6 +484,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     setModelData(null);
     setDetections({});
     setDetectionsStale(null);
+    setBackendViewCount(null);
     detectionsSeq.invalidate();
     void loadModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -479,6 +516,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     try {
       const data = await postJson('/backend/calibration/restore_detections', detectionBody());
       if (!detectionsSeq.isCurrent(token)) return;
+      if (data.exists) setBackendViewCount({ n: data.frame_total, source: data.frame_total_source });
       if (data.exists && data.fresh) {
         const next: DetectionsByCamera = {};
         for (const cam of cameras) next[cam] = framesFrom(data.by_camera, cam);
@@ -490,12 +528,15 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       setDetectionsStale(data.exists && !data.fresh
         ? `Saved detections were made with different settings${data.stored?.n_views ? ` (${data.stored.n_views} views)` : ''}. Detect again to refresh them.`
         : null);
+      // Nothing to restore because the view count could not be resolved (e.g. unequal
+      // per-camera counts): say why rather than show a silently blank overlay.
+      if (!data.exists && data.error) setDetectError(data.error);
     } catch (e) {
       if (!detectionsSeq.isCurrent(token)) return;
-      // A probe on every tab open is not a user action; log it, keep the overlay blank.
-      console.error('restore_detections failed:', e);
+      // A non-2xx here is a real fault (e.g. an unreadable inputs.mat), not "nothing saved".
       setDetections({});
       setDetectionsStale(null);
+      setDetectError(`Could not read saved detections: ${errorMessage(e)}`);
     }
   }, [detectionsSeq, detectionBody, cameras]);
 
@@ -546,6 +587,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
         setDetectError(data.error || 'Detection failed');
         return;
       }
+      setBackendViewCount({ n: data.frame_total, source: data.frame_total_source });
       const next: DetectionsByCamera = {};
       const errs: string[] = [];
       for (const cam of cameras) {
@@ -564,6 +606,39 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       if (detectionsSeq.isCurrent(token)) setDetecting(false);
     }
   }, [detectionsSeq, detectionBody, cameras]);
+
+  /** Record the view count a generate response resolved (`frame_total` + its source). */
+  const noteViewCount = useCallback((data: { frame_total: number; frame_total_source: string }) => {
+    setBackendViewCount({ n: data.frame_total, source: data.frame_total_source });
+  }, []);
+
+  /**
+   * The count a blank n_views resolves to: the backend's last resolution, else what
+   * validation found when every camera agrees. The validation fallback is labelled by the
+   * format, since validate counts .set entries / .cine frames for containers.
+   */
+  const autoViewCount = useMemo((): ViewCount | null => {
+    if (nViews != null) return null;
+    if (backendViewCount) return backendViewCount;
+    if (!validation || validating) return null;
+    const counts = cameras.map(c => validation.cameras[c]?.found_count ?? 0);
+    if (counts.some(n => n <= 0 || n !== counts[0])) return null;
+    const source = imageType === 'lavision_set' ? '.set index' : imageType === 'cine' ? '.cine header' : 'files';
+    return { n: counts[0], source };
+  }, [nViews, backendViewCount, validation, validating, cameras, imageType]);
+
+  /**
+   * The validate hint "Files start at X but the start index is Y": `suggested_zero_based` of
+   * the first camera that reports one, for the First Frame Number control's switch button.
+   */
+  const suggestedZeroBased = useMemo((): boolean | null => {
+    if (!validation || validating) return null;
+    for (const cam of cameras) {
+      const s = validation.cameras[cam]?.suggested_zero_based;
+      if (s != null) return s;
+    }
+    return null;
+  }, [validation, validating, cameras]);
 
   // ---------- Camera selection invariants ----------
   useEffect(() => {
@@ -630,28 +705,32 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
 
   // ---------- Apply (persistent job) ----------
   const jobs = useCalibrationJobs();
-  const applySlot: CalibrationJobSlot = useMemo(() => ({
+  const applyFamily: CalibrationJobFamily = useMemo(() => ({
     board: mode === 'mono' ? adapter.board : `stereo_${adapter.board}`,
     sourcePathIdx,
     cameras: mode === 'mono' ? [] : [cam1, cam2],
   }), [mode, adapter.board, sourcePathIdx, cam1, cam2]);
-  const applyJob = jobs.jobFor(applySlot);
-  const applyCancel = jobs.cancelStateFor(applySlot);
+  const applyJobs = jobs.jobsFor(applyFamily);
 
-  const startApply = useCallback(async (typeName: string = 'instantaneous', activePaths?: number[]) => {
+  /**
+   * Apply the saved model to `datasets` (indices into `paths.base_paths`). Always sent as an
+   * explicit `active_paths`, so the request states what it applies to.
+   */
+  const startApply = useCallback(async (typeName: string, datasets: number[]) => {
     const dtVal = numOrNull(dt);
-    await jobs.startApply(applySlot, {
+    const sorted = [...datasets].sort((a, b) => a - b);
+    await jobs.startApply({ ...applyFamily, datasets: sorted }, {
       stereo: mode === 'pair', board: adapter.board, source_path_idx: sourcePathIdx,
       ...(mode === 'pair' ? { camera_pair: [cam1, cam2], interpolator } : {}),
       type_name: typeName,
       // Empty dt is omitted: apply falls back to the model-stamped dt.
       ...(dtVal != null ? { dt: dtVal } : {}),
-      // Omitted active_paths -> backend applies to all configured base paths.
-      ...(activePaths ? { active_paths: activePaths } : {}),
+      active_paths: sorted,
     });
-  }, [jobs, applySlot, mode, adapter.board, sourcePathIdx, cam1, cam2, interpolator, dt]);
+  }, [jobs, applyFamily, mode, adapter.board, sourcePathIdx, cam1, cam2, interpolator, dt]);
 
-  const cancelApply = useCallback(() => jobs.cancelApply(applySlot), [jobs, applySlot]);
+  const cancelApply = useCallback(
+    (datasets: number[]) => jobs.cancelApply({ ...applyFamily, datasets }), [jobs, applyFamily]);
 
   return {
     // selection
@@ -659,10 +738,11 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     activeCam, setActiveCam, cameras, cameraOptions,
     // form
     imageFormat, setImageFormat, imageType, setImageType, numImages, setNumImages,
+    zeroBasedIndexing, setZeroBasedIndexing, suggestedZeroBased,
     calibrationSources, setCalibrationSources, useCameraSubfolders, setUseCameraSubfolders,
     cameraSubfolders, setCameraSubfolders, setSubfolderFor, applySubfolderSuggestions,
     dt, setDt, datumFrame, setDatumFrame, interpolator, setInterpolator, pivType, setPivType,
-    nViews, frameCount,
+    nViews, frameCount, autoViewCountText: autoViewCountText(autoViewCount), noteViewCount,
     // status
     configLoaded, sourceEpoch,
     loadError: sourcesError ?? settingsError ?? modelLoadError,
@@ -671,8 +751,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     detections, detectionsStale, detectError, setDetectError, detecting, showOverlay, setShowOverlay,
     restoreDetections, detectFrame, detectAllViews,
     // apply
-    applyJob, applyRunning: !!applyJob && isApplyJobActive(applyJob),
-    applyCancelling: applyCancel.requested, applyCancelError: applyCancel.error,
+    applyJobs, applyRunning: applyJobs.some(j => isApplyJobActive(j.status)),
     startApply, cancelApply,
   };
 }

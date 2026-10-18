@@ -133,7 +133,7 @@ export function useChArUcoCalibration(cameraOptions: number[], sourcePaths: stri
     jobStatus: p.jobStatus, isCalibrating: p.isCalibrating,
     multiCameraJobStatus: p.multiCameraJobStatus, isMultiCameraCalibrating: p.isMultiCameraCalibrating,
     generateCameraModel: p.generateCameraModel, generateCameraModelAll: p.generateCameraModelAll,
-    vectorJobStatus: c.applyJob, isVectorCalibrating: c.applyRunning,
+    isVectorCalibrating: c.applyRunning,
     calibrateVectors: c.startApply,
     sourcePaths,
   };

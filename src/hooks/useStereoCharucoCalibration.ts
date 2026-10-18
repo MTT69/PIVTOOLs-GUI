@@ -44,7 +44,7 @@ export function useStereoCharucoCalibration(cameraOptions: number[], sourcePaths
     detectionsCam1: s.detectionsCam1, detectionsCam2: s.detectionsCam2,
     modelLoadError: c.loadError,
     jobStatus: s.jobStatus, isCalibrating: s.isCalibrating, generateStereoModel: s.generateStereoModel,
-    reconstructJobStatus: c.applyJob, isReconstructing: c.applyRunning, reconstructVectors: c.startApply,
+    isReconstructing: c.applyRunning, reconstructVectors: c.startApply,
     sourcePaths,
   };
 }

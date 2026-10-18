@@ -12,6 +12,9 @@
  *   frame_done/_total   frames within the unit currently running; 0 until it reports.
  *   unit_label          human name of that unit, e.g. "run3/Cam2" or "run3/Cam1_Cam2".
  *   estimated_remaining seconds; present only while running with progress > 0.
+ *   out_dirs            output directory of each dataset unit.
+ *   dt_used / dt_source per unit, aligned with out_dirs: the dt (s) that unit is calibrated with
+ *                       and whether it came from the request or the model-stamped dt.
  *
  * A `cancelled` job stopped at the user's request; frames already written stay on disk and
  * `frame_done/frame_total` say how far the interrupted unit got.
@@ -30,6 +33,12 @@ export interface ApplyJobStatus {
   unit_label?: string;
   elapsed_time?: number;
   estimated_remaining?: number;
+  /** Per-unit output directories; undefined until the backend reports the job. */
+  out_dirs?: string[];
+  /** Per-unit dt (s), aligned with `out_dirs`. */
+  dt_used?: number[];
+  /** Per-unit dt origin, aligned with `out_dirs`. */
+  dt_source?: ('request' | 'model')[];
   error?: string;
 }
 
@@ -50,6 +59,9 @@ export function readApplyJobStatus(data: any): ApplyJobStatus {
     unit_label: data.unit_label,
     elapsed_time: data.elapsed_time,
     estimated_remaining: data.estimated_remaining,
+    out_dirs: data.out_dirs,
+    dt_used: data.dt_used,
+    dt_source: data.dt_source,
     error: data.error,
   };
 }
@@ -57,6 +69,19 @@ export function readApplyJobStatus(data: any): ApplyJobStatus {
 /** True while the job can still change: starting or running. */
 export function isApplyJobActive(job: ApplyJobStatus): boolean {
   return job.status === 'starting' || job.status === 'running';
+}
+
+/**
+ * "dt used: X s (model)" for an apply job: one value when every unit shares the same dt and
+ * source, else one entry per unit labelled by its output folder. null until reported.
+ */
+export function formatDtUsed(job: ApplyJobStatus): string | null {
+  const { dt_used: dts, dt_source: sources, out_dirs: dirs } = job;
+  if (!dts || !sources || !dirs || dts.length === 0) return null;
+  const entry = (i: number) => `${dts[i]} s (${sources[i]})`;
+  if (dts.every((d, i) => d === dts[0] && sources[i] === sources[0])) return `dt used: ${entry(0)}`;
+  const basename = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  return `dt used: ${dts.map((_, i) => `${basename(dirs[i])} ${entry(i)}`).join(', ')}`;
 }
 
 /** Seconds -> compact human duration ("45 s", "3 m 05 s", "1 h 12 m"). */

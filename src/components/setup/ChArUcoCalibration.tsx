@@ -11,7 +11,8 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react"
 import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
 import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { CameraSubfolderInputs, SubfolderSuggestion } from "@/components/setup/CameraSubfolderInputs";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
@@ -53,6 +54,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setImageType,
     numImages,
     setNumImages,
+    zeroBasedIndexing,
+    setZeroBasedIndexing,
+    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
@@ -61,6 +65,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setSubfolderFor,
     applySubfolderSuggestions,
     frameCount,
+    autoViewCountText,
 
     // Board params
     squaresH,
@@ -96,10 +101,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     isMultiCameraCalibrating,
 
     // Vector calibration job tracking
-    vectorJobStatus,
+    applyJobs,
     isVectorCalibrating,
-    applyCancelling,
-    applyCancelError,
     cancelApply,
     changedSinceGenerate,
 
@@ -185,6 +188,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const vectorTypeName = calibration.pivType;
+  // PIV datasets the saved model can be applied to (Settings → Directories).
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
   const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
@@ -305,11 +310,16 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 onChange={e => setNumImages(e.target.value)}
               />
               <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
+              {autoViewCountText && <p className="text-xs text-muted-foreground">{autoViewCountText}</p>}
             </div>
           </div>
 
-          {/* Use Camera Subfolders Toggle - for standard and IM7 formats */}
-          {(imageType === "standard" || imageType === "lavision_im7") && (
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+            suggestedZeroBased={suggestedZeroBased} />
+
+          {/* Use Camera Subfolders Toggle - for standard and IM7 formats; hidden for a one-camera rig, which
+              always resolves at the source root (rig size, not the selected cameras) */}
+          {(imageType === "standard" || imageType === "lavision_im7") && config?.paths?.camera_count !== 1 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Switch
@@ -351,7 +361,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
-                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  ? `Found ${validation.found_count} calibration images`
                   : undefined
               }
             />
@@ -511,11 +521,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               datumFrame={datumFrame}
               dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
-              vectorJobStatus={vectorJobStatus}
+              applyJobs={applyJobs}
               isVectorCalibrating={isVectorCalibrating}
               onCancelApply={cancelApply}
-              applyCancelling={applyCancelling}
-              applyCancelError={applyCancelError}
+              basePaths={basePaths}
+              defaultDatasetIdx={defaultDatasetIdx(config)}
             />
           )}
 
@@ -617,25 +627,11 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 </Button>
               )}
 
-              {/* Calibrate Vectors with type selection */}
-              <div className="flex items-center gap-1">
-                <Button
-                  onClick={() => calibrateVectors(vectorTypeName)}
-                  disabled={!hasModel || isVectorCalibrating}
-                  className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
-                >
-                  {isVectorCalibrating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Calibrating...
-                    </>
-                  ) : (
-                    'Calibrate Vectors'
-                  )}
-                </Button>
+              {/* Calibrate Vectors: PIV type + target datasets */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">Calibrate vectors:</span>
                 <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
-                  <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                  <SelectTrigger className="w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -643,6 +639,15 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                     <SelectItem value="ensemble">Ensemble</SelectItem>
                   </SelectContent>
                 </Select>
+                <ApplyDatasetButtons
+                  basePaths={basePaths}
+                  defaultIdx={defaultDatasetIdx(config)}
+                  jobs={applyJobs}
+                  onApply={datasets => calibrateVectors(vectorTypeName, datasets)}
+                  disabled={!hasModel}
+                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
+                  buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+                />
               </div>
 
               <Button
@@ -723,8 +728,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Camera model generation completed!
-                {jobStatus.rms_error && (
-                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} px</span>
+                {jobStatus.rms_error != null && (
+                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} {jobStatus.rms_unit ?? 'px'}</span>
                 )}
                 {jobStatus.num_images_used && (
                   <span className="ml-2">({jobStatus.num_images_used} images used)</span>
@@ -763,15 +768,18 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
             {/* Multi-Camera Job Completed */}
             {multiCameraJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Multi-camera model generation completed! ({multiCameraJobStatus.processed_cameras} cameras)
+              <div className={`mt-4 p-3 border rounded text-sm ${multiCameraJobStatus.succeeded_cameras
+                ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {multiCameraJobStatus.succeeded_cameras
+                  ? <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                  : <AlertTriangle className="h-4 w-4 inline mr-2" />}
+                Multi-camera model generation finished: {multiCameraJobStatus.succeeded_cameras ?? 0} of {multiCameraJobStatus.total_cameras} cameras succeeded
                 {multiCameraJobStatus.camera_results && (
                   <div className="mt-1 text-xs">
                     {Object.entries(multiCameraJobStatus.camera_results).map(([cam, res]: [string, any]) => (
                       <span key={cam} className="mr-3">
-                        {cam}: {res.status === 'completed' && res.rms_error
-                          ? `RMS ${Number(res.rms_error).toFixed(4)} px (${res.num_images_used} images)`
+                        {cam}: {res.status === 'completed' && res.rms_error != null
+                          ? `RMS ${Number(res.rms_error).toFixed(4)} ${res.rms_unit ?? 'px'} (${res.num_images_used} images)`
                           : `${res.status}${res.error ? `: ${res.error}` : ""}`}
                       </span>
                     ))}
@@ -780,25 +788,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               </div>
             )}
 
-            {/* Vector Calibration Progress */}
-            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration"
-              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
-
-            {/* Vector Calibration Completed */}
-            {vectorJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Vector calibration completed! ({vectorJobStatus.total_units} datasets)
-              </div>
-            )}
-
-            {/* Vector Calibration Failed */}
-            {vectorJobStatus?.status === 'failed' && (
-              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
-              </div>
-            )}
+            {/* Vector Calibration progress / results, one per target dataset selection */}
+            <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="Vector calibration"
+              onCancel={cancelApply} />
           </div>
           </>
           )}

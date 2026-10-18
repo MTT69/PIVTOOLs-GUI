@@ -53,6 +53,8 @@ export interface MultiCameraJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed';
   processed_cameras: number;
   total_cameras: number;
+  /** Cameras whose model was generated; set when the run finishes. */
+  succeeded_cameras?: number;
   current_camera?: number;
   processed_images?: number;
   total_images?: number;
@@ -134,6 +136,7 @@ export function usePlanarCalibration(
       const data = await generateOne(camera, clicks);
       if (data.success) {
         core.setGeneratedModel(data);
+        core.noteViewCount(data);
         setJobStatus({
           status: 'completed', progress: 100,
           processed_images: total, valid_images: data.per_view_rms?.length ?? 0, total_images: total,
@@ -146,7 +149,7 @@ export function usePlanarCalibration(
       setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: errorMessage(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, frameCount, generateOne, core.setGeneratedModel]);
+  }, [camera, frameCount, generateOne, core.setGeneratedModel, core.noteViewCount]);
 
   // Every camera in turn; the world frame is defined on the first camera's view only.
   const generateCameraModelAll = useCallback(async (clicks?: WorldFrameClicks | null) => {
@@ -161,14 +164,21 @@ export function usePlanarCalibration(
         results[`Camera ${cam}`] = data.success
           ? { status: 'completed', rms_error: respRms(data), rms_unit: respUnit(data), num_images_used: data.num_images_used }
           : { status: 'failed', error: data.error };
-        if (data.success && cam === camera) core.setGeneratedModel(data);
+        if (data.success && cam === camera) {
+          core.setGeneratedModel(data);
+          core.noteViewCount(data);
+        }
       } catch (e) {
         results[`Camera ${cam}`] = { status: 'failed', error: errorMessage(e) };
       }
     }
-    setMultiCameraJobStatus({ status: 'completed', processed_cameras: cams.length, total_cameras: cams.length, camera_results: results });
+    const succeeded = Object.values(results).filter(r => r.status === 'completed').length;
+    setMultiCameraJobStatus({
+      status: 'completed', processed_cameras: cams.length, total_cameras: cams.length,
+      succeeded_cameras: succeeded, camera_results: results,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions, camera, generateOne, core.setGeneratedModel]);
+  }, [cameraOptions, camera, generateOne, core.setGeneratedModel, core.noteViewCount]);
 
   const cameraModel = useMemo(() => (core.modelData ? toCameraModel(core.modelData) : null), [core.modelData]);
   const detections: Record<number, FrameDetection> = core.detections[camera] ?? {};

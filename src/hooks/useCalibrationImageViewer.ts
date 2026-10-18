@@ -15,8 +15,10 @@ export interface CalibrationFrame {
   };
   width: number;
   height: number;
-  /** Frames available at this camera/source, as reported by the backend. */
-  frameCount: number;
+  /** Frames available at this camera/source; null when the backend could not count them. */
+  frameCount: number | null;
+  /** Why the count is unknown (null when `frameCount` is known). */
+  frameCountError: string | null;
 }
 
 export type CalibrationViewerImageFormat = 'jpeg' | 'png';
@@ -169,6 +171,7 @@ async function loadFrame(key: string, url: string, signal?: AbortSignal): Promis
       width: json.width,
       height: json.height,
       frameCount: json.frame_count,
+      frameCountError: json.frame_count_error,
     };
     if (generation === cacheGeneration) cachePut(key, entry);
     return entry;
@@ -208,6 +211,8 @@ export interface CalibrationViewerSource {
   sourcePath: string;
   imageFormat: string;
   imageType: string;
+  /** Sidecar `image.zero_based_indexing`: frame N reads a different file when it flips. */
+  zeroBasedIndexing: boolean;
   useCameraSubfolders: boolean;
   cameraSubfolders: string[];
   valid: boolean;
@@ -216,7 +221,7 @@ export interface CalibrationViewerSource {
 /**
  * The viewer `refreshKey`: everything the frame URL does NOT carry.
  *
- * The backend reads image format, type and camera subfolders from the source's
+ * The backend reads image format, type, 0/1 indexing and camera subfolders from the source's
  * settings sidecar, so two frames at the same URL can be different pixels after
  * such an edit. Those inputs live here; `sourcePathIdx`, `camera`, `frameIdx`,
  * and `imageFormat` (jpeg/png) is already a separate field of `frameCacheKey`,
@@ -244,6 +249,7 @@ export function calibrationViewerRefreshKey(source: CalibrationViewerSource): st
     source.sourcePath,
     source.imageFormat,
     source.imageType,
+    String(source.zeroBasedIndexing),
     String(source.useCameraSubfolders),
     subfolders,
     String(source.valid),
@@ -289,7 +295,8 @@ export function warmCalibrationFrameCache({
     }
   };
 
-  const frameCounts = new Map<number, number>();
+  // null = the backend could not count this camera's frames: warm up to the limit unbounded.
+  const frameCounts = new Map<number, number | null>();
 
   /** Frame 1 also carries the frame count, so it must lead for every camera. */
   const learn = async (camera: number) => {
@@ -306,7 +313,7 @@ export function warmCalibrationFrameCache({
     for (const camera of order) {
       const total = frameCounts.get(camera);
       if (total === undefined) continue;
-      for (let idx = 2; idx <= Math.min(WARMUP_FRAME_LIMIT, total); idx++) {
+      for (let idx = 2; idx <= Math.min(WARMUP_FRAME_LIMIT, total ?? WARMUP_FRAME_LIMIT); idx++) {
         jobs.push({ camera, idx });
       }
     }
@@ -362,7 +369,9 @@ export function useCalibrationImageViewer(
   const [image, setImage] = useState<string | null>(null);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
-  const [frameCount, setFrameCount] = useState(0);
+  // null until a frame reports, and when the backend could not count (see frameCountError).
+  const [frameCount, setFrameCount] = useState<number | null>(null);
+  const [frameCountError, setFrameCountError] = useState<string | null>(null);
   const [stats, setStats] = useState<CalibrationFrame['stats'] | null>(null);
 
   // Contrast values as percentages (0-100)
@@ -372,7 +381,7 @@ export function useCalibrationImageViewer(
   // This instance's prefetch requests. Created lazily, aborted only when the
   // key namespace changes — never per navigation (see prefetchSurrounding).
   const prefetchAbortControllerRef = useRef<AbortController | null>(null);
-  const frameCountRef = useRef<number>(0);
+  const frameCountRef = useRef<number | null>(null);
 
   const getCacheKey = useCallback((frameIdx: number) => {
     return frameCacheKey(sourcePathIdx, camera, frameIdx, imageFormat, refreshKey);
@@ -415,7 +424,7 @@ export function useCalibrationImageViewer(
     // Prefetch forward (with upper bound check)
     for (let i = 1; i <= count; i++) {
       const targetIdx = currentIdx + i;
-      if (frameCountRef.current > 0 && targetIdx > frameCountRef.current) {
+      if (frameCountRef.current != null && targetIdx > frameCountRef.current) {
         break;  // Stop if we exceed known frame count
       }
       prefetchFrame(targetIdx, signal);
@@ -438,6 +447,7 @@ export function useCalibrationImageViewer(
       setWidth(frame.width);
       setHeight(frame.height);
       setFrameCount(frame.frameCount);
+      setFrameCountError(frame.frameCountError);
       frameCountRef.current = frame.frameCount;
       setStats(frame.stats);
       if (autoLimits && frame.stats) {
@@ -494,6 +504,7 @@ export function useCalibrationImageViewer(
     width,
     height,
     frameCount,
+    frameCountError,
     stats,
 
     // Contrast controls

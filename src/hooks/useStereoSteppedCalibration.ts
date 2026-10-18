@@ -108,6 +108,8 @@ export interface StereoValidation {
   cam1: CameraValidationResult | null;
   cam2: CameraValidationResult | null;
   valid: boolean;
+  /** Roll-up error, e.g. unequal per-camera view counts. */
+  error?: string;
 }
 
 /** Job status for the detect + fit jobs (calibration job_manager shape). */
@@ -536,6 +538,8 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
       if (!restoreSeq.isCurrent(token)) return;
       if (!data?.exists) {
         setHasSidecar(false);
+        // A saved sequence that no longer matches the settings is reported, not hidden.
+        if (data?.stale_reason) setSequenceError(data.stale_reason);
         return;
       }
       const poses: Record<number, PoseSummary[]> = {};
@@ -740,7 +744,7 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
   }, [core.modelData, resolvedStereoConfig]);
 
   const validation: StereoValidation | null = core.validation
-    ? { cam1: core.validation.cameras[cam1] ?? null, cam2: core.validation.cameras[cam2] ?? null, valid: core.validation.valid }
+    ? { cam1: core.validation.cameras[cam1] ?? null, cam2: core.validation.cameras[cam2] ?? null, valid: core.validation.valid, error: core.validation.error }
     : null;
 
   return {
@@ -759,7 +763,7 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
     fitJobStatus, stereoModel, hasSidecar,
     isGenerating: fitJobStatus?.status === 'running' || fitJobStatus?.status === 'starting',
     // Reconstruct
-    reconstructJobStatus: core.applyJob, isReconstructing: core.applyRunning, reconstructVectors: core.startApply,
+    isReconstructing: core.applyRunning, reconstructVectors: core.startApply,
     // Actions
     detect, snapFiducial, generateModel, restoreSequence, fetchPoseDetection, identifyPoseLevel,
     // Overlay helpers

@@ -55,7 +55,7 @@ export function useDotboardCalibration(cameraOptions: number[], sourcePaths: str
     jobStatus: p.jobStatus, isCalibrating: p.isCalibrating,
     multiCameraJobStatus: p.multiCameraJobStatus, isMultiCameraCalibrating: p.isMultiCameraCalibrating,
     generateCameraModel: p.generateCameraModel, generateCameraModelAll: p.generateCameraModelAll,
-    vectorJobStatus: c.applyJob, isVectorCalibrating: c.applyRunning,
+    isVectorCalibrating: c.applyRunning,
     calibrateVectors: c.startApply,
     sourcePaths,
   };

@@ -18,9 +18,9 @@ import {
   OrientationCandidate,
 } from "@/hooks/useJointCalibration";
 import { useJointGridSpec, GuideAction, GuideStatus, MIN_LINK_PAIRS } from "@/hooks/useJointGridSpec";
-import { ApplyJobStatus } from "@/lib/applyJob";
 import { getWorldFrameMarkers } from "@/components/setup/WorldFrameSetup";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyDatasetButtons, ApplyJobsStatus } from "@/components/setup/ApplyToDatasets";
+import { CalibrationFamilyJob } from "@/contexts/CalibrationJobContext";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 
 interface JointMultiCameraProps {
@@ -49,13 +49,16 @@ interface JointMultiCameraProps {
   // Apply-to-vectors, threaded down from the parent tab's calibration hook (shared with the
   // single-camera button). Applies each camera's joint 2D model to its PIV vectors — planar, not
   // 3C. Optional so the component is inert if a parent does not wire it.
-  calibrateVectors?: (typeName: string, activePaths?: number[]) => void;
-  vectorJobStatus?: ApplyJobStatus | null;
+  calibrateVectors?: (typeName: string, datasets: number[]) => void;
+  /** The parent tab's apply jobs (CalibrationJobContext family), one per target selection. */
+  applyJobs?: CalibrationFamilyJob[];
   isVectorCalibrating?: boolean;
-  // Cancel for the apply job (the job itself lives in CalibrationJobContext).
-  onCancelApply?: () => void;
-  applyCancelling?: boolean;
-  applyCancelError?: string | null;
+  // Cancel for one apply job, addressed by its target datasets.
+  onCancelApply?: (datasets: number[]) => void;
+  /** `paths.base_paths`: the datasets Apply can target. */
+  basePaths?: string[];
+  /** Initial dataset picker selection (see `defaultDatasetIdx`). */
+  defaultDatasetIdx?: number;
 }
 
 /** The dominant global-index direction of an extend hint, as a signed-axis tag (+X / −X / +Y / −Y) —
@@ -143,11 +146,11 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   dt = null,
   dotSpacingMm = 0,
   calibrateVectors,
-  vectorJobStatus,
+  applyJobs = [],
   isVectorCalibrating,
   onCancelApply,
-  applyCancelling,
-  applyCancelError,
+  basePaths = [],
+  defaultDatasetIdx = 0,
 }) => {
   const {
     resolveData,
@@ -1007,30 +1010,16 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
           joint model per camera. Works for pinhole (unified joint record) and polynomial
           (per-camera records the polynomial joint solve writes). Kept beside Generate, above the
           saved-model results + proof figures, so the calibrate action does not sit under them. */}
-      {model?.exists && calibrateVectors && (
+      {model?.exists && calibrateVectors && onCancelApply && (
         <div className="mt-3 space-y-2">
-          <div className="flex items-center gap-1">
-            <Button
-              onClick={() => calibrateVectors(vectorTypeName)}
-              disabled={isVectorCalibrating}
-              className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-              title="Calibrate vectors for all cameras with the joint model"
-            >
-              {isVectorCalibrating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Calibrating...
-                </>
-              ) : (
-                "Calibrate Vectors"
-              )}
-            </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium">Calibrate vectors:</span>
             <Select
               value={vectorTypeName}
               onValueChange={(v) => setVectorTypeName(v as "instantaneous" | "ensemble")}
               disabled={isVectorCalibrating}
             >
-              <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+              <SelectTrigger className="w-[130px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1038,22 +1027,18 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
                 <SelectItem value="ensemble">Ensemble</SelectItem>
               </SelectContent>
             </Select>
+            <ApplyDatasetButtons
+              basePaths={basePaths}
+              defaultIdx={defaultDatasetIdx}
+              jobs={applyJobs}
+              onApply={(datasets) => calibrateVectors(vectorTypeName, datasets)}
+              title="Calibrate vectors for all cameras with the joint model"
+              buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+            />
           </div>
 
-          <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration"
-            onCancel={onCancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
-          {vectorJobStatus?.status === "completed" && (
-            <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
-              <CheckCircle2 className="h-4 w-4 inline mr-2" />
-              Vector calibration completed! ({vectorJobStatus.total_units} datasets)
-            </div>
-          )}
-          {vectorJobStatus?.status === "failed" && (
-            <div className="p-3 border rounded bg-red-50 text-red-700 text-sm">
-              <AlertTriangle className="h-4 w-4 inline mr-2" />
-              Vector calibration error: {vectorJobStatus.error || "Unknown error"}
-            </div>
-          )}
+          <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="Vector calibration"
+            onCancel={onCancelApply} />
         </div>
       )}
 

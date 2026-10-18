@@ -13,9 +13,10 @@ import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { isApplyJobActive } from "@/lib/applyJob";
-import { CalibrationJobSlot, useCalibrationJobs } from "@/contexts/CalibrationJobContext";
+import { CalibrationJobFamily, useCalibrationJobs } from "@/contexts/CalibrationJobContext";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
@@ -56,6 +57,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [camera, setCamera] = useState(cameraOptions[0] || 1);
   const [imageFormat, setImageFormat] = useState<string>('');
   const [imageType, setImageType] = useState<string>('standard');
+  // Sidecar image.zero_based_indexing: the first FILE is numbered 0 (frames stay 1-based).
+  const [zeroBasedIndexing, setZeroBasedIndexing] = useState(false);
   const [calibrationSources, setCalibrationSources] = useState<string[]>([]);
   // Opens once the source list has loaded. Gates hydration and every write: an
   // unknown list must never be persisted back over the real one.
@@ -68,7 +71,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const [frameIdx, setFrameIdx] = useState(1);
   // Image-less mode: the uniform pixel->mm map needs no image, so a model can be
   // typed in, generated and re-edited with no calibration images on disk (explicit
-  // use_image flag; the proof figure is skipped).
+  // use_image flag; the proof figure is skipped). Persisted per source as the sidecar's
+  // methods.scale_factor.use_images; the initial value is a placeholder until hydration.
   const [useImages, setUseImages] = useState(true);
 
   // --- Scale-factor params (persist to the sidecar; NO frontend defaults) --------
@@ -125,11 +129,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   interface SFValidation {
     valid: boolean;
     error?: string;
-    found_count?: number | "container";
+    found_count?: number;
     camera_path?: string;
     image_size?: [number, number];
     suggested_pattern?: string;
     suggested_subfolder?: string;
+    suggested_zero_based?: boolean | null;
   }
   const [validation, setValidation] = useState<SFValidation | null>(null);
   const [validating, setValidating] = useState(false);
@@ -203,6 +208,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         const img = data.settings.image || {};
         setImageFormat(img.image_format ?? '');
         if (img.image_type) setImageType(img.image_type);
+        setZeroBasedIndexing(Boolean(img.zero_based_indexing));
         setUseCameraSubfolders(Boolean(img.use_camera_subfolders));
         if (Array.isArray(img.camera_subfolders)) setCameraSubfolders(img.camera_subfolders);
         const rig = data.settings.rig || {};
@@ -210,6 +216,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         if (rig.piv_type === 'instantaneous' || rig.piv_type === 'ensemble') setVectorTypeName(rig.piv_type);
         const sf = data.settings.methods?.scale_factor || {};
         setPxPerMm(sf.px_per_mm == null ? '' : String(sf.px_per_mm));
+        setUseImages(Boolean(sf.use_images));
         loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
         settingsReadyRef.current = true;
         setSettingsEpoch(n => n + 1);
@@ -242,12 +249,13 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       const pathEdited = currentPath !== loadedSourcePathRef.current;
       if (!pathEdited && settingsReadyRef.current) {
         try {
-          await postJson("/backend/calibration/settings", {
+          const res = await postJson("/backend/calibration/settings", {
             source_path_idx: sourcePathIdx,
             settings: {
               image: {
                 image_format: imageFormat,
                 image_type: imageType,
+                zero_based_indexing: zeroBasedIndexing,
                 use_camera_subfolders: useCameraSubfolders,
                 camera_subfolders: cameraSubfolders,
               },
@@ -255,10 +263,21 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               methods: {
                 scale_factor: {
                   px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
+                  use_images: useImages,
                 },
               },
             },
           });
+          // The backend prunes camera_subfolders to the camera count and echoes the stored
+          // list; adopt it (unless edited meanwhile) so stale entries are not re-sent.
+          const stored = res.settings?.image?.camera_subfolders;
+          if (!Array.isArray(stored)) {
+            throw new Error("settings save response carries no image.camera_subfolders");
+          }
+          const sentSubfolders = JSON.stringify(cameraSubfolders);
+          if (JSON.stringify(stored) !== sentSubfolders) {
+            setCameraSubfolders(prev => (JSON.stringify(prev) === sentSubfolders ? stored : prev));
+          }
         } catch (e) {
           console.error("persist calibration settings failed", errorMessage(e));
         }
@@ -274,8 +293,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders,
-      pxPerMm, dt, settingsEpoch, sourcePathIdx, configLoaded]);
+  }, [imageFormat, imageType, zeroBasedIndexing, calibrationSources, useCameraSubfolders, cameraSubfolders,
+      pxPerMm, useImages, dt, settingsEpoch, sourcePathIdx, configLoaded]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
@@ -292,7 +311,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       // viewer so the two share one key namespace.
       const refreshKey = calibrationViewerRefreshKey({
         sourcePath: calibrationSources[sourcePathIdx] ?? '',
-        imageFormat, imageType,
+        imageFormat, imageType, zeroBasedIndexing,
         useCameraSubfolders, cameraSubfolders,
         valid: Boolean(result?.valid),
       });
@@ -311,7 +330,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     } finally {
       setValidating(false);
     }
-  }, [camera, sourcePathIdx, imageFormat, imageType, cameraOptions,
+  }, [camera, sourcePathIdx, imageFormat, imageType, zeroBasedIndexing, cameraOptions,
       calibrationSources, useCameraSubfolders, cameraSubfolders]);
 
   // Debounced past the 500 ms config persist above: source dir + subfolders are resolved
@@ -340,7 +359,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     clearCalibrationFrameCache();
     setValidation(v => (v ? { ...v, valid: false, error: undefined } : v));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcePathIdx, imageFormat, imageType, calibrationSources, useCameraSubfolders, cameraSubfolders]);
+  }, [sourcePathIdx, imageFormat, imageType, zeroBasedIndexing, calibrationSources, useCameraSubfolders,
+      cameraSubfolders]);
 
   // Image-driven interactions cannot survive the viewer unmounting.
   useEffect(() => {
@@ -497,22 +517,26 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       imageFormat, imageType, useImages, locator]);
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
-  // The job lives in CalibrationJobContext so it keeps polling across tab switches.
+  // Jobs live in CalibrationJobContext so they keep polling across tab switches; one slot per
+  // target dataset selection, so different datasets can run side by side.
   const jobs = useCalibrationJobs();
-  const applySlot: CalibrationJobSlot = useMemo(
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
+  const applyFamily: CalibrationJobFamily = useMemo(
     () => ({ board: "scale_factor", sourcePathIdx }), [sourcePathIdx]);
-  const applyJob = jobs.jobFor(applySlot);
-  const applyCancel = jobs.cancelStateFor(applySlot);
-  const applyRunning = !!applyJob && isApplyJobActive(applyJob);
-  const runApply = useCallback(async () => {
+  const applyJobs = jobs.jobsFor(applyFamily);
+  const applyRunning = applyJobs.some(j => isApplyJobActive(j.status));
+  const runApply = useCallback(async (datasets: number[]) => {
     const dtVal = parseFloat(dt);
-    await jobs.startApply(applySlot, {
+    const sorted = [...datasets].sort((a, b) => a - b);
+    await jobs.startApply({ ...applyFamily, datasets: sorted }, {
       board: "scale_factor", stereo: false, source_path_idx: sourcePathIdx,
       type_name: vectorTypeName,
       // Empty dt is omitted: apply falls back to the model-stamped dt.
       ...(Number.isFinite(dtVal) ? { dt: dtVal } : {}),
+      // Always explicit, so the request states which datasets it applies to.
+      active_paths: sorted,
     });
-  }, [jobs, applySlot, dt, vectorTypeName, sourcePathIdx]);
+  }, [jobs, applyFamily, dt, vectorTypeName, sourcePathIdx]);
 
   // --- Set as active ------------------------------------------------------------
   const isActive = config?.calibration?.active === "scale_factor";
@@ -636,8 +660,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </div>
           </div>
 
-          {/* Camera subfolders toggle — for standard and IM7 formats */}
-          {(imageType === "standard" || imageType === "lavision_im7") && (
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+            suggestedZeroBased={validating ? null : validation?.suggested_zero_based} />
+
+          {/* Camera subfolders toggle — for standard and IM7 formats; hidden for a one-camera rig, which
+              always resolves at the source root (rig size, not the selected cameras) */}
+          {(imageType === "standard" || imageType === "lavision_im7") && config?.paths?.camera_count !== 1 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Switch
@@ -705,7 +733,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
-                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  ? `Found ${validation.found_count} calibration images`
                   : undefined
               }
             />
@@ -900,19 +928,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               {c2.busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating…</> : "Generate Model"}
             </Button>
 
-            {/* Calibrate Vectors with type selection (same split control as the other tabs) */}
-            <div className="flex items-center gap-1">
-              <Button onClick={runApply}
-                      disabled={!result || applyRunning}
-                      className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-                      title={!result ? "Generate the model first" : "Calibrate vectors"}>
-                {applyRunning
-                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Calibrating…</>
-                  : "Calibrate Vectors"}
-              </Button>
+            {/* Calibrate Vectors: PIV type + target datasets (same control as the other tabs) */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium">Calibrate vectors:</span>
               <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}
                       disabled={applyRunning}>
-                <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                <SelectTrigger className="w-[130px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -920,6 +941,15 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                   <SelectItem value="ensemble">Ensemble</SelectItem>
                 </SelectContent>
               </Select>
+              <ApplyDatasetButtons
+                basePaths={basePaths}
+                defaultIdx={defaultDatasetIdx(config)}
+                jobs={applyJobs}
+                onApply={runApply}
+                disabled={!result}
+                title={!result ? "Generate the model first" : "Calibrate vectors"}
+                buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+              />
             </div>
 
             <Button onClick={setAsActive} disabled={isActive}
@@ -929,21 +959,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </Button>
           </div>
 
-          {/* Apply progress (shared with every other calibration tab) */}
-          <CalibrationJobProgress job={applyJob} title="Vector Calibration"
-            onCancel={() => jobs.cancelApply(applySlot)}
-            cancelling={applyCancel.requested} cancelError={applyCancel.error} />
-
-          {applyJob?.status === "completed" && (
-            <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
-              <CheckCircle2 className="h-4 w-4 inline mr-2" />Vector calibration completed.
-            </div>
-          )}
-          {applyJob?.status === "failed" && (
-            <div className="p-3 border rounded bg-red-50 text-red-700 text-sm">
-              <AlertTriangle className="h-4 w-4 inline mr-2" />Apply failed: {applyJob.error || "unknown"}
-            </div>
-          )}
+          {/* Apply progress / results (shared with every other calibration tab) */}
+          <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="Vector calibration"
+            onCancel={datasets => jobs.cancelApply({ ...applyFamily, datasets })} />
 
           <GlobalFrameSummary
             gc={gc} cameraOptions={cameraOptions} board="scale_factor" sourcePathIdx={sourcePathIdx} />
@@ -966,7 +984,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               <div><span className="text-muted-foreground">Scale:</span>
                 <span className="ml-2 font-medium">{result.px_per_mm?.toFixed(4)} px/mm</span></div>
               <div><span className="text-muted-foreground">Δt:</span>
-                <span className="ml-2 font-medium">{result.dt} s</span></div>
+                {result.dt == null
+                  ? <span className="ml-2 font-medium text-amber-600">dt missing — regenerate</span>
+                  : <span className="ml-2 font-medium">{result.dt} s</span>}</div>
               <div><span className="text-muted-foreground">Axes:</span>
                 <span className="ml-2 font-medium">+X {result.x_dir}, +Y {result.y_dir}{result.swap_axes ? ", swapped" : ""}</span></div>
             </div>

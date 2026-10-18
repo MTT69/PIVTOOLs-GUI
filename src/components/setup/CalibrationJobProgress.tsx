@@ -2,7 +2,7 @@ import React from "react";
 import { Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ApplyJobStatus, formatDuration, isApplyJobActive } from "@/lib/applyJob";
+import { ApplyJobStatus, formatDtUsed, formatDuration, isApplyJobActive } from "@/lib/applyJob";
 
 interface CalibrationJobProgressProps {
   /** Poll result for the apply job; null before one starts. */
@@ -35,6 +35,7 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
   cancelError = null,
 }) => {
   if (!job) return null;
+  const dtUsed = formatDtUsed(job);
 
   if (job.status === "cancelled") {
     const frames = job.frame_total ? ` at frame ${job.frame_done ?? 0}/${job.frame_total}` : "";
@@ -43,6 +44,7 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
         <XCircle className="h-4 w-4 inline mr-2" />
         {title} cancelled{job.unit_label ? ` during ${job.unit_label}` : ""}{frames}.
         {" "}Frames already written remain on disk.
+        {dtUsed && <div className="text-xs mt-1">{dtUsed}</div>}
       </div>
     );
   }
@@ -62,6 +64,7 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
   if (job.estimated_remaining !== undefined) {
     detail.push(`~${formatDuration(job.estimated_remaining)} remaining`);
   }
+  if (dtUsed) detail.push(dtUsed);
 
   return (
     <div className="mt-4 p-3 border rounded bg-green-50">
