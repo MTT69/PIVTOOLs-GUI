@@ -162,6 +162,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const settingsReadyRef = useRef(false);
   const settingsSeqRef = useRef(0);
   const [settingsEpoch, setSettingsEpoch] = useState(0);
+  // Index of the source whose sidecar the form now holds. The viewer renders only for that
+  // source: on the render that switches source, the previous source's valid validation is
+  // still set, and the viewer's own fetch effect runs before any parent effect could clear it.
+  const [hydratedIdx, setHydratedIdx] = useState<number | null>(null);
   // The source directory the displayed form/model belongs to — lets the persist
   // effect detect an in-place path edit (same index, new string) and rehydrate
   // instead of writing the old source's settings into the new directory.
@@ -219,6 +223,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         setUseImages(Boolean(sf.use_images));
         loadedSourcePathRef.current = calibrationSources[sourcePathIdx] ?? '';
         settingsReadyRef.current = true;
+        setHydratedIdx(sourcePathIdx);
         setSettingsEpoch(n => n + 1);
       } catch (e) {
         if (seq !== settingsSeqRef.current) return;
@@ -778,9 +783,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           })()}
 
           {/* Image viewer with origin/measure picking (shared component — same as other tabs).
-              Gated on a valid source (Dotboard pattern) so a missing-image 404 never
+              Gated on a valid source (Dotboard pattern) whose settings have loaded, so a 404 never
               reaches the canvas overlay. */}
-          {validation?.valid && (
+          {validation?.valid && hydratedIdx === sourcePathIdx && (
           <CalibrationImageViewer
             backendUrl="/backend"
             sourcePathIdx={sourcePathIdx}

@@ -33,7 +33,6 @@ export interface CameraValidationResult {
   image_size?: [number, number];
   camera_path?: string;
   format_detected?: string;
-  container_format?: boolean;
   error?: string;
   suggested_pattern?: string;
   suggested_subfolder?: string;

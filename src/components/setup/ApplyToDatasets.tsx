@@ -51,7 +51,10 @@ interface ApplyDatasetButtonsProps {
   basePaths: string[];
   /** Initial picker selection (see {@link defaultDatasetIdx}). */
   defaultIdx: number;
-  /** The family's jobs: a button is busy while a job with exactly its targets runs. */
+  /**
+   * The family's jobs: a button is busy while a job with exactly its targets runs, and disabled
+   * while any job on one of its targets runs.
+   */
   jobs: CalibrationFamilyJob[];
   /** Start an apply on these base-path indices (sorted ascending). */
   onApply: (datasets: number[]) => void;
@@ -70,17 +73,20 @@ export const ApplyDatasetButtons: React.FC<ApplyDatasetButtonsProps> = ({
   const n = basePaths.length;
   const idx = picked < n ? picked : 0;
   const all = Array.from({ length: n }, (_, i) => i);
-  const running = (targets: number[]) =>
-    jobs.some(j => sameTargets(j.datasets, targets) && isApplyJobActive(j.status));
+  const active = jobs.filter(j => isApplyJobActive(j.status));
 
   const button = (label: string, targets: number[]) => {
-    const busy = running(targets);
+    const busy = active.some(j => sameTargets(j.datasets, targets));
+    // A running job on any of these datasets writes the same output folders, so the backend's
+    // overlap guard would refuse this apply; disable it here instead of showing a failed row.
+    const blocked = !busy && active.some(j => j.datasets.some(d => targets.includes(d)));
     return (
       <Button
         onClick={() => onApply(targets)}
-        disabled={disabled || busy || n === 0}
+        disabled={disabled || busy || blocked || n === 0}
         className={buttonClassName}
-        title={n === 0 ? "Configure base paths (Settings → Directories) first" : title}
+        title={n === 0 ? "Configure base paths (Settings → Directories) first"
+          : blocked ? "An apply is already running on one of these datasets" : title}
       >
         {busy && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
         {label}

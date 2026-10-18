@@ -587,7 +587,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               {/* Reconstruct 3D Vectors: PIV type, cam2 interpolator, target datasets */}
               <div className="flex gap-2 items-center flex-wrap">
                 <span className="text-sm font-medium">Reconstruct 3D vectors:</span>
-                <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
+                <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange} disabled={isReconstructing}>
                   <SelectTrigger className="w-[130px]">
                     <SelectValue />
                   </SelectTrigger>

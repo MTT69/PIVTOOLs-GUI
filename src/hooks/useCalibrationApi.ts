@@ -11,14 +11,6 @@ export interface V2Fiducials {
   y_axis?: Pt;
 }
 
-export interface V2Detected {
-  points: number[][];
-  grid: number[][];
-  width: number;
-  height: number;
-  frame: number;
-}
-
 const BASE = "/backend/calibration";
 
 function qs(o: Record<string, any>): string {
@@ -50,34 +42,6 @@ async function fetchPngBase64(url: string): Promise<string | null> {
 export function useCalibrationApi() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const detect = useCallback(
-    async (body: any, opts?: { datum?: boolean }): Promise<V2Detected | null> => {
-      setBusy(true);
-      setError(null);
-      try {
-        const path = opts?.datum ? "/detect_datum" : "/detect_frame";
-        const data = await postJson(`${BASE}${path}`, body);
-        if (!data.success) {
-          setError(data.error || "board not detected");
-          return null;
-        }
-        return {
-          points: data.image_points,
-          grid: data.grid_indices,
-          width: data.width,
-          height: data.height,
-          frame: data.frame,
-        };
-      } catch (e: any) {
-        setError(errorMessage(e));
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
 
   const loadFrameImage = useCallback(
     async (query: Record<string, any>, datum = false): Promise<string | null> => {
@@ -198,7 +162,7 @@ export function useCalibrationApi() {
 
   return {
     busy, error, setError,
-    detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel,
+    loadFrameImage, snap, generate, generateScaleFactor, loadModel,
     listFigures, figureUrl, validateSource, globalCompute,
   };
 }
