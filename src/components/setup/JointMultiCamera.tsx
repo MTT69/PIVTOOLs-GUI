@@ -27,7 +27,8 @@ interface JointMultiCameraProps {
   board: "charuco" | "dotboard";
   cameraOptions: number[];
   sourcePathIdx: number;
-  numImages: number;
+  // View count when known (entered or validated); null = auto, resolved by the backend.
+  numImages: number | null;
   imageFormat: string;
   imageType: string;
   modelType: "pinhole" | "polynomial";
@@ -48,9 +49,13 @@ interface JointMultiCameraProps {
   // Apply-to-vectors, threaded down from the parent tab's calibration hook (shared with the
   // single-camera button). Applies each camera's joint 2D model to its PIV vectors — planar, not
   // 3C. Optional so the component is inert if a parent does not wire it.
-  calibrateVectors?: (forAllCameras: boolean, typeName: string, activePaths?: number[]) => void;
+  calibrateVectors?: (typeName: string, activePaths?: number[]) => void;
   vectorJobStatus?: ApplyJobStatus | null;
   isVectorCalibrating?: boolean;
+  // Cancel for the apply job (the job itself lives in CalibrationJobContext).
+  onCancelApply?: () => void;
+  applyCancelling?: boolean;
+  applyCancelError?: string | null;
 }
 
 /** The dominant global-index direction of an extend hint, as a signed-axis tag (+X / −X / +Y / −Y) —
@@ -140,6 +145,9 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   calibrateVectors,
   vectorJobStatus,
   isVectorCalibrating,
+  onCancelApply,
+  applyCancelling,
+  applyCancelError,
 }) => {
   const {
     resolveData,
@@ -553,9 +561,11 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     const c0 = grid.datumCamera;
     const sorted = [...cameras].sort((a, b) => a - b);
     const datumIdx = sorted.indexOf(c0);
+    // An auto (unset) view count is taken from the views the resolve actually returned.
+    const nViews = numImages ?? (Math.max(-1, ...resolveData.views.map((x) => x.view)) + 1);
     const frames = [
       grid.datumView,
-      ...Array.from({ length: numImages }, (_, i) => i).filter((v) => v !== grid.datumView),
+      ...Array.from({ length: nViews }, (_, i) => i).filter((v) => v !== grid.datumView),
     ];
     // Step 0: define the world frame (origin/+X/+Y) on the datum camera's datum view — the start of
     // the single clean flow, so the user no longer presses a separate Origin button first.
@@ -1001,7 +1011,7 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
         <div className="mt-3 space-y-2">
           <div className="flex items-center gap-1">
             <Button
-              onClick={() => calibrateVectors(true, vectorTypeName)}
+              onClick={() => calibrateVectors(vectorTypeName)}
               disabled={isVectorCalibrating}
               className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
               title="Calibrate vectors for all cameras with the joint model"
@@ -1030,7 +1040,8 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
             </Select>
           </div>
 
-          <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
+          <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration"
+            onCancel={onCancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
           {vectorJobStatus?.status === "completed" && (
             <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
               <CheckCircle2 className="h-4 w-4 inline mr-2" />

@@ -198,34 +198,9 @@ export function useCalibrationApi() {
     }
   }, []);
 
-  const startApply = useCallback(async (body: any): Promise<any> => {
-    setError(null);
-    try {
-      const data = await postJson(`${BASE}/apply`, body);
-      if (!data.success) {
-        setError(data.error || "apply failed to start");
-        return null;
-      }
-      return data;
-    } catch (e: any) {
-      setError(errorMessage(e));
-      return null;
-    }
-  }, []);
-
-  const applyStatus = useCallback(async (jobId: string): Promise<any> => {
-    // Never throw out of a poll loop: a transient network blip returns a failed status
-    // so callers stop polling instead of leaving a spinner stuck forever.
-    try {
-      return await fetchJson(`${BASE}/apply/status/${jobId}`);
-    } catch (e: any) {
-      return { status: "failed", error: errorMessage(e) };
-    }
-  }, []);
-
   return {
     busy, error, setError,
     detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel,
-    listFigures, figureUrl, validateSource, globalCompute, startApply, applyStatus,
+    listFigures, figureUrl, validateSource, globalCompute,
   };
 }

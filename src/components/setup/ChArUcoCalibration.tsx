@@ -13,6 +13,8 @@ import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
+import { CameraSubfolderInputs, SubfolderSuggestion } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
   useWorldFrame,
@@ -56,7 +58,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
 
     // Board params
     squaresH,
@@ -94,6 +98,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     // Vector calibration job tracking
     vectorJobStatus,
     isVectorCalibrating,
+    applyCancelling,
+    applyCancelError,
+    cancelApply,
+    changedSinceGenerate,
 
     // Model and detections
     cameraModel,
@@ -122,9 +130,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
   // Track the frame currently shown in the viewer (1-based, matches datumFrame).
   // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
-  const [currentFrame, setCurrentFrame] = useState<number>(parseInt(datumFrame) || 1);
+  const [currentFrame, setCurrentFrame] = useState<number>(datumFrame);
   const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
-  const datumNum = parseInt(datumFrame) || 1;
+  const datumNum = datumFrame;
   const onDatumFrame = currentFrame === datumNum;
 
   // Multi-camera datasets are always solved jointly (one shared board); a single camera uses the
@@ -134,7 +142,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
   // World-frame (coordinate-system x,y) picker — datum frame only (single-camera mono solve).
   const wf = useWorldFrame({
-    board: "charuco", camera, sourcePathIdx, datumFrame: parseInt(datumFrame) || 1,
+    board: "charuco", camera, sourcePathIdx, datumFrame,
     // Empty fields are omitted — the backend falls to the sidecar value or errors.
     boardParams: () => {
       const p: Record<string, unknown> = {};
@@ -149,17 +157,26 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     imageFormat, imageType,
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
+  // ChArUco corner ids are absolute, so the backend's default frame is board-anchored and no
+  // clicks are needed. A PARTLY picked frame would be dropped in favour of that default, so
+  // Generate waits until the pick is either empty or complete.
+  const wfPartial = !wf.complete && !!(wf.clicks.origin || wf.clicks.x_axis || wf.clicks.y_axis);
+  const partialTitle = wfPartial ? "Finish the world frame (Origin → +X → +Y) or clear it to use the board's default frame" : undefined;
 
-  // When a saved model loads, restore its world frame + show the overlay.
-  // The dots themselves are restored from inputs.mat by the hook's own effect,
-  // independently of whether a model exists -- detections survive a model delete,
-  // and re-detecting them here was the whole cost this change removes.
+  // Restore the saved world frame whenever one is stored — from the model, or from inputs.mat
+  // after a model delete. The dots are restored from inputs.mat by the hook. A loaded model
+  // also shows the overlay.
   React.useEffect(() => {
-    if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasModel, loadedWorldFrame]);
+  }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (hasModel) setShowOverlay(true);
+  }, [hasModel, setShowOverlay]);
+
+  // Datum frame commits on blur (a half-typed number must not re-target the world frame).
+  const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
+  React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
 
   // Local state
   // Open by default (2026-09-16): frames are warmed on validation and the dot
@@ -181,7 +198,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         result[frameIdx] = {
           grid_points: value.grid_points,
           grid_indices: value.grid_indices,
-          reprojection_error: value.reprojection_error,
         };
       }
     }
@@ -285,12 +301,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
+                placeholder="auto"
                 onChange={e => setNumImages(e.target.value)}
-                onBlur={() => {
-                  const finalVal = parseInt(numImages) || 10;
-                  setNumImages(String(finalVal));
-                }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
             </div>
           </div>
 
@@ -318,39 +332,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && cameraOptions.length > 1 && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {cameraOptions.map((cam, idx) => (
-                    <div key={cam}>
-                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
-                      <Input
-                        placeholder={`Cam${cam}`}
-                        value={cameraSubfolders[idx] || ''}
-                        onChange={e => {
-                          const newSubfolders = [...cameraSubfolders];
-                          while (newSubfolders.length < cameraOptions.length) {
-                            newSubfolders.push('');
-                          }
-                          newSubfolders[idx] = e.target.value;
-                          setCameraSubfolders(newSubfolders);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={cameraOptions}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Section 3: Validation Status */}
@@ -385,28 +372,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Suggested Subfolder Button */}
+          {/* Suggested Subfolder Button. Only the selected camera is validated, so the other
+              cameras' folders are inferred by swapping the camera number into its suggestion;
+              each is written to its own camera's slot. */}
           {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
-            const cams: number[] = config?.paths?.camera_numbers || [1, 2];
-            const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
-            const label = [...new Set(perCam)].join('" / "');
-            return (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Subfolder suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setUseCameraSubfolders(true);
-                    setCameraSubfolders(perCam);
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use "{label}"
-                </Button>
-              </div>
-            );
+            const perCam: Record<number, string> = {};
+            for (const c of cameraOptions) perCam[c] = sub.replace(/\d+/, String(c));
+            return <SubfolderSuggestion suggestions={perCam} onApply={applySubfolderSuggestions} />;
           })()}
 
           {/* Section 4: ChArUco Board Parameters */}
@@ -508,9 +481,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 <Input
                   type="text" inputMode="numeric"
                   min={1}
-                  value={datumFrame}
-                  onChange={e => setDatumFrame(e.target.value)}
-                  onBlur={() => setDatumFrame(String(parseInt(datumFrame) || 1))}
+                  value={datumFrameInput}
+                  onChange={e => setDatumFrameInput(e.target.value)}
+                  onBlur={() => {
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
@@ -525,17 +502,20 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               board="charuco"
               cameraOptions={cameraOptions}
               sourcePathIdx={sourcePathIdx}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               imageFormat={imageFormat}
               imageType={imageType}
               modelType={modelType}
               validationValid={!!validation?.valid}
               viewerRefreshKey={viewerRefreshKey}
-              datumFrame={parseInt(datumFrame) || 1}
+              datumFrame={datumFrame}
               dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
               vectorJobStatus={vectorJobStatus}
               isVectorCalibrating={isVectorCalibrating}
+              onCancelApply={cancelApply}
+              applyCancelling={applyCancelling}
+              applyCancelError={applyCancelError}
             />
           )}
 
@@ -574,7 +554,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={camera}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               refreshKey={viewerRefreshKey}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
@@ -612,8 +592,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <div className="flex gap-2 items-center flex-wrap">
               <Button
                 onClick={async () => { await generateCameraModelAll(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
-                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
-                title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || wfPartial}
+                title={partialTitle}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {(isCalibrating || isMultiCameraCalibrating) ? (
@@ -629,8 +609,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               {cameraOptions.length > 1 && (
                 <Button
                   onClick={async () => { await generateCameraModel(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
-                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
-                  title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || wfPartial}
+                  title={partialTitle}
                   variant="outline"
                 >
                   This Camera Only
@@ -640,7 +620,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               {/* Calibrate Vectors with type selection */}
               <div className="flex items-center gap-1">
                 <Button
-                  onClick={() => calibrateVectors(true, vectorTypeName)}
+                  onClick={() => calibrateVectors(vectorTypeName)}
                   disabled={!hasModel || isVectorCalibrating}
                   className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
                   title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
@@ -684,9 +664,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
             {validation?.valid && !wf.complete && (
               <p className="text-xs text-muted-foreground">
-                Set the coordinate frame before generating: open the viewer, click <strong>Detect Markers</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+                {wfPartial
+                  ? <>Finish the world frame (<strong>Origin → +X → +Y</strong>) or clear it before generating.</>
+                  : <>No world frame picked: the model uses the board&apos;s default frame (origin at the lowest-index corner, axes along the board). To set your own, click <strong>Detect Markers</strong> in the viewer and pick <strong>Origin → +X → +Y</strong> on the datum frame.</>}
               </p>
             )}
+
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
 
             {modelLoadError && (
               <div className="text-sm text-red-600 flex items-center gap-1">
@@ -797,7 +781,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             )}
 
             {/* Vector Calibration Progress */}
-            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
+            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration"
+              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
 
             {/* Vector Calibration Completed */}
             {vectorJobStatus?.status === 'completed' && (

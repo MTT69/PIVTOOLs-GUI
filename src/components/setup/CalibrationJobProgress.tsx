@@ -1,20 +1,27 @@
 import React from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ApplyJobStatus, formatDuration } from "@/lib/applyJob";
+import { ApplyJobStatus, formatDuration, isApplyJobActive } from "@/lib/applyJob";
 
 interface CalibrationJobProgressProps {
   /** Poll result for the apply job; null before one starts. */
   job: ApplyJobStatus | null | undefined;
   /** Heading, e.g. "Vector Calibration" or "3D Reconstruction". */
   title: string;
+  /** Requests a cancel; the button is hidden when omitted. */
+  onCancel?: () => void;
+  /** A cancel request is waiting for the backend to settle the job. */
+  cancelling?: boolean;
+  /** Why the last cancel request failed. */
+  cancelError?: string | null;
 }
 
 /**
- * In-progress display for the calibration apply job, shared by every calibration tab.
+ * In-progress and cancelled display for the calibration apply job, shared by every tab.
  *
- * Renders nothing unless the job is starting/running — each tab keeps its own completed and
- * failed blocks, which carry tab-specific detail (global alignment, camera counts).
+ * Renders nothing for completed/failed jobs — each tab keeps its own completed and failed
+ * blocks, which carry tab-specific detail (global alignment, camera counts).
  *
  * Every detail segment is omitted when the backend has not reported it, so nothing on screen
  * is invented: no zero frame counts before the first tick, no ETA before progress leaves 0
@@ -23,8 +30,24 @@ interface CalibrationJobProgressProps {
 export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
   job,
   title,
+  onCancel,
+  cancelling = false,
+  cancelError = null,
 }) => {
-  if (!job || (job.status !== "running" && job.status !== "starting")) return null;
+  if (!job) return null;
+
+  if (job.status === "cancelled") {
+    const frames = job.frame_total ? ` at frame ${job.frame_done ?? 0}/${job.frame_total}` : "";
+    return (
+      <div className="mt-4 p-3 border rounded bg-amber-50 text-sm text-amber-800">
+        <XCircle className="h-4 w-4 inline mr-2" />
+        {title} cancelled{job.unit_label ? ` during ${job.unit_label}` : ""}{frames}.
+        {" "}Frames already written remain on disk.
+      </div>
+    );
+  }
+
+  if (!isApplyJobActive(job)) return null;
 
   const showDatasets = job.total_units > 1;
   // processed_units counts units FINISHED, so the running one is the next index along. It can
@@ -45,12 +68,18 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
       <div className="flex items-center gap-2 text-sm mb-2">
         <Loader2 className="h-4 w-4 animate-spin text-green-600" />
         <strong>{title}:</strong>
-        <span className="capitalize">{job.status}</span>
+        <span className="capitalize">{cancelling ? "cancelling" : job.status}</span>
+        {onCancel && (
+          <Button size="sm" variant="outline" className="ml-auto h-7" onClick={onCancel} disabled={cancelling}>
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </Button>
+        )}
       </div>
       <Progress value={job.progress} />
       {detail.length > 0 && (
         <div className="text-xs text-muted-foreground mt-1">{detail.join(" | ")}</div>
       )}
+      {cancelError && <div className="text-xs text-red-600 mt-1">{cancelError}</div>}
     </div>
   );
 };

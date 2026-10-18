@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,8 @@ import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewe
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
-import { ApplyJobStatus, readApplyJobStatus } from "@/lib/applyJob";
+import { isApplyJobActive } from "@/lib/applyJob";
+import { CalibrationJobSlot, useCalibrationJobs } from "@/contexts/CalibrationJobContext";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
 import {
@@ -105,7 +106,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // Figures are rendered by the shared CalibrationFigureGallery (keyed on `result`), so
   // there is no local figure-list state — it fetches the list for the model locator.
   const [result, setResult] = useState<any>(null);
-  const [applyJob, setApplyJob] = useState<ApplyJobStatus | null>(null);
 
   // --- Vector calibration type (rig.piv_type in the settings sidecar) ------------
   const [vectorTypeName, setVectorTypeName] = useState<"instantaneous" | "ensemble">("instantaneous");
@@ -359,9 +359,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       ? { w: Number(validation.image_size[0]), h: Number(validation.image_size[1]) }
       : null;
 
-  // Apply-poll timer; cleared on unmount so a switched-away tab stops polling.
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (pollTimer.current) clearTimeout(pollTimer.current); }, []);
 
   // --- Restore saved model on camera/source change (or in-place path edit) ------
   const restoredFor = useRef<string>("");
@@ -500,25 +497,22 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
       imageFormat, imageType, useImages, locator]);
 
   // --- Apply (model-agnostic mono apply job) ------------------------------------
+  // The job lives in CalibrationJobContext so it keeps polling across tab switches.
+  const jobs = useCalibrationJobs();
+  const applySlot: CalibrationJobSlot = useMemo(
+    () => ({ board: "scale_factor", sourcePathIdx }), [sourcePathIdx]);
+  const applyJob = jobs.jobFor(applySlot);
+  const applyCancel = jobs.cancelStateFor(applySlot);
+  const applyRunning = !!applyJob && isApplyJobActive(applyJob);
   const runApply = useCallback(async () => {
     const dtVal = parseFloat(dt);
-    const started = await c2.startApply({
+    await jobs.startApply(applySlot, {
       board: "scale_factor", stereo: false, source_path_idx: sourcePathIdx,
       type_name: vectorTypeName,
       // Empty dt is omitted: apply falls back to the model-stamped dt.
       ...(Number.isFinite(dtVal) ? { dt: dtVal } : {}),
     });
-    if (!started?.job_id) return;
-    setApplyJob({ status: "running", progress: 0, processed_units: 0, total_units: 0 });
-    const poll = async () => {
-      const st = await c2.applyStatus(started.job_id);  // never throws (returns failed status)
-      setApplyJob(readApplyJobStatus(st));
-      if (st.status === "running" || st.status === "starting") {
-        pollTimer.current = setTimeout(poll, 1000);
-      }
-    };
-    poll();
-  }, [dt, vectorTypeName, sourcePathIdx]);
+  }, [jobs, applySlot, dt, vectorTypeName, sourcePathIdx]);
 
   // --- Set as active ------------------------------------------------------------
   const isActive = config?.calibration?.active === "scale_factor";
@@ -909,15 +903,15 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             {/* Calibrate Vectors with type selection (same split control as the other tabs) */}
             <div className="flex items-center gap-1">
               <Button onClick={runApply}
-                      disabled={!result || applyJob?.status === "running" || applyJob?.status === "starting"}
+                      disabled={!result || applyRunning}
                       className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
                       title={!result ? "Generate the model first" : "Calibrate vectors"}>
-                {applyJob && (applyJob.status === "running" || applyJob.status === "starting")
+                {applyRunning
                   ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Calibrating…</>
                   : "Calibrate Vectors"}
               </Button>
               <Select value={vectorTypeName} onValueChange={handleVectorTypeChange}
-                      disabled={applyJob?.status === "running" || applyJob?.status === "starting"}>
+                      disabled={applyRunning}>
                 <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
                   <SelectValue />
                 </SelectTrigger>
@@ -936,7 +930,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           </div>
 
           {/* Apply progress (shared with every other calibration tab) */}
-          <CalibrationJobProgress job={applyJob} title="Vector Calibration" />
+          <CalibrationJobProgress job={applyJob} title="Vector Calibration"
+            onCancel={() => jobs.cancelApply(applySlot)}
+            cancelling={applyCancel.requested} cancelError={applyCancel.error} />
 
           {applyJob?.status === "completed" && (
             <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">

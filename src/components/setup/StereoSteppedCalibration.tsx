@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -91,7 +93,10 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
+    sourceEpoch,
 
     // Board geometry
     dotSpacingMm,
@@ -146,12 +151,16 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     // Reconstruct
     reconstructJobStatus,
     isReconstructing,
+    applyCancelling,
+    applyCancelError,
+    cancelApply,
+    changedSinceGenerate,
+    clicksSaveError,
 
     // Actions
     detect,
     snapFiducial,
     generateModel,
-    loadModel,
     reconstructVectors,
     interpolator,
     setInterpolator,
@@ -175,6 +184,14 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
   const [labelTarget, setLabelTarget] = useState<{ frameIdx: number; camera: number } | null>(null);
   const [displayedFrame, setDisplayedFrame] = useState<number>(datumFrame);
+
+  // Pick / label modes belong to the source + pair they were started on: a source, pair or
+  // path change resets them along with the hook's per-source state.
+  React.useEffect(() => {
+    setFiducialSelectMode(false);
+    setFiducialStepIdx(0);
+    setLabelTarget(null);
+  }, [sourceEpoch]);
 
   // In-flight latches for the async click handlers (snap / pose identify): a ref blocks a
   // re-entrant click that would otherwise act on this render's stale step/target.
@@ -523,12 +540,10 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 <Input
                   type="text" inputMode="numeric"
                   value={numImages}
+                  placeholder="auto"
                   onChange={e => setNumImages(e.target.value)}
-                  onBlur={() => {
-                    const finalVal = parseInt(numImages) || 10;
-                    setNumImages(String(finalVal));
-                  }}
                 />
+                <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
               </div>
             </div>
 
@@ -552,32 +567,13 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             )}
 
-            {useCameraSubfolders && cameraOptions.length > 0 && (
-              <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-                <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-                <p className="text-xs text-muted-foreground">
-                  Camera subfolders are relative to the calibration source path.
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {cameraOptions.map((cam, idx) => (
-                    <div key={cam}>
-                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
-                      <Input
-                        placeholder={`Cam${cam}`}
-                        value={cameraSubfolders[idx] || ''}
-                        onChange={e => {
-                          const newSubfolders = [...cameraSubfolders];
-                          while (newSubfolders.length < cameraOptions.length) {
-                            newSubfolders.push('');
-                          }
-                          newSubfolders[idx] = e.target.value;
-                          setCameraSubfolders(newSubfolders);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {useCameraSubfolders && (
+              <CameraSubfolderInputs
+                cameras={[cam1, cam2]}
+                cameraSubfolders={cameraSubfolders}
+                setSubfolderFor={setSubfolderFor}
+                sourcePath={calibrationSources[sourcePathIdx] || ""}
+              />
             )}
 
             {validation && (
@@ -611,25 +607,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             )}
 
-            {/* Suggested camera subfolder (Did you mean) */}
-            {validation && !validating && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Subfolder suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setUseCameraSubfolders(true);
-                    setCameraSubfolders([
-                      validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
-                      validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
-                    ]);
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use &quot;{validation.cam1?.suggested_subfolder ?? validation.cam2?.suggested_subfolder}&quot; / &quot;{validation.cam2?.suggested_subfolder ?? validation.cam1?.suggested_subfolder}&quot;
-                </Button>
-              </div>
+            {/* Suggested camera subfolder (Did you mean): each camera's own suggestion */}
+            {validation && !validating && !validation.valid && (
+              <SubfolderSuggestion
+                suggestions={subfolderSuggestions({ [cam1]: validation.cam1, [cam2]: validation.cam2 })}
+                onApply={applySubfolderSuggestions}
+              />
             )}
           </div>
 
@@ -754,7 +737,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             <h3 className="text-sm font-semibold">Detection + Fiducials</h3>
 
             <p className="text-xs text-muted-foreground">
-              Detects dots on {parseInt(numImages) || 10} frames for BOTH cameras and runs a joint
+              Detects dots on {frameCount ?? "the found"} frames for BOTH cameras and runs a joint
               stereo pinhole fit using both Z levels. Each camera&apos;s datum fiducial clicks
               anchor its world frame.
             </p>
@@ -785,6 +768,13 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
 
             {sequenceStatus === 'detecting' && (
               <Progress value={detectionProgress} className="w-full" />
+            )}
+
+            {clicksSaveError && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{clicksSaveError}</AlertDescription>
+              </Alert>
             )}
 
             {sequenceError && (
@@ -1046,7 +1036,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 backendUrl="/backend"
                 sourcePathIdx={sourcePathIdx}
                 camera={viewerCamera}
-                numImages={parseInt(numImages) || 10}
+                numImages={frameCount}
                 refreshKey={viewerRefreshKey}
                 stereoParams={{ cam1, cam2 }}
                 calibrationParams={{}}
@@ -1178,6 +1168,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             )}
 
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
+
             {modelLoadError && (
               <div className="text-sm text-red-600 flex items-center gap-1">
                 <AlertTriangle className="h-4 w-4" />
@@ -1186,7 +1178,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             )}
 
             {/* Reconstruct progress + results */}
-            <CalibrationJobProgress job={reconstructJobStatus} title="3C Reconstruction" />
+            <CalibrationJobProgress job={reconstructJobStatus} title="3C Reconstruction"
+              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
 
             {reconstructJobStatus?.status === 'completed' && (
               <div className="p-3 border rounded bg-green-50 text-green-700 text-sm">
@@ -1214,19 +1207,19 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             <CardTitle>Stereo Model Results</CardTitle>
             <CardDescription>
               {stereoModel.model_type === 'polynomial3d'
-                ? `Stereo 3D polynomial model (single datum view) for Cameras ${cam1} & ${cam2}`
-                : `Stereo pinhole model for Cameras ${cam1} & ${cam2}`}
+                ? `Stereo 3D polynomial model (single datum view) for Cameras ${stereoModel.cam1} & ${stereoModel.cam2} (solve order)`
+                : `Stereo pinhole model for Cameras ${stereoModel.cam1} & ${stereoModel.cam2} (solve order)`}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {/* Stereo geometry roll-up */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-4">
               <div>
-                <span className="text-muted-foreground">RMS Cam {cam1}:</span>
+                <span className="text-muted-foreground">RMS Cam {stereoModel.cam1}:</span>
                 <span className="ml-2 font-medium">{stereoModel.rms_cam1?.toFixed(4) ?? '—'} px</span>
               </div>
               <div>
-                <span className="text-muted-foreground">RMS Cam {cam2}:</span>
+                <span className="text-muted-foreground">RMS Cam {stereoModel.cam2}:</span>
                 <span className="ml-2 font-medium">{stereoModel.rms_cam2?.toFixed(4) ?? '—'} px</span>
               </div>
               <div>
@@ -1281,8 +1274,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
             {/* Per-camera: intrinsics (pinhole) or per-plane RMS (polynomial) */}
             <div className="grid md:grid-cols-2 gap-6">
               {[
-                { cam: cam1, intr: stereoModel.intrinsics1, planeRms: stereoModel.plane_rms_cam1 },
-                { cam: cam2, intr: stereoModel.intrinsics2, planeRms: stereoModel.plane_rms_cam2 },
+                { cam: stereoModel.cam1, intr: stereoModel.intrinsics1, planeRms: stereoModel.plane_rms_cam1 },
+                { cam: stereoModel.cam2, intr: stereoModel.intrinsics2, planeRms: stereoModel.plane_rms_cam2 },
               ].map(({ cam, intr, planeRms }) => (
                 <div key={`intr_${cam}`} className="space-y-2">
                   <h4 className="text-sm font-semibold mb-2">Camera {cam}</h4>

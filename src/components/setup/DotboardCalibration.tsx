@@ -8,11 +8,13 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
-import { useDotboardCalibration, FrameDetection } from "@/hooks/useDotboardCalibration";
+import { useDotboardCalibration } from "@/hooks/useDotboardCalibration";
 import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
+import { CameraSubfolderInputs, SubfolderSuggestion } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
   useWorldFrame,
@@ -64,7 +66,9 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
 
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
@@ -92,6 +96,10 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     // Vector calibration job tracking
     vectorJobStatus,
     isVectorCalibrating,
+    applyCancelling,
+    applyCancelError,
+    cancelApply,
+    changedSinceGenerate,
 
     // Model and detections
     cameraModel,
@@ -143,17 +151,16 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
 
-  // When a saved model loads, restore its world frame (origin/+X/+Y + origin mm) and
-  // show the overlay — so an existing model presents fully without re-picking.
-  // The dots themselves are restored from inputs.mat by the hook's own effect,
-  // independently of whether a model exists -- detections survive a model delete,
-  // and re-detecting them here was the whole cost this change removes.
+  // Restore the saved world frame (origin/+X/+Y + origin mm) whenever one is stored — from the
+  // model, or from inputs.mat after a model delete — so a re-solve needs no re-picking. The dots
+  // themselves are restored from inputs.mat by the hook. A loaded model also shows the overlay.
   React.useEffect(() => {
-    if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasModel, loadedWorldFrame]);
+  }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (hasModel) setShowOverlay(true);
+  }, [hasModel, setShowOverlay]);
 
   // Local state
   // Open by default (2026-09-16): frames are warmed on validation and the dot
@@ -193,7 +200,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
         result[frameIdx] = {
           grid_points: value.grid_points,
           grid_indices: value.grid_indices,
-          reprojection_error: value.reprojection_error,
         };
       }
     }
@@ -297,12 +303,10 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
+                placeholder="auto"
                 onChange={e => setNumImages(e.target.value)}
-                onBlur={() => {
-                  const finalVal = parseInt(numImages) || 10;
-                  setNumImages(String(finalVal));
-                }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
             </div>
           </div>
 
@@ -330,41 +334,12 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && cameraOptions.length > 1 && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || 'Cam1'}/
-              </p>
-
-              {/* Custom Camera Subfolder Names */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {cameraOptions.map((cam, idx) => (
-                    <div key={cam}>
-                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
-                      <Input
-                        placeholder={`Cam${cam}`}
-                        value={cameraSubfolders[idx] || ''}
-                        onChange={e => {
-                          const newSubfolders = [...cameraSubfolders];
-                          // Ensure array is long enough
-                          while (newSubfolders.length < cameraOptions.length) {
-                            newSubfolders.push('');
-                          }
-                          newSubfolders[idx] = e.target.value;
-                          setCameraSubfolders(newSubfolders);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={cameraOptions}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Section 3: Validation Status */}
@@ -399,29 +374,14 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             </div>
           )}
 
-          {/* Suggested Subfolder Button */}
+          {/* Suggested Subfolder Button. Only the selected camera is validated, so the other
+              cameras' folders are inferred by swapping the camera number into its suggestion;
+              each is written to its own camera's slot. */}
           {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
-            const cams: number[] = config?.paths?.camera_numbers || [1, 2];
-            // Infer per-camera subfolders by replacing the camera number in the suggestion
-            const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
-            const label = [...new Set(perCam)].join('" / "');
-            return (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Subfolder suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setUseCameraSubfolders(true);
-                    setCameraSubfolders(perCam);
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use "{label}"
-                </Button>
-              </div>
-            );
+            const perCam: Record<number, string> = {};
+            for (const c of cameraOptions) perCam[c] = sub.replace(/\d+/, String(c));
+            return <SubfolderSuggestion suggestions={perCam} onApply={applySubfolderSuggestions} />;
           })()}
 
           {/* Section 4: Grid Parameters */}
@@ -491,7 +451,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               board="dotboard"
               cameraOptions={cameraOptions}
               sourcePathIdx={sourcePathIdx}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               imageFormat={imageFormat}
               imageType={imageType}
               modelType={modelType}
@@ -503,6 +463,9 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               calibrateVectors={calibrateVectors}
               vectorJobStatus={vectorJobStatus}
               isVectorCalibrating={isVectorCalibrating}
+              onCancelApply={cancelApply}
+              applyCancelling={applyCancelling}
+              applyCancelError={applyCancelError}
             />
           )}
 
@@ -541,7 +504,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={camera}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               refreshKey={viewerRefreshKey}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
@@ -608,7 +571,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               {/* Calibrate Vectors with type selection */}
               <div className="flex items-center gap-1">
                 <Button
-                  onClick={() => calibrateVectors(true, vectorTypeName)}
+                  onClick={() => calibrateVectors(vectorTypeName)}
                   disabled={!hasModel || isVectorCalibrating}
                   className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
                   title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
@@ -655,6 +618,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 Set the coordinate frame before generating: open the viewer, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
               </p>
             )}
+
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
 
             {modelLoadError && (
               <div className="text-sm text-red-600 flex items-center gap-1">
@@ -710,7 +675,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 {jobStatus.rms_error && (
                   <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} {jobStatus.rms_unit ?? 'px'}</span>
                 )}
-                {jobStatus.num_images_used && (
+                {!!jobStatus.num_images_used && (
                   <span className="ml-2">({jobStatus.num_images_used} images used)</span>
                 )}
               </div>
@@ -792,7 +757,8 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
             })()}
 
             {/* Vector Calibration Progress */}
-            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
+            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration"
+              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
 
             {/* Vector Calibration Completed */}
             {vectorJobStatus?.status === 'completed' && (

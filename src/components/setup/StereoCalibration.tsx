@@ -13,6 +13,8 @@ import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import { postJson, errorMessage } from "@/lib/api";
@@ -62,7 +64,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
 
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
@@ -87,6 +91,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     // Reconstruction job tracking
     reconstructJobStatus,
     isReconstructing,
+    applyCancelling,
+    applyCancelError,
+    cancelApply,
+    changedSinceGenerate,
+    modelLoadError,
 
     // Model and detections
     stereoModel,
@@ -140,11 +149,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   // independently of whether a model exists -- detections survive a model delete,
   // and re-detecting them here was the whole cost this change removes.
   React.useEffect(() => {
-    if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasModel, loadedWorldFrame]);
+  }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (hasModel) setShowOverlay(true);
+  }, [hasModel, setShowOverlay]);
 
   // Local state
   // Open by default (2026-09-16): frames are warmed on validation and the dot
@@ -297,12 +307,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
+                placeholder="auto"
                 onChange={e => setNumImages(e.target.value)}
-                onBlur={() => {
-                  const finalVal = parseInt(numImages) || 10;
-                  setNumImages(String(finalVal));
-                }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
             </div>
           </div>
 
@@ -352,48 +360,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cam1}`}/
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2).
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-muted-foreground">Camera {cam1}</label>
-                    <Input
-                      placeholder={`Cam${cam1}`}
-                      value={cameraSubfolders[0] || ''}
-                      onChange={e => {
-                        const newSubfolders = [...cameraSubfolders];
-                        while (newSubfolders.length < 2) newSubfolders.push('');
-                        newSubfolders[0] = e.target.value;
-                        setCameraSubfolders(newSubfolders);
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Camera {cam2}</label>
-                    <Input
-                      placeholder={`Cam${cam2}`}
-                      value={cameraSubfolders[1] || ''}
-                      onChange={e => {
-                        const newSubfolders = [...cameraSubfolders];
-                        while (newSubfolders.length < 2) newSubfolders.push('');
-                        newSubfolders[1] = e.target.value;
-                        setCameraSubfolders(newSubfolders);
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={[cam1, cam2]}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Section 3: Stereo Validation Status */}
@@ -443,25 +415,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Suggested Subfolder Button */}
-          {validation && !validating && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Subfolder suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setUseCameraSubfolders(true);
-                  setCameraSubfolders([
-                    validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
-                    validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
-                  ]);
-                }}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
-              </Button>
-            </div>
+          {/* Suggested Subfolder Button: each camera's own suggestion, written to its own slot */}
+          {validation && !validating && !validation.valid && (
+            <SubfolderSuggestion
+              suggestions={subfolderSuggestions({ [cam1]: validation.cam1, [cam2]: validation.cam2 })}
+              onApply={applySubfolderSuggestions}
+            />
           )}
 
           {/* Section 4: Grid Parameters */}
@@ -555,7 +514,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               refreshKey={viewerRefreshKey}
               stereoParams={{ cam1, cam2 }}
               onFrameChange={handleFrameChange}
@@ -670,6 +629,15 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </p>
             )}
 
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
+
+            {modelLoadError && (
+              <div className="text-sm text-red-600 flex items-center gap-1 mt-2">
+                <AlertTriangle className="h-4 w-4" />
+                {modelLoadError}
+              </div>
+            )}
+
             {detectionsStale && (
               <div className="text-sm text-gray-500">
                 {detectionsStale}
@@ -712,10 +680,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Stereo calibration completed successfully!
                 {jobStatus.cam1_rms_error !== undefined && (
-                  <span className="ml-2">RMS Cam {cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
+                  <span className="ml-2">RMS Cam {jobStatus.cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
                 )}
                 {jobStatus.cam2_rms_error !== undefined && (
-                  <span className="ml-2">| RMS Cam {cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
+                  <span className="ml-2">| RMS Cam {jobStatus.cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
                 )}
               </div>
             )}
@@ -729,7 +697,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             )}
 
             {/* Reconstruction Job Progress */}
-            <CalibrationJobProgress job={reconstructJobStatus} title="3D Reconstruction" />
+            <CalibrationJobProgress job={reconstructJobStatus} title="3D Reconstruction"
+              onCancel={cancelApply} cancelling={applyCancelling} cancelError={applyCancelError} />
 
             {/* Reconstruction Job Completed */}
             {reconstructJobStatus?.status === 'completed' && (
@@ -756,18 +725,18 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           <CardHeader>
             <CardTitle>Stereo Model Results</CardTitle>
             <CardDescription>
-              Stereo calibration for Cameras {cam1} and {cam2}
+              Stereo calibration for Cameras {stereoModel.cam1} and {stereoModel.cam2} (solve order)
             </CardDescription>
           </CardHeader>
           <CardContent>
             {/* Quality Metrics */}
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">RMS Cam {cam1}</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {stereoModel.cam1}</div>
                 <div className="text-lg font-semibold">{stereoModel.rms_cam1?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">RMS Cam {cam2}</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {stereoModel.cam2}</div>
                 <div className="text-lg font-semibold">{stereoModel.rms_cam2?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
@@ -795,8 +764,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {/* Per-Camera Intrinsics */}
             <div className="grid md:grid-cols-2 gap-6">
               {[
-                { num: cam1, intr: stereoModel.intrinsics1 },
-                { num: cam2, intr: stereoModel.intrinsics2 },
+                { num: stereoModel.cam1, intr: stereoModel.intrinsics1 },
+                { num: stereoModel.cam2, intr: stereoModel.intrinsics2 },
               ].map(({ num, intr }) => (
                 <div key={num} className="p-3 border rounded space-y-2">
                   <h4 className="text-sm font-semibold">Camera {num}</h4>

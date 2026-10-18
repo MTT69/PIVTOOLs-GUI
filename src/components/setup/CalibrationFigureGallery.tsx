@@ -33,7 +33,9 @@ export function CalibrationFigureGallery({
   trigger?: unknown;
   title?: string;
 }) {
-  const [figures, setFigures] = useState<string[]>([]);
+  // The listing is tagged with the query it was fetched for: after a source/camera switch the
+  // previous listing must not be rendered against the new query (its names 404 there).
+  const [listing, setListing] = useState<{ query: string; figures: string[] }>({ query: "", figures: [] });
   const [bust, setBust] = useState(0);
   const queryStr = qs(query);
 
@@ -43,11 +45,11 @@ export function CalibrationFigureGallery({
       try {
         const data = await fetchJson(`${BASE}/figures?${queryStr}`);
         if (!cancelled) {
-          setFigures(data.figures || []);
+          setListing({ query: queryStr, figures: data.figures || [] });
           setBust(Date.now());
         }
       } catch {
-        if (!cancelled) setFigures([]);
+        if (!cancelled) setListing({ query: queryStr, figures: [] });
       }
     })();
     return () => {
@@ -55,6 +57,7 @@ export function CalibrationFigureGallery({
     };
   }, [queryStr, trigger]);
 
+  const figures = listing.query === queryStr ? listing.figures : [];
   if (figures.length === 0) return null;
   return (
     <div className="mt-4 pt-4 border-t">

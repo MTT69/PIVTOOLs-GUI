@@ -12,10 +12,13 @@
  *   frame_done/_total   frames within the unit currently running; 0 until it reports.
  *   unit_label          human name of that unit, e.g. "run3/Cam2" or "run3/Cam1_Cam2".
  *   estimated_remaining seconds; present only while running with progress > 0.
+ *
+ * A `cancelled` job stopped at the user's request; frames already written stay on disk and
+ * `frame_done/frame_total` say how far the interrupted unit got.
  */
 
 export interface ApplyJobStatus {
-  status: 'starting' | 'running' | 'completed' | 'failed';
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   /** Dataset units finished. NOT cameras and NOT frames — see module docstring. */
   processed_units: number;
@@ -49,6 +52,11 @@ export function readApplyJobStatus(data: any): ApplyJobStatus {
     estimated_remaining: data.estimated_remaining,
     error: data.error,
   };
+}
+
+/** True while the job can still change: starting or running. */
+export function isApplyJobActive(job: ApplyJobStatus): boolean {
+  return job.status === 'starting' || job.status === 'running';
 }
 
 /** Seconds -> compact human duration ("45 s", "3 m 05 s", "1 h 12 m"). */

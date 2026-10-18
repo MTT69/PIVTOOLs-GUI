@@ -36,7 +36,8 @@ export interface CalibrationImageViewerProps {
   backendUrl?: string;
   sourcePathIdx: number;
   camera: number;
-  numImages: number;
+  /** Frame count when known (entered or validated); null = auto, resolved by the server. */
+  numImages: number | null;
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;
@@ -170,7 +171,8 @@ export default function CalibrationImageViewer({
 
   // Actual frame count (from server or prop)
   const maxFrames = useMemo(() => {
-    return frameCount > 0 ? frameCount : numImages;
+    // Until the server reports the count, an unknown (auto) count still allows frame 1.
+    return frameCount > 0 ? frameCount : (numImages ?? 1);
   }, [frameCount, numImages]);
 
   // Sync frame input with index
