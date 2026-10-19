@@ -43,23 +43,28 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
       <div className="mt-4 p-3 border rounded bg-amber-50 text-sm text-amber-800">
         <XCircle className="h-4 w-4 inline mr-2" />
         {title} cancelled{job.unit_label ? ` during ${job.unit_label}` : ""}{frames}.
-        {" "}Frames already written remain on disk.
+        {/* The backend's account of what was written and where. */}
+        {job.error && <div className="text-xs mt-1">{job.error}</div>}
         {dtUsed && <div className="text-xs mt-1">{dtUsed}</div>}
+        <ApplyJobWarnings job={job} />
       </div>
     );
   }
 
   if (!isApplyJobActive(job)) return null;
 
-  const showDatasets = job.total_units > 1;
+  const totalUnits = job.total_units;
+  // Unknown total once running: show the running unit against "?" rather than an invented
+  // count. While still starting nothing has been reported, so nothing is shown.
+  const showDatasets = totalUnits === null ? job.status === "running" : totalUnits > 1;
   // processed_units counts units FINISHED, so the running one is the next index along. It can
   // momentarily equal total_units between the last unit finishing and the job completing.
-  const currentUnit = Math.min(job.processed_units + 1, job.total_units);
+  const currentUnit = totalUnits === null ? job.processed_units + 1 : Math.min(job.processed_units + 1, totalUnits);
   const showFrames = !!job.frame_total && job.frame_total > 0;
 
   const detail: string[] = [];
   if (job.unit_label) detail.push(job.unit_label);
-  if (showDatasets) detail.push(`dataset ${currentUnit}/${job.total_units}`);
+  if (showDatasets) detail.push(`dataset ${currentUnit}/${totalUnits ?? "?"}`);
   if (showFrames) detail.push(`frames ${job.frame_done ?? 0}/${job.frame_total}`);
   if (job.estimated_remaining !== undefined) {
     detail.push(`~${formatDuration(job.estimated_remaining)} remaining`);
@@ -83,6 +88,17 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
         <div className="text-xs text-muted-foreground mt-1">{detail.join(" | ")}</div>
       )}
       {cancelError && <div className="text-xs text-red-600 mt-1">{cancelError}</div>}
+      <ApplyJobWarnings job={job} />
     </div>
+  );
+};
+
+/** The job's non-fatal warnings, one per line; nothing when the backend sent none. */
+export const ApplyJobWarnings: React.FC<{ job: ApplyJobStatus }> = ({ job }) => {
+  if (!job.warnings || job.warnings.length === 0) return null;
+  return (
+    <ul className="text-xs text-amber-700 mt-1 list-disc pl-5">
+      {job.warnings.map((w, i) => <li key={i}>{w}</li>)}
+    </ul>
   );
 };

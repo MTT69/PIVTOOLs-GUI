@@ -73,6 +73,26 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
         : "Image files found and validated successfully!";
 
+    // A valid set can still carry notes (grayscale conversion, subset, a 0/1 start-index
+    // hint); they are shown under the success line, with the start-index switch when offered.
+    const notes = (
+      <>
+        {validation.error && <div className="mt-1 text-xs">{validation.error}</div>}
+        {validation.suggestedZeroBased != null && onApplySuggestedStartIndex && (
+          <div className="mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onApplySuggestedStartIndex(validation.suggestedZeroBased ? 0 : 1)}
+              className="text-blue-600 border-blue-300 hover:bg-blue-50"
+            >
+              Switch to {validation.suggestedZeroBased ? 0 : 1}-based
+            </Button>
+          </div>
+        )}
+      </>
+    );
+
     // A/B count mismatch is a warning, not a failure
     if (validation.abCountWarning) {
       return (
@@ -85,6 +105,7 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
                 <strong>Warning:</strong> {validation.abCountWarning}
               </div>
             )}
+            {notes}
           </AlertDescription>
         </Alert>
       );
@@ -95,6 +116,7 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         <CheckCircle className="h-4 w-4 text-green-600" />
         <AlertDescription className="text-sm text-green-800">
           {message}
+          {notes}
         </AlertDescription>
       </Alert>
     );

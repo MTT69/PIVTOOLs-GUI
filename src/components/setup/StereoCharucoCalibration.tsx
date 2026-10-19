@@ -12,13 +12,13 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCharucoCalibration, ARUCO_DICTS } from "@/hooks/useStereoCharucoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -188,21 +188,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
-  // Set as active calibration method
-  const setAsActiveMethod = async () => {
-    try {
-      const json = await postJson("/backend/update_config", {
-        calibration: { active: "stereo_charuco" },
-      });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  };
 
-  const isActive = config.calibration?.active === "stereo_charuco";
 
   // Local input state for dt / datum frame (numeric hook state).
   const [dtInput, setDtInput] = useState(String(dt));
@@ -480,7 +466,12 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}
-                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                  onBlur={() => {
+                    // Invalid input reverts to the current frame; never a silent frame 1.
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
               </div>
@@ -616,21 +607,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
               </div>
 
               {/* Set as Active Method */}
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
-                variant={isActive ? "default" : "outline"}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="stereo_charuco" config={config} updateConfig={updateConfig} />
             </div>
 
             {validation?.valid && !wf.complete && (
@@ -680,7 +657,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
                 <div className="text-xs text-muted-foreground mt-1">
                   Progress: {jobStatus.progress?.toFixed(0) || 0}%
                   {jobStatus.processed_pairs !== undefined && (
-                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs}</span>
+                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs ?? '?'}</span>
                   )}
                 </div>
               </div>

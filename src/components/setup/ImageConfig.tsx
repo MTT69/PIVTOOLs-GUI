@@ -51,6 +51,9 @@ const deriveABPatterns = (pattern: string): [string, string] => {
 };
 
 // Preset → stride mapping
+/** A whole image count of at least 1, as typed (no blanks, signs, decimals or exponents). */
+const isPositiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) >= 1;
+
 const PRESET_STRIDES: Record<string, { fs: number; ps: number }> = {
   ab_format:     { fs: 0, ps: 1 },
   pre_paired:    { fs: 0, ps: 1 },
@@ -87,6 +90,8 @@ interface ImageConfigProps {
 
 export default function ImageConfig({ config, updateConfig, validation, sectionsToShow = ['core', 'patterns'] }: ImageConfigProps) {
   const [numImages, setNumImages] = useState<string>("");
+  // Why the last num_images edit was refused (blank or not a positive integer).
+  const [numImagesError, setNumImagesError] = useState<string | null>(null);
   const [numCameras, setNumCameras] = useState<string>("1");
   const [pairingPreset, setPairingPreset] = useState<string>("ab_format");
   const [frameStride, setFrameStride] = useState<number>(0);
@@ -223,9 +228,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     const camCount = Number(numCameras) || 1;
     const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
+    // images.num_images is required: a blank or non-integer field is never sent (it would
+    // persist null); the stored value stays until a valid one is entered.
+    const niValid = isPositiveInt(ni);
+
     const payload = {
       images: {
-        num_images: ni === "" ? null : Number(ni),
+        ...(niValid ? { num_images: Number(ni) } : {}),
         start_index: si,
         frame_stride: fs,
         pair_stride: ps,
@@ -490,9 +499,21 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     type="text" inputMode="numeric"
                     min="0"
                     value={numImages}
-                    onChange={e => setNumImages(e.target.value)}
-                    onBlur={() => saveConfig()}
+                    onChange={e => { setNumImages(e.target.value); setNumImagesError(null); }}
+                    onBlur={() => {
+                      if (!isPositiveInt(numImages)) {
+                        // Keep the stored count; say why the edit was not taken.
+                        const stored = config.images?.num_images;
+                        setNumImages(stored == null ? "" : String(stored));
+                        setNumImagesError(numImages.trim() === ""
+                          ? "Number of images is required"
+                          : `"${numImages}" is not a whole number of images`);
+                        return;
+                      }
+                      saveConfig();
+                    }}
                   />
+                  {numImagesError && <p className="text-xs text-red-600 mt-1">{numImagesError}</p>}
                   {validation.checked && validation.detectedCount != null && validation.detectedCount > 0 && (
                     Number(numImages) !== validation.detectedCount ? (
                       <button

@@ -243,6 +243,8 @@ export interface JointGridSpecState {
   skipGuideStep: () => void;
   specBlock: GlobalGridSpecBlock;
   datumComplete: boolean;
+  /** Why the last read/write of the persisted spec failed; null after a success. */
+  inputsError: string | null;
 }
 
 export function useJointGridSpec({
@@ -301,6 +303,8 @@ export function useJointGridSpec({
 
   // ── Load the persisted coords for this source once (and whenever the source changes) ──
   const loadedForSourceRef = useRef<number | null>(null);
+  // Last failed read/write of the persisted spec; cleared by the next success.
+  const [inputsError, setInputsError] = useState<string | null>(null);
   useEffect(() => {
     if (loadedForSourceRef.current === sourcePathIdx) return;
     loadedForSourceRef.current = sourcePathIdx;
@@ -314,9 +318,10 @@ export function useJointGridSpec({
         if (!cancelled) {
           ggRef.current = coords;
           setGg(coords);
+          setInputsError(null);
         }
       } catch (e) {
-        console.error("Failed to load joint inputs:", errorMessage(e));
+        if (!cancelled) setInputsError(`Saved global coordinates could not be loaded: ${errorMessage(e)}`);
       }
     })();
     return () => {
@@ -338,8 +343,9 @@ export function useJointGridSpec({
           source_path_idx: sourcePathIdx,
           global_grid: merged,
         });
+        setInputsError(null);
       } catch (e) {
-        console.error("Failed to persist joint inputs:", errorMessage(e));
+        setInputsError(`Global-coordinate picks not saved: ${errorMessage(e)}`);
       }
     },
     [sourcePathIdx],
@@ -819,5 +825,6 @@ export function useJointGridSpec({
     skipGuideStep: advanceGuide,
     specBlock,
     datumComplete: wf.complete,
+    inputsError,
   };
 }

@@ -59,6 +59,11 @@ interface JointMultiCameraProps {
   basePaths?: string[];
   /** Initial dataset picker selection (see `defaultDatasetIdx`). */
   defaultDatasetIdx?: number;
+  /** PIV result type for Calibrate vectors: the parent hook's sidecar `rig.piv_type`. */
+  pivType: "instantaneous" | "ensemble";
+  onPivTypeChange: (value: "instantaneous" | "ensemble") => void;
+  /** The parent tab's "Set as Active" control, shown beside Calibrate vectors. */
+  setActiveControl: React.ReactNode;
 }
 
 /** The dominant global-index direction of an extend hint, as a signed-axis tag (+X / −X / +Y / −Y) —
@@ -151,6 +156,9 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
   onCancelApply,
   basePaths = [],
   defaultDatasetIdx = 0,
+  pivType,
+  onPivTypeChange,
+  setActiveControl,
 }) => {
   const {
     resolveData,
@@ -222,9 +230,6 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
     snapTo,
     onSpecChange,
   });
-
-  // PIV result type for the Calibrate Vectors apply (mirrors the single-camera tab's selector).
-  const [vectorTypeName, setVectorTypeName] = useState<"instantaneous" | "ensemble">("instantaneous");
 
   // Keep the viewer camera valid as the configured camera set changes.
   useEffect(() => {
@@ -717,6 +722,12 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
               {error}
             </div>
           )}
+          {isDotboard && grid.inputsError && (
+            <div className="text-sm text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4" />
+              {grid.inputsError}
+            </div>
+          )}
           {resolveData && (
             <div className="text-sm space-y-1">
               <div className="flex items-center gap-2">
@@ -1015,8 +1026,8 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium">Calibrate vectors:</span>
             <Select
-              value={vectorTypeName}
-              onValueChange={(v) => setVectorTypeName(v as "instantaneous" | "ensemble")}
+              value={pivType}
+              onValueChange={(v) => onPivTypeChange(v as "instantaneous" | "ensemble")}
               disabled={isVectorCalibrating}
             >
               <SelectTrigger className="w-[130px]">
@@ -1031,10 +1042,12 @@ export const JointMultiCamera: React.FC<JointMultiCameraProps> = ({
               basePaths={basePaths}
               defaultIdx={defaultDatasetIdx}
               jobs={applyJobs}
-              onApply={(datasets) => calibrateVectors(vectorTypeName, datasets)}
+              onApply={(datasets) => calibrateVectors(pivType, datasets)}
               title="Calibrate vectors for all cameras with the joint model"
               buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+              cameraCount={cameraOptions.length}
             />
+            {setActiveControl}
           </div>
 
           <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="Vector calibration"
@@ -1111,6 +1124,7 @@ const DotboardGridWizard: React.FC<{
           className="w-14 h-6 text-xs border rounded px-1"
         />
         <span className="text-muted-foreground">mm</span>
+        {grid.wf.originMmError && <span className="text-red-600">{grid.wf.originMmError}</span>}
       </div>
 
       {/* Live progress */}

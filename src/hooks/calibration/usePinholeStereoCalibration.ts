@@ -54,7 +54,8 @@ export interface StereoJobStatus {
   stage?: string;
   processed_pairs: number;
   valid_pairs: number;
-  total_pairs: number;
+  /** Pairs the run uses; null when the UI does not know the count (rendered as "?"). */
+  total_pairs: number | null;
   error?: string;
   /** Joint stereo reprojection RMS (px); absent when the solve reports none. */
   stereo_rms_error?: number | null;
@@ -85,6 +86,9 @@ function toStereoModel(d: ModelData, cams: [number, number]): StereoModel {
   };
 }
 
+/** Camera-2 world-frame picks; their `origin_mm` is ignored (camera 1's names the origin). */
+export type WorldFrameClicks2 = Omit<WorldFrameClicks, 'origin_mm'>;
+
 export interface PinholeStereoOptions {
   /** Send `fix_k2` (radial k2 = 0) for few-view fits; dotboard only. */
   fixK2?: boolean;
@@ -109,11 +113,12 @@ export function usePinholeStereoCalibration(
 
   const generateStereoModel = useCallback(async (
     clicks?: WorldFrameClicks | null,
-    opts?: { forceRedetect?: boolean },
+    opts?: { forceRedetect?: boolean; clicks2?: WorldFrameClicks2 | null },
   ) => {
-    const total = frameCount ?? 0;
+    const total = frameCount;
     const pair: [number, number] = [cam1, cam2];
     const dtVal = numOrNull(dt);
+    const token = core.beginGenerate();
     setJobStatus({ status: 'running', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: total, stage: 'calibrating' });
     try {
       const data = await postJson('/backend/calibration/generate_model', {
@@ -124,28 +129,35 @@ export function usePinholeStereoCalibration(
         // dt is stamped into the model; empty is omitted (saved rig.dt or a loud failure).
         ...(dtVal != null ? { dt: dtVal } : {}),
         clicks: clicks || undefined,
+        clicks2: opts?.clicks2 || undefined,
         force_redetect: opts?.forceRedetect || undefined,
       });
+      // Selection changed meanwhile: the result belongs to another source/pair.
+      if (!core.isGenerateCurrent(token)) { setJobStatus(null); return; }
       if (data.success) {
         // The generate response is in request order and carries no camera fields.
-        core.setGeneratedModel({ ...data, cam1: pair[0], cam2: pair[1] });
+        core.setGeneratedModel(token, { ...data, cam1: pair[0], cam2: pair[1] });
         core.noteViewCount(data);
+        // The backend's resolved count, once it reports one.
+        const resolved = typeof data.frame_total === 'number' ? data.frame_total : total;
         setJobStatus({
           status: 'completed', progress: 100,
-          processed_pairs: total, valid_pairs: data.num_pairs_used ?? 0, total_pairs: total,
+          processed_pairs: resolved ?? 0, valid_pairs: data.num_pairs_used ?? 0, total_pairs: resolved,
           stereo_rms_error: data.stereo_rms_px ?? null,
           cam1_rms_error: data.rms_cam1, cam2_rms_error: data.rms_cam2, cam1: pair[0], cam2: pair[1],
           num_pairs_used: data.num_pairs_used, relative_angle_deg: data.stereo_angle_deg,
         });
       } else {
-        setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: data.error });
+        setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: null, error: data.error });
       }
     } catch (e) {
-      setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: 0, error: errorMessage(e) });
+      if (!core.isGenerateCurrent(token)) { setJobStatus(null); return; }
+      setJobStatus({ status: 'failed', progress: 0, processed_pairs: 0, valid_pairs: 0, total_pairs: null, error: errorMessage(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameCount, cam1, cam2, dt, sourcePathIdx, adapter.board, boardParamsKey, datumFrame, nViews,
-      imageFormat, imageType, fixK2, fewViews, core.setGeneratedModel, core.noteViewCount]);
+      imageFormat, imageType, fixK2, fewViews, core.beginGenerate, core.isGenerateCurrent, core.setGeneratedModel,
+      core.noteViewCount]);
 
   const stereoModel = useMemo(() => {
     const d = core.modelData;

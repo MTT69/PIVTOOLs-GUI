@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
@@ -29,7 +30,6 @@ import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGa
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { MarkerPoint } from "@/components/viewer/zoomableCanvas";
-import { postJson, errorMessage } from "@/lib/api";
 
 interface StereoSteppedCalibrationProps {
   config: any;
@@ -178,6 +178,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   // ---- Local state ----
   const [fiducialSelectMode, setFiducialSelectMode] = useState(false);
   const [fiducialStepIdx, setFiducialStepIdx] = useState(0);
+  // Why the last fiducial click was refused (viewer not on the datum frame).
+  const [pickRefused, setPickRefused] = useState<string | null>(null);
 
   // Local debounced inputs
   const [dotSpacingInput, setDotSpacingInput] = useState(String(dotSpacingMm));
@@ -194,6 +196,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setFiducialSelectMode(false);
     setFiducialStepIdx(0);
     setLabelTarget(null);
+    setPickRefused(null);
   }, [sourceEpoch]);
 
   // In-flight latches for the async click handlers (snap / pose identify): a ref blocks a
@@ -277,6 +280,16 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     _frame: number,
   ) => {
     if (!fiducialSelectMode || !currentStep || currentStepCam === null) return;
+    // Fiducials are snapped against the datum frame's detection: a click on any other frame
+    // would land on a different board pose. `displayedFrame` (the viewer's onFrameChange) is
+    // what is on screen; the viewer's reported frame is the REQUESTED one (`externalFrame`),
+    // which stays the datum even after the user browses away.
+    if (displayedFrame !== datumFrame) {
+      setPickRefused(`Fiducials are picked on the datum frame (${datumFrame}); the viewer shows frame `
+        + `${displayedFrame}. Go back to frame ${datumFrame} and click again.`);
+      return;
+    }
+    setPickRefused(null);
     // Refuse a re-entrant click while a snap is pending. Worse than mono: a stale click at
     // the slot-1->slot-2 boundary could snap cam2's pixels against cam1's board, cross-
     // contaminating the world frame. Pin the target cam/point BEFORE the await so a camera
@@ -298,13 +311,15 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     } finally {
       snapInFlight.current = false;
     }
-  }, [fiducialSelectMode, currentStep, currentStepCam, snapFiducial, fiducialStepIdx]);
+  }, [fiducialSelectMode, currentStep, currentStepCam, snapFiducial, fiducialStepIdx, datumFrame,
+      displayedFrame]);
 
   // Re-clicking overwrites a fiducial, so a "reset" only needs to restart the step
   // sequence; the existing clicks remain until the next click replaces them.
   const resetFiducials = useCallback(() => {
     setFiducialSelectMode(false);
     setFiducialStepIdx(0);
+    setPickRefused(null);
   }, []);
 
   // ---- Fiducial markers for overlay (active camera, datum frame only) ----
@@ -428,19 +443,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     return `(${coord[0].toFixed(1)}, ${coord[1].toFixed(1)})`;
   };
 
-  // ---- Set as active method ----
-  const setAsActiveMethod = useCallback(async () => {
-    try {
-      const json = await postJson("/backend/update_config", { calibration: { active: "stereo_stepped" } });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  }, [config.calibration, updateConfig]);
 
-  const isActive = config.calibration?.active === "stereo_stepped";
 
   const viewerCamera = activeCam;
 
@@ -1013,6 +1016,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                       <span className="ml-2 text-muted-foreground text-sm">
                         (Step {fiducialStepIdx + 1} of {FIDUCIAL_STEPS.length})
                       </span>
+                      {pickRefused && <div className="text-sm text-red-600 font-normal mt-1">{pickRefused}</div>}
                     </AlertDescription>
                   </Alert>
                 )}
@@ -1120,21 +1124,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                 )}
               </Button>
 
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                variant={isActive ? "default" : "outline"}
-                className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="stereo_stepped" config={config} updateConfig={updateConfig} />
 
               {/* Reconstruct 3C Vectors: cam2 interpolator, PIV type, target datasets */}
               <div className="flex items-center gap-2 flex-wrap">

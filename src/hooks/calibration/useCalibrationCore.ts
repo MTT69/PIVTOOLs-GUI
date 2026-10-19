@@ -15,6 +15,7 @@ import {
   DetectionsByCamera,
   FrameDetection,
   ModelData,
+  SavedWorldFrame,
   SidecarSettings,
   ViewCount,
   autoViewCountText,
@@ -115,7 +116,9 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const [validating, setValidating] = useState(false);
   const [viewerRefreshKey, setViewerRefreshKey] = useState('');
   const [modelData, setModelData] = useState<ModelData | null>(null);
-  const [loadedWorldFrame, setLoadedWorldFrame] = useState<any>(null);
+  const [loadedWorldFrame, setLoadedWorldFrame] = useState<SavedWorldFrame | null>(null);
+  // Pair mode: the second camera's saved picks (stereo dotboard labels cam2 by them).
+  const [loadedWorldFrame2, setLoadedWorldFrame2] = useState<SavedWorldFrame | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [detections, setDetections] = useState<DetectionsByCamera>({});
@@ -149,6 +152,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const validateSeq = useRequestSeq();
   const modelSeq = useRequestSeq();
   const detectionsSeq = useRequestSeq();
+  // A generate is issued under one selection; its response must not paint another.
+  const generateSeq = useRequestSeq();
   const settingsSave = useDebouncedTask(SAVE_DEBOUNCE_MS);
   const sourcesSave = useDebouncedTask(SAVE_DEBOUNCE_MS);
 
@@ -458,6 +463,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       // picks (inputs.mat) so a deleted model can be re-solved without re-clicking.
       setModelData(data.exists ? data : null);
       setLoadedWorldFrame(data?.world_frame ?? null);
+      setLoadedWorldFrame2(mode === 'pair' ? (data?.world_frame2 ?? null) : null);
       return data.exists ? data : null;
     } catch (e) {
       if (!modelSeq.isCurrent(token)) return null;
@@ -467,17 +473,32 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     } finally {
       if (modelSeq.isCurrent(token)) setModelLoading(false);
     }
-  }, [modelSeq, modelUrl]);
+  }, [modelSeq, modelUrl, mode]);
+
+  // Read at response time, so a generate that resolves after a selection change reloads the
+  // model of the CURRENT selection, never the URL captured when the generate started.
+  const loadModelRef = useRef(loadModel);
+  loadModelRef.current = loadModel;
+
+  /** Token for one generate; take it before the request is sent. */
+  const beginGenerate = useCallback(() => generateSeq.next(), [generateSeq]);
 
   /**
    * Show a freshly generated model at once, then reload the saved record: generate responses
    * carry no stamped `geometry`/world frame, and the record is what Apply will use.
+   * Returns false (and changes nothing) when the selection changed or a newer generate
+   * started since `token` was taken: the response belongs to another selection.
    */
-  const setGeneratedModel = useCallback((data: ModelData) => {
+  const setGeneratedModel = useCallback((token: number, data: ModelData): boolean => {
+    if (!generateSeq.isCurrent(token)) return false;
     setModelLoadError(null);
     setModelData(data);
-    void loadModel();
-  }, [loadModel]);
+    void loadModelRef.current();
+    return true;
+  }, [generateSeq]);
+
+  /** Whether a generate token is still the current one (for the tab's own status updates). */
+  const isGenerateCurrent = useCallback((token: number) => generateSeq.isCurrent(token), [generateSeq]);
 
   useEffect(() => {
     if (!configLoaded) return;
@@ -486,6 +507,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     setDetectionsStale(null);
     setBackendViewCount(null);
     detectionsSeq.invalidate();
+    generateSeq.invalidate();
     void loadModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configLoaded, sourceEpoch]);
@@ -747,7 +769,7 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     configLoaded, sourceEpoch,
     loadError: sourcesError ?? settingsError ?? modelLoadError,
     validation, validating, validateImages, viewerRefreshKey,
-    modelData, setGeneratedModel, loadedWorldFrame, modelLoading, loadModel, changedSinceGenerate,
+    modelData, beginGenerate, setGeneratedModel, isGenerateCurrent, loadedWorldFrame, loadedWorldFrame2, modelLoading, loadModel, changedSinceGenerate,
     detections, detectionsStale, detectError, setDetectError, detecting, showOverlay, setShowOverlay,
     restoreDetections, detectFrame, detectAllViews,
     // apply

@@ -132,6 +132,7 @@ export function useAutoValidation(config: any) {
 
     // Validate after short delay
     timerRef.current = setTimeout(async () => {
+      timerRef.current = null; // fired: the cleanup must no longer treat it as pending
       const sourcePaths = config.paths?.source_paths || [];
       const cameraNumbers = config.paths?.camera_numbers || [1];
       const cameraToTest = cameraNumbers[0] || 1;
@@ -168,6 +169,9 @@ export function useAutoValidation(config: any) {
           });
 
           const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
+          // A valid set can still start at the other 0/1 index (the hint is in `message`).
+          const hinted = Object.values(details).find(
+            (d: any) => typeof d?.suggested_zero_based === 'boolean') as any;
 
           setValidation({
             valid: true,
@@ -177,6 +181,7 @@ export function useAutoValidation(config: any) {
             abCountWarning,
             detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
             sampleFiles,
+            suggestedZeroBased: hinted ? hinted.suggested_zero_based : null,
           });
 
           // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
@@ -265,8 +270,13 @@ export function useAutoValidation(config: any) {
     }, 500);
 
     return () => {
+      // A validation cancelled before it fired never ran: forget its key, so the next run
+      // re-schedules even when the key is unchanged or back to an earlier value (else the
+      // "Validating..." state set above would stick).
       if (timerRef.current) {
         clearTimeout(timerRef.current);
+        timerRef.current = null;
+        lastValidatedRef.current = '';
       }
     };
   }, [

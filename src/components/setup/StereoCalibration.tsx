@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,13 +12,13 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -116,6 +116,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
     // Model restore
     loadedWorldFrame,
+    loadedWorldFrame2,
 
     // Actions
     generateStereoModel,
@@ -133,28 +134,66 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   const datumNum = Number(datumFrame) || 1;
   const onDatumFrame = currentFrame === datumNum;
 
-  // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
-  const wf = useWorldFrame({
-    board: "dotboard", camera: cam1, sourcePathIdx, datumFrame,
+  // World-frame (coordinate-system x,y) pickers, one per camera, on the datum frame. Dotboard
+  // grid indices are re-zeroed per view, so camera 2's origin/+X/+Y must mark the SAME physical
+  // dots as camera 1's for the backend to label camera 2's features (`clicks2`). Camera 1's
+  // origin mm names the origin for both.
+  const boardParams = useCallback(() => {
     // Empty spacing is omitted — the backend falls to the sidecar value or errors.
-    boardParams: () => {
-      const v = parseFloat(dotSpacingMm);
-      return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
-    },
-    imageFormat, imageType,
-  });
-  const wfActive = activeCam === cam1;
-  const wfOnDatum = wfActive && onDatumFrame;
-  const wfIsSelecting = wfOnDatum && wf.mode !== "none";
+    const v = parseFloat(dotSpacingMm);
+    return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
+  }, [dotSpacingMm]);
+  const wf1 = useWorldFrame({ board: "dotboard", camera: cam1, sourcePathIdx, datumFrame, boardParams, imageFormat, imageType });
+  const wf2 = useWorldFrame({ board: "dotboard", camera: cam2, sourcePathIdx, datumFrame, boardParams, imageFormat, imageType });
+  const wfActive = activeCam === cam2 ? wf2 : wf1;
+  const wfOnDatum = onDatumFrame;
+  const wfIsSelecting = wfOnDatum && wfActive.mode !== "none";
+  const bothFramesSet = wf1.complete && wf2.complete;
+  // Which camera still needs its picks, for the Generate tooltip and the hint line.
+  const missingFrameCam = !wf1.complete ? cam1 : !wf2.complete ? cam2 : null;
 
-  // When a saved stereo model loads, restore its world frame (cam1) + show the overlay.
-  // The dots themselves are restored from inputs.mat by the hook's own effect,
-  // independently of whether a model exists -- detections survive a model delete,
-  // and re-detecting them here was the whole cost this change removes.
+  // Six-step sequence (stepped-tab pattern): camera 1's Origin → +X → +Y, then the viewer
+  // switches to camera 2 and its Origin pick starts. Only a user pick advances it — a restore
+  // completes camera 1 without ever entering a pick mode.
+  const pickingCam1 = useRef(false);
+  useEffect(() => {
+    if (wf1.mode !== "none") pickingCam1.current = true;
+  }, [wf1.mode]);
+  useEffect(() => {
+    if (!wf1.complete || !pickingCam1.current) return;
+    pickingCam1.current = false;
+    if (wf2.complete) return;
+    setActiveCam(cam2);
+    void wf2.startPick("origin");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wf1.complete]);
+  useEffect(() => {
+    pickingCam1.current = false;
+  }, [cam1, cam2, sourcePathIdx, datumFrame]);
+
+  // When a saved stereo model loads (or inputs.mat holds picks after a model delete), restore
+  // both cameras' world frames. The dots themselves are restored from inputs.mat by the hook's
+  // own effect, independently of whether a model exists.
   React.useEffect(() => {
-    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
+    if (loadedWorldFrame) wf1.restore(loadedWorldFrame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (loadedWorldFrame2) wf2.restore(loadedWorldFrame2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedWorldFrame2]);
+
+  /** Generate with both cameras' picks: `clicks` (cam1 + origin mm) and `clicks2` (cam2). */
+  const generateWithFrames = async (opts?: { forceRedetect?: boolean }) => {
+    const p2 = wf2.payload;
+    await generateStereoModel(wf1.payload, {
+      ...opts,
+      clicks2: p2 ? { origin: p2.origin, x_axis: p2.x_axis, y_axis: p2.y_axis } : null,
+    });
+    detectFrame(currentFrame, cam1);
+    detectFrame(currentFrame, cam2);
+    setShowOverlay(true);
+  };
   React.useEffect(() => {
     if (hasModel) setShowOverlay(true);
   }, [hasModel, setShowOverlay]);
@@ -171,21 +210,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
-  // Set as active calibration method
-  const setAsActiveMethod = async () => {
-    try {
-      const json = await postJson("/backend/update_config", {
-        calibration: { active: "stereo_dotboard" },
-      });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  };
 
-  const isActive = config.calibration?.active === "stereo_dotboard";
 
   // Local input state for debouncing
   const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
@@ -471,7 +496,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}
-                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                  onBlur={() => {
+                    // Invalid input reverts to the current frame; never a silent frame 1.
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
               </div>
@@ -531,22 +561,32 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
               pointSelectMode={wfIsSelecting}
-              onPointSelect={(px, py) => { if (wfIsSelecting) wf.handlePoint(px, py); }}
-              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wf) : []}
+              onPointSelect={(px, py) => { if (wfIsSelecting) wfActive.handlePoint(px, py); }}
+              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wfActive) : []}
               detectionLoading={modelLoading}
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    variant="outline" size="sm" disabled={wf.busy || detecting}
-                    onClick={async () => { await wf.prepare(); await detectAllViews(); setShowOverlay(true); }}
+                    variant="outline" size="sm" disabled={wf1.busy || wf2.busy || detecting}
+                    onClick={async () => {
+                      // Both cameras' datum detections, so either camera can be picked on.
+                      await wf1.prepare();
+                      await wf2.prepare();
+                      await detectAllViews();
+                      setShowOverlay(true);
+                    }}
                   >
-                    {(wf.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
+                    {(wf1.busy || wf2.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
                   </Button>
                   {wfOnDatum ? (
-                    <WorldFrameControls wf={wf} />
+                    <WorldFrameControls
+                      wf={wfActive}
+                      label={`Cam ${activeCam} frame:`}
+                      showOriginMm={activeCam === cam1}
+                    />
                   ) : (
                     <span className="text-xs text-muted-foreground">
-                      World frame is set on Camera {cam1}, datum frame {datumNum}.
+                      World frame is picked on both cameras, datum frame {datumNum}.
                     </span>
                   )}
                 </div>
@@ -559,9 +599,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div className="flex gap-3 items-center flex-wrap">
               {/* Generate Stereo Model */}
               <Button
-                onClick={async () => { await generateStereoModel(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
-                disabled={isCalibrating || !validation?.valid || !wf.complete}
-                title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Dots → Origin → +X → +Y` : undefined}
+                onClick={() => generateWithFrames()}
+                disabled={isCalibrating || !validation?.valid || !bothFramesSet}
+                title={missingFrameCam !== null
+                  ? `Set the world frame on Camera ${missingFrameCam} first: Detect Dots → Origin → +X → +Y`
+                  : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isCalibrating ? (
@@ -577,8 +619,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               {/* Re-detect: ignore the cached detections and detect fresh, then recalibrate */}
               <Button
                 variant="outline"
-                onClick={async () => { await generateStereoModel(wf.payload, { forceRedetect: true }); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
-                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                onClick={() => generateWithFrames({ forceRedetect: true })}
+                disabled={isCalibrating || !validation?.valid || !bothFramesSet}
                 title="Ignore cached detections and re-detect from the images, then recalibrate"
               >
                 Re-detect
@@ -609,26 +651,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </div>
 
               {/* Set as Active Method */}
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
-                variant={isActive ? "default" : "outline"}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="stereo_dotboard" config={config} updateConfig={updateConfig} />
             </div>
 
-            {validation?.valid && !wf.complete && (
+            {validation?.valid && missingFrameCam !== null && (
               <p className="text-xs text-muted-foreground mt-2">
-                Set the coordinate frame before generating: open the viewer on Camera {cam1}, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+                Set the coordinate frame on both cameras before generating: open the viewer, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame of Camera {cam1}, then the <strong>same three dots</strong> on Camera {cam2} (the viewer switches over). Camera {missingFrameCam} is not set yet.
               </p>
             )}
 
@@ -671,7 +699,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground mt-1">
                   Progress: {jobStatus.progress?.toFixed(0) || 0}%
                   {jobStatus.processed_pairs !== undefined && (
-                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs}</span>
+                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs ?? '?'}</span>
                   )}
                 </div>
               </div>

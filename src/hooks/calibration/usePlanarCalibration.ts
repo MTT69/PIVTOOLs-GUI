@@ -33,7 +33,8 @@ export interface JobStatus {
   progress: number;
   processed_images: number;
   valid_images: number;
-  total_images: number;
+  /** Views the run uses; null when the UI does not know the count (rendered as "?"). */
+  total_images: number | null;
   error?: string;
   rms_error?: number;
   rms_unit?: 'px' | 'mm';
@@ -97,7 +98,12 @@ export function toCameraModel(d: ModelData): CameraModel {
 /** Combined RMS and its unit: pinhole reports px, polynomial a combined mm. */
 const respRms = (d: ModelData): number | undefined =>
   d.model_type === 'polynomial' ? Math.hypot(d.rms_x_mm ?? 0, d.rms_y_mm ?? 0) : d.rms;
-const respUnit = (d: ModelData): 'px' | 'mm' => (d.model_type === 'polynomial' ? 'mm' : 'px');
+/** The backend's `rms_units` when it states one, else the unit the model type reports in. */
+const respUnit = (d: ModelData): 'px' | 'mm' => {
+  const stated: unknown = d.rms_units;
+  if (stated === 'px' || stated === 'mm') return stated;
+  return d.model_type === 'polynomial' ? 'mm' : 'px';
+};
 
 /**
  * Mono (planar) calibration for one board: the shared core plus synchronous generate for one
@@ -130,30 +136,39 @@ export function usePlanarCalibration(
   }, [dt, sourcePathIdx, adapter.board, modelType, boardParamsKey, datumFrame, nViews, imageFormat, imageType]);
 
   const generateCameraModel = useCallback(async (clicks?: WorldFrameClicks | null) => {
-    const total = frameCount ?? 0;
+    const total = frameCount;
+    const token = core.beginGenerate();
     setJobStatus({ status: 'running', progress: 0, processed_images: 0, valid_images: 0, total_images: total });
     try {
       const data = await generateOne(camera, clicks);
+      // Selection changed meanwhile: the result belongs to another source/camera.
+      if (!core.isGenerateCurrent(token)) { setJobStatus(null); return; }
       if (data.success) {
-        core.setGeneratedModel(data);
+        core.setGeneratedModel(token, data);
         core.noteViewCount(data);
+        // The backend's resolved count, once it reports one.
+        const resolved = typeof data.frame_total === 'number' ? data.frame_total : total;
         setJobStatus({
           status: 'completed', progress: 100,
-          processed_images: total, valid_images: data.per_view_rms?.length ?? 0, total_images: total,
+          processed_images: resolved ?? 0, valid_images: data.per_view_rms?.length ?? 0, total_images: resolved,
           rms_error: respRms(data), rms_unit: respUnit(data), num_images_used: data.num_images_used,
         });
       } else {
-        setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: data.error });
+        setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: null, error: data.error });
       }
     } catch (e) {
-      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: 0, error: errorMessage(e) });
+      if (!core.isGenerateCurrent(token)) { setJobStatus(null); return; }
+      setJobStatus({ status: 'failed', progress: 0, processed_images: 0, valid_images: 0, total_images: null, error: errorMessage(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, frameCount, generateOne, core.setGeneratedModel, core.noteViewCount]);
+  }, [camera, frameCount, generateOne, core.beginGenerate, core.isGenerateCurrent, core.setGeneratedModel, core.noteViewCount]);
 
   // Every camera in turn; the world frame is defined on the first camera's view only.
   const generateCameraModelAll = useCallback(async (clicks?: WorldFrameClicks | null) => {
     const cams = cameraOptions.length ? cameraOptions : [camera];
+    // One token for the whole run: the selected camera's model is shown only while the
+    // selection this run started under is still current.
+    const token = core.beginGenerate();
     const results: NonNullable<MultiCameraJobStatus['camera_results']> = {};
     setMultiCameraJobStatus({ status: 'running', processed_cameras: 0, total_cameras: cams.length });
     for (let i = 0; i < cams.length; i++) {
@@ -164,8 +179,7 @@ export function usePlanarCalibration(
         results[`Camera ${cam}`] = data.success
           ? { status: 'completed', rms_error: respRms(data), rms_unit: respUnit(data), num_images_used: data.num_images_used }
           : { status: 'failed', error: data.error };
-        if (data.success && cam === camera) {
-          core.setGeneratedModel(data);
+        if (data.success && cam === camera && core.setGeneratedModel(token, data)) {
           core.noteViewCount(data);
         }
       } catch (e) {
@@ -178,7 +192,7 @@ export function usePlanarCalibration(
       succeeded_cameras: succeeded, camera_results: results,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraOptions, camera, generateOne, core.setGeneratedModel, core.noteViewCount]);
+  }, [cameraOptions, camera, generateOne, core.beginGenerate, core.setGeneratedModel, core.noteViewCount]);
 
   const cameraModel = useMemo(() => (core.modelData ? toCameraModel(core.modelData) : null), [core.modelData]);
   const detections: Record<number, FrameDetection> = core.detections[camera] ?? {};

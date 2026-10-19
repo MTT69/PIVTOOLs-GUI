@@ -88,23 +88,37 @@ export function slotKey(slot: CalibrationJobSlot): string {
 }
 
 function failedStatus(error: string): ApplyJobStatus {
-  return { status: "failed", progress: 0, processed_units: 0, total_units: 0, error };
+  return { status: "failed", progress: 0, processed_units: 0, total_units: null, error };
 }
 
+/*
+ * localStorage only lets a running job be resumed after a page reload. It can be unavailable
+ * (private window, blocked site data, quota), and that must never turn a started job into a
+ * failed one or break a status poll: every access is guarded and logged.
+ */
 function readStored(): Record<string, StoredJob> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as Record<string, StoredJob>) : {};
   } catch (e) {
     console.error("Unreadable stored calibration jobs; discarding:", errorMessage(e));
-    localStorage.removeItem(STORAGE_KEY);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (removeErr) {
+      console.error("Could not clear stored calibration jobs:", errorMessage(removeErr));
+    }
     return {};
   }
 }
 
 function writeStored(jobs: Record<string, StoredJob>): void {
-  if (Object.keys(jobs).length === 0) localStorage.removeItem(STORAGE_KEY);
-  else localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+  try {
+    if (Object.keys(jobs).length === 0) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs));
+  } catch (e) {
+    console.error("Could not store calibration jobs; running jobs will not resume after a reload:",
+      errorMessage(e));
+  }
 }
 
 function storeJob(key: string, jobId: string): void {
@@ -191,7 +205,7 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
       // 'starting' marks the slot active so the poll loop picks it up and reads the real state.
       setSlot(key, {
         jobId: job.jobId,
-        status: { status: "starting", progress: 0, processed_units: 0, total_units: 0 },
+        status: { status: "starting", progress: 0, processed_units: 0, total_units: null },
         cancelRequested: false,
         cancelError: null,
       });
@@ -219,7 +233,7 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
     if (current && isApplyJobActive(current)) return; // one job per slot; button is disabled too
     setSlot(key, {
       jobId: null,
-      status: { status: "starting", progress: 0, processed_units: 0, total_units: 0 },
+      status: { status: "starting", progress: 0, processed_units: 0, total_units: null },
       cancelRequested: false,
       cancelError: null,
     });

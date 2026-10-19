@@ -2,9 +2,9 @@ import React, { useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { ApplyJobWarnings, CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
 import { CalibrationFamilyJob } from "@/contexts/CalibrationJobContext";
-import { isApplyJobActive } from "@/lib/applyJob";
+import { formatDtUsed, isApplyJobActive } from "@/lib/applyJob";
 
 /**
  * The calibration apply targets: which PIV datasets (`paths.base_paths`) a saved model is
@@ -12,7 +12,8 @@ import { isApplyJobActive } from "@/lib/applyJob";
  *
  *   - {@link ApplyDatasetButtons}: a dataset picker with "Apply to this dataset" and "Apply to
  *     all N datasets" (a single "Apply" when one dataset is configured). Both send an explicit
- *     `active_paths`, never an omitted one.
+ *     `active_paths`, never an omitted one. A mono (planar) apply calibrates EVERY configured
+ *     camera, so on a multi-camera rig the labels say so ("(all N cameras)").
  *   - {@link ApplyJobsStatus}: progress / result of every job of the tab's family, each named
  *     by its target datasets, so a run on dataset b beside one on dataset a stays visible and
  *     cancellable.
@@ -64,10 +65,15 @@ interface ApplyDatasetButtonsProps {
   title?: string;
   /** Tab-specific button colours. */
   buttonClassName?: string;
+  /**
+   * Cameras one apply calibrates (mono tabs: every configured camera). Above 1 the labels name
+   * the count; omit for stereo tabs, whose apply is the selected pair.
+   */
+  cameraCount?: number;
 }
 
 export const ApplyDatasetButtons: React.FC<ApplyDatasetButtonsProps> = ({
-  basePaths, defaultIdx, jobs, onApply, disabled = false, title, buttonClassName,
+  basePaths, defaultIdx, jobs, onApply, disabled = false, title, buttonClassName, cameraCount,
 }) => {
   const [picked, setPicked] = useState(defaultIdx);
   const n = basePaths.length;
@@ -94,7 +100,9 @@ export const ApplyDatasetButtons: React.FC<ApplyDatasetButtonsProps> = ({
     );
   };
 
-  if (n <= 1) return button("Apply", all);
+  const multiCam = cameraCount !== undefined && cameraCount > 1;
+  const cams = multiCam ? ` (all ${cameraCount} cameras)` : "";
+  if (n <= 1) return button(multiCam ? `Apply to all ${cameraCount} cameras` : "Apply", all);
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <Select value={String(idx)} onValueChange={v => setPicked(Number(v))}>
@@ -107,8 +115,8 @@ export const ApplyDatasetButtons: React.FC<ApplyDatasetButtonsProps> = ({
           ))}
         </SelectContent>
       </Select>
-      {button("Apply to this dataset", [idx])}
-      {button(`Apply to all ${n} datasets`, all)}
+      {button(`Apply to this dataset${cams}`, [idx])}
+      {button(`Apply to all ${n} datasets${cams}`, all)}
     </div>
   );
 };
@@ -128,10 +136,22 @@ export const ApplyJobsStatus: React.FC<ApplyJobsStatusProps> = ({ jobs, basePath
       const targets = targetsText(basePaths, job.datasets);
       const key = job.datasets.join(",");
       if (job.status.status === "completed") {
+        const dtUsed = formatDtUsed(job.status);
+        const outDirs = job.status.out_dirs ?? [];
         return (
           <div key={key} className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
             <CheckCircle2 className="h-4 w-4 inline mr-2" />
             {title} completed for {targets}.
+            {dtUsed && <div className="text-xs mt-1">{dtUsed}</div>}
+            {outDirs.length > 0 && (
+              <div className="text-xs mt-1">
+                Written to:
+                <ul className="list-disc pl-5 font-mono break-all">
+                  {outDirs.map(d => <li key={d}>{d}</li>)}
+                </ul>
+              </div>
+            )}
+            <ApplyJobWarnings job={job.status} />
           </div>
         );
       }

@@ -7,12 +7,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, CheckCircle2, Loader2, Crosshair, Ruler } from "lucide-react";
+import { AlertTriangle, Loader2, Crosshair, Ruler } from "lucide-react";
 import { MarkerPoint, OverlayLine } from "@/components/viewer/zoomableCanvas";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewerRefreshKey } from "@/hooks/useCalibrationImageViewer";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
+import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { isApplyJobActive } from "@/lib/applyJob";
@@ -66,8 +68,19 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // A failed source-list load leaves the gate closed for good, so it gets its own
   // alert: `validation` is cleared by other effects and only renders with images on.
   const [sourcesLoadError, setSourcesLoadError] = useState<string | null>(null);
+  // Last failed write of the source list, sidecar settings or PIV type; cleared by a success.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [useCameraSubfolders, setUseCameraSubfolders] = useState<boolean>(false);
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
+  // Addressed by camera number (the backend reads subfolders[camera - 1]), never by list position.
+  const setSubfolderFor = useCallback((cam: number, value: string) => {
+    setCameraSubfolders(prev => {
+      const next = [...prev];
+      while (next.length < cam) next.push("");
+      next[cam - 1] = value;
+      return next;
+    });
+  }, []);
   const [frameIdx, setFrameIdx] = useState(1);
   // Image-less mode: the uniform pixel->mm map needs no image, so a model can be
   // typed in, generated and re-edited with no calibration images on disk (explicit
@@ -120,8 +133,9 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         source_path_idx: sourcePathIdx,
         settings: { rig: { piv_type: value } },
       });
+      setSaveError(null);
     } catch (e) {
-      console.error("Failed to save piv_type:", errorMessage(e));
+      setSaveError(`PIV type not saved: ${errorMessage(e)}`);
     }
   }, [sourcePathIdx]);
 
@@ -240,12 +254,14 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   useEffect(() => {
     if (!configLoaded) return;
     const t = setTimeout(async () => {
+      // Both writes report into one line, so a later success cannot hide an earlier failure.
+      const failures: string[] = [];
       try {
         await postJson("/backend/update_config", {
           calibration: { calibration_sources: calibrationSources },
         });
       } catch (e) {
-        console.error("persist calibration sources failed", errorMessage(e));
+        failures.push(`calibration sources not saved: ${errorMessage(e)}`);
       }
       // Sidecars are per-source: never write the form into a source it wasn't
       // hydrated from — an in-place path edit repoints the index at a NEW
@@ -284,9 +300,10 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             setCameraSubfolders(prev => (JSON.stringify(prev) === sentSubfolders ? stored : prev));
           }
         } catch (e) {
-          console.error("persist calibration settings failed", errorMessage(e));
+          failures.push(`calibration settings not saved: ${errorMessage(e)}`);
         }
       }
+      setSaveError(failures.length ? failures.join("; ") : null);
       if (pathEdited) {
         // The persisted sources list now points elsewhere: drop the stale
         // model/overlay and rehydrate settings + model from the new directory.
@@ -546,15 +563,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [jobs, applyFamily, dt, vectorTypeName, sourcePathIdx]);
 
   // --- Set as active ------------------------------------------------------------
-  const isActive = config?.calibration?.active === "scale_factor";
-  const setAsActive = useCallback(async () => {
-    try {
-      const json = await postJson("/backend/update_config", { calibration: { active: "scale_factor" } });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (e) { console.error("set active failed", errorMessage(e)); }
-  }, [config, updateConfig]);
 
   const clickActive = pickMode !== "none" || gcIsSelecting;
   const handleFrameChange = useCallback((idx: number) => setFrameIdx(idx), []);
@@ -592,6 +600,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
               </AlertDescription>
             </Alert>
           )}
+          {saveError && <p className="text-xs text-red-600">{saveError}</p>}
 
           {/* Section 1: Calibration Source Path (primary input). Shown in both modes:
               the model is saved under this folder, images or not. */}
@@ -695,38 +704,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
           {/* Camera subfolder names — only when using camera subfolders */}
           {useCameraSubfolders && cameraOptions.length > 1 && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || 'Cam1'}/
-              </p>
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Camera Subfolder Names (optional)</Label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {cameraOptions.map((cam, idx) => (
-                    <div key={cam}>
-                      <Label className="text-xs text-muted-foreground">Camera {cam}</Label>
-                      <Input
-                        placeholder={`Cam${cam}`}
-                        value={cameraSubfolders[idx] || ''}
-                        onChange={e => {
-                          const newSubfolders = [...cameraSubfolders];
-                          while (newSubfolders.length < cameraOptions.length) {
-                            newSubfolders.push('');
-                          }
-                          newSubfolders[idx] = e.target.value;
-                          setCameraSubfolders(newSubfolders);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={cameraOptions}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Source validation + "Did you mean" suggestions */}
@@ -772,7 +755,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                   size="sm"
                   onClick={() => {
                     setUseCameraSubfolders(true);
-                    setCameraSubfolders(perCam);
+                    // Slot by camera number, as the inputs above do.
+                    cameraOptions.forEach((c, i) => setSubfolderFor(c, perCam[i]));
                   }}
                   className="text-blue-600 border-blue-300 hover:bg-blue-50"
                 >
@@ -956,14 +940,11 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 disabled={!result}
                 title={!result ? "Generate the model first" : "Calibrate vectors"}
                 buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+                cameraCount={cameraOptions.length}
               />
             </div>
 
-            <Button onClick={setAsActive} disabled={isActive}
-                    variant={isActive ? "default" : "outline"}
-                    className={isActive ? "bg-green-600 hover:bg-green-600" : ""}>
-              {isActive ? <><CheckCircle2 className="h-4 w-4 mr-1" />Active</> : "Set as Active"}
-            </Button>
+            <SetActiveButton method="scale_factor" config={config} updateConfig={updateConfig} />
           </div>
 
           {/* Apply progress / results (shared with every other calibration tab) */}

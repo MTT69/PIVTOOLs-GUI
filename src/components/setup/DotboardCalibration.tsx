@@ -11,6 +11,7 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react"
 import { useDotboardCalibration } from "@/hooks/useDotboardCalibration";
 import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
@@ -23,7 +24,6 @@ import {
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
 import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
-import { postJson, errorMessage } from "@/lib/api";
 
 interface DotboardCalibrationProps {
   config: any;
@@ -211,21 +211,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
     return Object.keys(result).length > 0 ? result : undefined;
   }, [detections]);
 
-  // Set as active calibration method
-  const setAsActiveMethod = useCallback(async () => {
-    try {
-      const json = await postJson("/backend/update_config", {
-        calibration: { active: "dotboard" },
-      });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  }, [config.calibration, updateConfig]);
 
-  const isActive = config.calibration?.active === "dotboard";
 
   return (
     <div className="space-y-6">
@@ -447,7 +433,12 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}
-                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                  onBlur={() => {
+                    // Invalid input reverts to the current frame; never a silent frame 1.
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
@@ -476,6 +467,9 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               onCancelApply={cancelApply}
               basePaths={basePaths}
               defaultDatasetIdx={defaultDatasetIdx(config)}
+              pivType={vectorTypeName}
+              onPivTypeChange={handleVectorTypeChange}
+              setActiveControl={<SetActiveButton method="dotboard" config={config} updateConfig={updateConfig} />}
             />
           )}
 
@@ -598,24 +592,11 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   disabled={!hasModel}
                   title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
                   buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+                  cameraCount={cameraOptions.length}
                 />
               </div>
 
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                variant={isActive ? "default" : "outline"}
-                className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="dotboard" config={config} updateConfig={updateConfig} />
             </div>
 
             {validation?.valid && !wf.complete && (
@@ -663,7 +644,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground mt-1">
                   Progress: {jobStatus.progress?.toFixed(0) || 0}%
                   {jobStatus.processed_images !== undefined && (
-                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images}</span>
+                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images ?? '?'}</span>
                   )}
                   {jobStatus.valid_images !== undefined && jobStatus.valid_images > 0 && (
                     <span> | Valid: {jobStatus.valid_images}</span>

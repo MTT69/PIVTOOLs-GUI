@@ -122,7 +122,8 @@ export function useCalibrationApi() {
     try {
       const data = await fetchJson(`${BASE}/figures?${qs(query)}`);
       return data.figures || [];
-    } catch {
+    } catch (e) {
+      setError(`Could not list the figures: ${errorMessage(e)}`);
       return [];
     }
   }, []);

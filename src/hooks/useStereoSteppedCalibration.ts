@@ -510,6 +510,7 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
       };
     }
 
+    const token = core.beginGenerate();
     setFitJobStatus({ status: 'starting', progress: 0 });
     try {
       const data = await postJson('/backend/calibration/stepped/generate_model', body);
@@ -521,11 +522,13 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
         `/backend/calibration/stepped/generate_model/status/${data.job_id}`,
         (d) => setFitJobStatus(d),
       );
+      // Selection changed meanwhile: the result belongs to another source/pair.
+      if (!core.isGenerateCurrent(token)) { setFitJobStatus(null); return; }
       setFitJobStatus(done);
       if (done.status === 'completed') {
         // The fit is in the live sequence's camera order (= the requested pair). The core
         // shows it now and reloads the saved record (world frame, stamped geometry).
-        core.setGeneratedModel({ ...done, stereo_angle_deg: done.relative_angle_deg, cam1: pair[0], cam2: pair[1] });
+        core.setGeneratedModel(token, { ...done, stereo_angle_deg: done.relative_angle_deg, cam1: pair[0], cam2: pair[1] });
         setResolvedStereoConfig(done.stereo_config ?? null);
         if (done.persisted === false) {
           setClicksSaveError(`Model saved, but clicks not saved to inputs.mat: ${done.persist_skipped}`);
@@ -538,7 +541,8 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sequenceId, hasSidecar, cam1, cam2, dt, fixK2, frameCount, modelType, fiducials, clickedLevel,
-      buildPoseLevels, stereoConfig, sourcePathIdx, pollJob, core.setGeneratedModel]);
+      buildPoseLevels, stereoConfig, sourcePathIdx, pollJob, core.beginGenerate, core.isGenerateCurrent,
+      core.setGeneratedModel]);
 
   // ---------- Restore the sidecar sequence + clicks (replaces, never merges) ----------
   const restoreSequence = useCallback(async () => {
@@ -635,7 +639,11 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
       postJson('/backend/calibration/stepped/inputs/save', body)
         .then(res => {
           if (res?.stale || res?.saved === false) {
-            setClicksSaveError(res.error || 'Clicks not saved: the saved detections changed. Restore or re-detect.');
+            // The backend names the reason whenever it declines to save; without one the
+            // only remaining case is that nothing has been detected for this pair yet.
+            setClicksSaveError(typeof res.error === 'string' && res.error
+              ? `Clicks not saved: ${res.error}`
+              : 'Clicks not saved: no detections saved yet — detect first.');
           } else {
             setClicksDirty(false);
           }

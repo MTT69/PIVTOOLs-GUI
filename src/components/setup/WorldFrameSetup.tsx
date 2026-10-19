@@ -10,8 +10,10 @@
  * the backend falls back to the board's grid-corner default — so picking is an
  * optional refinement, not a required step.
  *
- * Shared by every tab (planar + stereo). For stereo the frame is defined on
- * camera 1 only; the pair follows via the stereo extrinsics.
+ * Shared by every tab (planar + stereo). Stereo ChArUco defines the frame on camera 1
+ * only (corner ids match across cameras). Stereo dotboard runs one picker per camera:
+ * dotboard grid indices are re-zeroed per view, so camera 2's origin/+X/+Y must mark the
+ * same physical dots as camera 1's; camera 1's origin mm names the origin for both.
  */
 
 import { useState, useCallback, useEffect } from "react";
@@ -38,6 +40,14 @@ interface UseWorldFrameArgs {
   imageFormat: string;
   imageType: string;
 }
+
+/** A typed mm coordinate: the number, or null when blank / not a number (never a silent 0). */
+const mmOrNull = (s: string): number | null => {
+  const t = s.trim();
+  if (t === "") return null;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : null;
+};
 
 const ROLE_STYLE: Record<WorldFrameRole, { label: string; color: string }> = {
   origin: { label: "Origin", color: "#22c55e" },
@@ -88,7 +98,11 @@ export function useWorldFrame({
     const role = mode;
     setMode("none");
     try {
-      const data = await postJson("/backend/calibration/snap_fiducial", { camera, click_x: px, click_y: py });
+      // The datum identity is sent so the backend can refuse a snap against another view's
+      // cached detection.
+      const data = await postJson("/backend/calibration/snap_fiducial", {
+        camera, click_x: px, click_y: py, source_path_idx: sourcePathIdx, board, datum_frame: datumFrame,
+      });
       if (data.snapped_x !== undefined) {
         setClicks(prev => ({ ...prev, [role]: [data.snapped_x, data.snapped_y] }));
         // Auto-advance origin -> +X -> +Y so a single "Set Origin" starts the sequence.
@@ -100,7 +114,7 @@ export function useWorldFrame({
     } catch (e) {
       setError(errorMessage(e));
     }
-  }, [mode, camera]);
+  }, [mode, camera, sourcePathIdx, board, datumFrame]);
 
   const clear = useCallback(() => {
     setClicks({});
@@ -139,17 +153,26 @@ export function useWorldFrame({
     setReady(false);
   }, [camera, sourcePathIdx, datumFrame]);
 
-  const complete = !!(clicks.origin && clicks.x_axis && clicks.y_axis);
-  const payload: WorldFrameClicks | null = complete
+  // The origin's world mm, once the origin is placed. Invalid input blocks the frame: it is
+  // never sent as 0.
+  const mmX = mmOrNull(originMmX);
+  const mmY = mmOrNull(originMmY);
+  const originMmError = clicks.origin && (mmX === null || mmY === null)
+    ? `Origin ${mmX === null ? "X" : "Y"} must be a number in mm`
+    : null;
+  // Complete = all three picks AND a valid origin mm, so Generate stays blocked otherwise.
+  const picksComplete = !!(clicks.origin && clicks.x_axis && clicks.y_axis);
+  const complete = picksComplete && originMmError === null;
+  const payload: WorldFrameClicks | null = complete && mmX !== null && mmY !== null
     ? {
         origin: clicks.origin!, x_axis: clicks.x_axis!, y_axis: clicks.y_axis!,
-        origin_mm: [parseFloat(originMmX) || 0, parseFloat(originMmY) || 0],
+        origin_mm: [mmX, mmY],
       }
     : null;
 
   return {
     mode, setMode, clicks, startPick, handlePoint, clear, restore, prepare, error, busy, complete, payload,
-    ready, originMmX, originMmY, setOriginMmX, setOriginMmY,
+    ready, originMmX, originMmY, setOriginMmX, setOriginMmY, originMmError,
   };
 }
 
@@ -171,7 +194,13 @@ export function getWorldFrameMarkers(wf: WorldFrameState): MarkerPoint[] {
  * the origin, which auto-advances to +X then +Y; the origin's world (X, Y) mm can
  * be typed once it is placed. ``getWorldFrameMarkers`` paints the picked points.
  */
-export function WorldFrameControls({ wf }: { wf: WorldFrameState }) {
+export function WorldFrameControls({ wf, label = "World frame:", showOriginMm = true }: {
+  wf: WorldFrameState;
+  /** Lead-in text, e.g. "Cam 2 frame:" when a tab runs one picker per camera. */
+  label?: string;
+  /** Off for a second camera, whose origin mm is camera 1's. */
+  showOriginMm?: boolean;
+}) {
   const pickBtn = (role: WorldFrameRole) => {
     const picked = !!wf.clicks[role];
     const active = wf.mode === role;
@@ -196,13 +225,13 @@ export function WorldFrameControls({ wf }: { wf: WorldFrameState }) {
 
   return (
     <div className="flex items-center gap-1 flex-wrap">
-      <span className="text-xs text-muted-foreground">World frame:</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
       {wf.busy && <span className="text-xs text-muted-foreground">detecting…</span>}
       {!wf.busy && !wf.ready && (
         <span className="text-xs text-muted-foreground">click Set Origin, then click the dot</span>
       )}
       {(Object.keys(ROLE_STYLE) as WorldFrameRole[]).map(pickBtn)}
-      {wf.clicks.origin && (
+      {showOriginMm && wf.clicks.origin && (
         <span className="flex items-center gap-1">
           <span className="text-xs text-muted-foreground ml-1">X:</span>
           <input
@@ -229,6 +258,7 @@ export function WorldFrameControls({ wf }: { wf: WorldFrameState }) {
         </Button>
       )}
       {wf.complete && <span className="text-xs text-green-600">frame set</span>}
+      {showOriginMm && wf.originMmError && <span className="text-xs text-red-600">{wf.originMmError}</span>}
       {wf.error && <span className="text-xs text-red-600">{wf.error}</span>}
     </div>
   );

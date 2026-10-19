@@ -22,6 +22,19 @@ export interface WorldFrameClicks {
   origin_mm: [number, number];
 }
 
+/**
+ * A saved world frame as `GET /calibration/model` returns it (`world_frame`, and for a stereo
+ * pair `world_frame2` = the second camera's picks): `mode: "clicks"` plus the snapped pixels.
+ * `origin_mm` is meaningful on the first camera only.
+ */
+export interface SavedWorldFrame {
+  mode?: string;
+  origin?: [number, number] | null;
+  x_axis?: [number, number] | null;
+  y_axis?: [number, number] | null;
+  origin_mm?: [number, number] | null;
+}
+
 /** One camera's `/calibration/validate` result (`validate_images_generic` shape). */
 export interface CameraValidationResult {
   valid: boolean;
