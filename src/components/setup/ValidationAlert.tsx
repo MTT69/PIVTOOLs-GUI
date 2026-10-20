@@ -17,6 +17,8 @@ interface BaseValidationState {
   suggested_mode?: 'ab_format' | 'skip_frames' | null;
   suggested_subfolder?: string | null;
   suggestedCameraCount?: number | null;
+  /** true = files are 0-based, false = 1-based (a wrong start index left a file missing). */
+  suggestedZeroBased?: boolean | null;
   patternValidations?: PatternValidation[];
   abCountWarning?: string | null;
   sampleFiles?: string[];
@@ -44,9 +46,11 @@ interface ValidationAlertProps {
   onApplySuggestedSubfolder?: (subfolder: string) => void;
   /** Callback when user clicks to apply a suggested camera count (stale multi-camera config) */
   onApplySuggestedCameraCount?: (count: number) => void;
+  /** Callback when user clicks to switch the start index (0 or 1) the files actually use */
+  onApplySuggestedStartIndex?: (startIndex: 0 | 1) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, pendingLabel, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, pendingLabel, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount, onApplySuggestedStartIndex }: ValidationAlertProps) {
   // Checking / re-validating state: show the in-flight error if one is present, else the
   // opt-in pending label. Callers that pass `pendingLabel` get a neutral spinner while a
   // fresh check runs; callers that don't keep the original "nothing until error" behaviour.
@@ -69,6 +73,26 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         ? `Found ${foundCount} image${foundCount !== 1 ? 's' : ''} and validated successfully!`
         : "Image files found and validated successfully!";
 
+    // A valid set can still carry notes (grayscale conversion, subset, a 0/1 start-index
+    // hint); they are shown under the success line, with the start-index switch when offered.
+    const notes = (
+      <>
+        {validation.error && <div className="mt-1 text-xs">{validation.error}</div>}
+        {validation.suggestedZeroBased != null && onApplySuggestedStartIndex && (
+          <div className="mt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onApplySuggestedStartIndex(validation.suggestedZeroBased ? 0 : 1)}
+              className="text-blue-600 border-blue-300 hover:bg-blue-50"
+            >
+              Switch to {validation.suggestedZeroBased ? 0 : 1}-based
+            </Button>
+          </div>
+        )}
+      </>
+    );
+
     // A/B count mismatch is a warning, not a failure
     if (validation.abCountWarning) {
       return (
@@ -81,6 +105,7 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
                 <strong>Warning:</strong> {validation.abCountWarning}
               </div>
             )}
+            {notes}
           </AlertDescription>
         </Alert>
       );
@@ -91,6 +116,7 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         <CheckCircle className="h-4 w-4 text-green-600" />
         <AlertDescription className="text-sm text-green-800">
           {message}
+          {notes}
         </AlertDescription>
       </Alert>
     );
@@ -181,6 +207,18 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
                 className="mt-1 text-blue-600 border-blue-300 hover:bg-blue-50"
               >
                 Switch to {validation.suggestedCameraCount} camera{validation.suggestedCameraCount !== 1 ? 's' : ''}
+              </Button>
+            </div>
+          )}
+          {validation.suggestedZeroBased != null && onApplySuggestedStartIndex && (
+            <div className="mt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onApplySuggestedStartIndex(validation.suggestedZeroBased ? 0 : 1)}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50"
+              >
+                Switch to {validation.suggestedZeroBased ? 0 : 1}-based
               </Button>
             </div>
           )}

@@ -255,7 +255,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Stereo detection: check if active calibration method is stereo
   const isStereo = useMemo(() => {
     const activeCalib = config?.calibration?.active;
-    return activeCalib === "stereo_dotboard" || activeCalib === "stereo_charuco";
+    return activeCalib === "stereo_dotboard" || activeCalib === "stereo_charuco" || activeCalib === "stereo_stepped";
   }, [config?.calibration?.active]);
 
   // Feature availability based on data source

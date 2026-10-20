@@ -11,22 +11,6 @@ export interface V2Fiducials {
   y_axis?: Pt;
 }
 
-export interface V2Detected {
-  points: number[][];
-  grid: number[][];
-  width: number;
-  height: number;
-  frame: number;
-  frameCount?: number;
-}
-
-export interface V2Measure {
-  distance_mm: number;
-  distance_px: number;
-  world_p1: Pt;
-  world_p2: Pt;
-}
-
 const BASE = "/backend/calibration";
 
 function qs(o: Record<string, any>): string {
@@ -58,35 +42,6 @@ async function fetchPngBase64(url: string): Promise<string | null> {
 export function useCalibrationApi() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const detect = useCallback(
-    async (body: any, opts?: { datum?: boolean }): Promise<V2Detected | null> => {
-      setBusy(true);
-      setError(null);
-      try {
-        const path = opts?.datum ? "/detect_datum" : "/detect_frame";
-        const data = await postJson(`${BASE}${path}`, body);
-        if (!data.success) {
-          setError(data.error || "board not detected");
-          return null;
-        }
-        return {
-          points: data.image_points,
-          grid: data.grid_indices,
-          width: data.width,
-          height: data.height,
-          frame: data.frame,
-          frameCount: data.frame_count,
-        };
-      } catch (e: any) {
-        setError(errorMessage(e));
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
 
   const loadFrameImage = useCallback(
     async (query: Record<string, any>, datum = false): Promise<string | null> => {
@@ -163,25 +118,12 @@ export function useCalibrationApi() {
     }
   }, []);
 
-  const measure = useCallback(async (body: any): Promise<V2Measure | null> => {
-    try {
-      const data = await postJson(`${BASE}/measure`, body);
-      if (data.error) {
-        setError(data.error);
-        return null;
-      }
-      return data as V2Measure;
-    } catch (e: any) {
-      setError(errorMessage(e));
-      return null;
-    }
-  }, []);
-
   const listFigures = useCallback(async (query: Record<string, any>): Promise<string[]> => {
     try {
       const data = await fetchJson(`${BASE}/figures?${qs(query)}`);
       return data.figures || [];
-    } catch {
+    } catch (e) {
+      setError(`Could not list the figures: ${errorMessage(e)}`);
       return [];
     }
   }, []);
@@ -219,34 +161,9 @@ export function useCalibrationApi() {
     }
   }, []);
 
-  const startApply = useCallback(async (body: any): Promise<any> => {
-    setError(null);
-    try {
-      const data = await postJson(`${BASE}/apply`, body);
-      if (!data.success) {
-        setError(data.error || "apply failed to start");
-        return null;
-      }
-      return data;
-    } catch (e: any) {
-      setError(errorMessage(e));
-      return null;
-    }
-  }, []);
-
-  const applyStatus = useCallback(async (jobId: string): Promise<any> => {
-    // Never throw out of a poll loop: a transient network blip returns a failed status
-    // so callers stop polling instead of leaving a spinner stuck forever.
-    try {
-      return await fetchJson(`${BASE}/apply/status/${jobId}`);
-    } catch (e: any) {
-      return { status: "failed", error: errorMessage(e) };
-    }
-  }, []);
-
   return {
     busy, error, setError,
-    detect, loadFrameImage, snap, generate, generateScaleFactor, loadModel, measure,
-    listFigures, figureUrl, validateSource, globalCompute, startApply, applyStatus,
+    loadFrameImage, snap, generate, generateScaleFactor, loadModel,
+    listFigures, figureUrl, validateSource, globalCompute,
   };
 }

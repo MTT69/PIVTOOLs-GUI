@@ -36,7 +36,8 @@ export interface CalibrationImageViewerProps {
   backendUrl?: string;
   sourcePathIdx: number;
   camera: number;
-  numImages: number;
+  /** Frame count when known (entered or validated); null = auto, resolved by the server. */
+  numImages: number | null;
   calibrationParams?: Record<string, any>;
   onFrameChange?: (idx: number) => void;
   compact?: boolean;
@@ -152,6 +153,7 @@ export default function CalibrationImageViewer({
     width,
     height,
     frameCount,
+    frameCountError,
     stats,
     vmin,
     setVmin,
@@ -168,10 +170,17 @@ export default function CalibrationImageViewer({
     refreshKey
   );
 
-  // Actual frame count (from server or prop)
-  const maxFrames = useMemo(() => {
-    return frameCount > 0 ? frameCount : numImages;
-  }, [frameCount, numImages]);
+  // Upper frame bound: the server's count, else the tab's (entered or validated). When the
+  // server reports it cannot count (frameCountError) and the tab has none, there is no bound
+  // (null): navigation is unguarded and the reason is shown. Before the first frame reports,
+  // an unknown count still allows frame 1.
+  const maxFrames: number | null = useMemo(() => {
+    if (frameCount != null) return frameCount;
+    if (numImages != null) return numImages;
+    return frameCountError ? null : 1;
+  }, [frameCount, numImages, frameCountError]);
+  const clampFrame = (n: number) => Math.max(1, maxFrames == null ? n : Math.min(maxFrames, n));
+  const atLastFrame = maxFrames != null && index >= maxFrames;
 
   // Sync frame input with index
   useEffect(() => {
@@ -211,7 +220,7 @@ export default function CalibrationImageViewer({
 
       const advanceFrame = () => {
         setIndex(prev => {
-          const next = prev >= maxFrames ? 1 : prev + 1;
+          const next = maxFrames != null && prev >= maxFrames ? 1 : prev + 1;
           prefetchSurrounding(next, prefetchCount);
           return next;
         });
@@ -332,7 +341,7 @@ export default function CalibrationImageViewer({
     const val = e.target.value;
     setFrameInputValue(val);
     if (val && !isNaN(Number(val))) {
-      const num = Math.max(1, Math.min(maxFrames, Number(val)));
+      const num = clampFrame(Number(val));
       setIndex(num);
     }
   };
@@ -342,7 +351,7 @@ export default function CalibrationImageViewer({
     if (!val || isNaN(Number(val))) {
       setFrameInputValue(String(index));
     } else {
-      const num = Math.max(1, Math.min(maxFrames, Number(val)));
+      const num = clampFrame(Number(val));
       setIndex(num);
       setFrameInputValue(String(num));
     }
@@ -372,27 +381,34 @@ export default function CalibrationImageViewer({
               <path d="M12 4L6 10l6 6" />
             </svg>
           </Button>
-          <input
-            type="range"
-            min={1}
-            max={maxFrames}
-            value={index}
-            onChange={e => setIndex(Number(e.target.value))}
-            className="flex-1"
-          />
+          {maxFrames != null ? (
+            <input
+              type="range"
+              min={1}
+              max={maxFrames}
+              value={index}
+              onChange={e => setIndex(Number(e.target.value))}
+              className="flex-1"
+            />
+          ) : (
+            <div className="flex-1" />
+          )}
           <Button
             size="sm"
             variant="outline"
-            onClick={() => setIndex(Math.min(maxFrames, index + 1))}
-            disabled={index >= maxFrames}
+            onClick={() => setIndex(clampFrame(index + 1))}
+            disabled={atLastFrame}
             className="px-2"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M8 4l6 6-6 6" />
             </svg>
           </Button>
-          <span className="text-xs text-muted-foreground whitespace-nowrap">{index} / {maxFrames}</span>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">{index} / {maxFrames ?? "?"}</span>
         </div>
+        {frameCountError && (
+          <p className="text-xs text-amber-600">Frame count unknown: {frameCountError}</p>
+        )}
 
         {/* Image Viewer */}
         <div className="h-[300px] relative">
@@ -458,29 +474,31 @@ export default function CalibrationImageViewer({
                 <path d="M12 4L6 10l6 6" />
               </svg>
             </Button>
-            <input
-              type="range"
-              min={1}
-              max={maxFrames}
-              value={index}
-              onChange={e => setIndex(Number(e.target.value))}
-              className="flex-1 max-w-[300px]"
-            />
+            {maxFrames != null && (
+              <input
+                type="range"
+                min={1}
+                max={maxFrames}
+                value={index}
+                onChange={e => setIndex(Number(e.target.value))}
+                className="flex-1 max-w-[300px]"
+              />
+            )}
             <Input
               type="text" inputMode="numeric"
               min={1}
-              max={maxFrames}
+              max={maxFrames ?? undefined}
               value={frameInputValue}
               onChange={handleFrameInputChange}
               onBlur={handleFrameInputBlur}
               className="w-20"
             />
-            <span className="text-sm text-muted-foreground whitespace-nowrap">/ {maxFrames}</span>
+            <span className="text-sm text-muted-foreground whitespace-nowrap">/ {maxFrames ?? "?"}</span>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setIndex(Math.min(maxFrames, index + 1))}
-              disabled={index >= maxFrames}
+              onClick={() => setIndex(clampFrame(index + 1))}
+              disabled={atLastFrame}
               className="rounded-full p-2"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -522,6 +540,10 @@ export default function CalibrationImageViewer({
             </Select>
           </div>
         </div>
+
+        {frameCountError && (
+          <p className="text-xs text-amber-600">Frame count unknown: {frameCountError}</p>
+        )}
 
         {/* Image Display */}
         <div className="h-[400px] relative">

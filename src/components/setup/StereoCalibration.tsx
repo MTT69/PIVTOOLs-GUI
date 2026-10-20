@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,10 +12,13 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2, Camera } from "lucid
 import { useStereoCalibration } from "@/hooks/useStereoCalibration";
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
+import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
-import { postJson, errorMessage } from "@/lib/api";
 import {
   useWorldFrame,
   WorldFrameControls,
@@ -57,12 +60,18 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     setImageType,
     numImages,
     setNumImages,
+    zeroBasedIndexing,
+    setZeroBasedIndexing,
+    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
+    autoViewCountText,
 
     // Grid params (pattern cols/rows auto-detected)
     dotSpacingMm,
@@ -85,8 +94,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
     isCalibrating,
 
     // Reconstruction job tracking
-    reconstructJobStatus,
+    applyJobs,
     isReconstructing,
+    cancelApply,
+    changedSinceGenerate,
+    modelLoadError,
 
     // Model and detections
     stereoModel,
@@ -104,6 +116,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
     // Model restore
     loadedWorldFrame,
+    loadedWorldFrame2,
 
     // Actions
     generateStereoModel,
@@ -121,30 +134,69 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   const datumNum = Number(datumFrame) || 1;
   const onDatumFrame = currentFrame === datumNum;
 
-  // World-frame (coordinate-system x,y) picker — camera 1 datum frame only.
-  const wf = useWorldFrame({
-    board: "dotboard", camera: cam1, sourcePathIdx, datumFrame,
+  // World-frame (coordinate-system x,y) pickers, one per camera, on the datum frame. Dotboard
+  // grid indices are re-zeroed per view, so camera 2's origin/+X/+Y must mark the SAME physical
+  // dots as camera 1's for the backend to label camera 2's features (`clicks2`). Camera 1's
+  // origin mm names the origin for both.
+  const boardParams = useCallback(() => {
     // Empty spacing is omitted — the backend falls to the sidecar value or errors.
-    boardParams: () => {
-      const v = parseFloat(dotSpacingMm);
-      return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
-    },
-    imageFormat, imageType,
-  });
-  const wfActive = activeCam === cam1;
-  const wfOnDatum = wfActive && onDatumFrame;
-  const wfIsSelecting = wfOnDatum && wf.mode !== "none";
+    const v = parseFloat(dotSpacingMm);
+    return Number.isFinite(v) ? { dot_spacing_mm: v } : {};
+  }, [dotSpacingMm]);
+  const wf1 = useWorldFrame({ board: "dotboard", camera: cam1, sourcePathIdx, datumFrame, boardParams, imageFormat, imageType });
+  const wf2 = useWorldFrame({ board: "dotboard", camera: cam2, sourcePathIdx, datumFrame, boardParams, imageFormat, imageType });
+  const wfActive = activeCam === cam2 ? wf2 : wf1;
+  const wfOnDatum = onDatumFrame;
+  const wfIsSelecting = wfOnDatum && wfActive.mode !== "none";
+  const bothFramesSet = wf1.complete && wf2.complete;
+  // Which camera still needs its picks, for the Generate tooltip and the hint line.
+  const missingFrameCam = !wf1.complete ? cam1 : !wf2.complete ? cam2 : null;
 
-  // When a saved stereo model loads, restore its world frame (cam1) + show the overlay.
-  // The dots themselves are restored from inputs.mat by the hook's own effect,
-  // independently of whether a model exists -- detections survive a model delete,
-  // and re-detecting them here was the whole cost this change removes.
-  React.useEffect(() => {
-    if (!hasModel) return;
-    if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    setShowOverlay(true);
+  // Six-step sequence (stepped-tab pattern): camera 1's Origin → +X → +Y, then the viewer
+  // switches to camera 2 and its Origin pick starts. Only a user pick advances it — a restore
+  // completes camera 1 without ever entering a pick mode.
+  const pickingCam1 = useRef(false);
+  useEffect(() => {
+    if (wf1.mode !== "none") pickingCam1.current = true;
+  }, [wf1.mode]);
+  useEffect(() => {
+    if (!wf1.complete || !pickingCam1.current) return;
+    pickingCam1.current = false;
+    if (wf2.complete) return;
+    setActiveCam(cam2);
+    void wf2.startPick("origin");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasModel, loadedWorldFrame]);
+  }, [wf1.complete]);
+  useEffect(() => {
+    pickingCam1.current = false;
+  }, [cam1, cam2, sourcePathIdx, datumFrame]);
+
+  // When a saved stereo model loads (or inputs.mat holds picks after a model delete), restore
+  // both cameras' world frames. The dots themselves are restored from inputs.mat by the hook's
+  // own effect, independently of whether a model exists.
+  React.useEffect(() => {
+    if (loadedWorldFrame) wf1.restore(loadedWorldFrame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (loadedWorldFrame2) wf2.restore(loadedWorldFrame2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedWorldFrame2]);
+
+  /** Generate with both cameras' picks: `clicks` (cam1 + origin mm) and `clicks2` (cam2). */
+  const generateWithFrames = async (opts?: { forceRedetect?: boolean }) => {
+    const p2 = wf2.payload;
+    await generateStereoModel(wf1.payload, {
+      ...opts,
+      clicks2: p2 ? { origin: p2.origin, x_axis: p2.x_axis, y_axis: p2.y_axis } : null,
+    });
+    detectFrame(currentFrame, cam1);
+    detectFrame(currentFrame, cam2);
+    setShowOverlay(true);
+  };
+  React.useEffect(() => {
+    if (hasModel) setShowOverlay(true);
+  }, [hasModel, setShowOverlay]);
 
   // Local state
   // Open by default (2026-09-16): frames are warmed on validation and the dot
@@ -153,24 +205,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const reconstructTypeName = calibration.pivType;
+  // PIV datasets the saved model can be applied to (Settings → Directories).
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
   const handleReconstructTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
-  // Set as active calibration method
-  const setAsActiveMethod = async () => {
-    try {
-      const json = await postJson("/backend/update_config", {
-        calibration: { active: "stereo_dotboard" },
-      });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  };
 
-  const isActive = config.calibration?.active === "stereo_dotboard";
 
   // Local input state for debouncing
   const [dotSpacingMmInput, setDotSpacingMmInput] = useState(String(dotSpacingMm));
@@ -297,14 +337,16 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
+                placeholder="auto"
                 onChange={e => setNumImages(e.target.value)}
-                onBlur={() => {
-                  const finalVal = parseInt(numImages) || 10;
-                  setNumImages(String(finalVal));
-                }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
+              {autoViewCountText && <p className="text-xs text-muted-foreground">{autoViewCountText}</p>}
             </div>
           </div>
+
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+            suggestedZeroBased={suggestedZeroBased} />
 
           {/* Use Camera Subfolders Toggle */}
           {(imageType === "standard" || imageType === "lavision_im7") && (
@@ -352,48 +394,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cam1}`}/
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2).
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-muted-foreground">Camera {cam1}</label>
-                    <Input
-                      placeholder={`Cam${cam1}`}
-                      value={cameraSubfolders[0] || ''}
-                      onChange={e => {
-                        const newSubfolders = [...cameraSubfolders];
-                        while (newSubfolders.length < 2) newSubfolders.push('');
-                        newSubfolders[0] = e.target.value;
-                        setCameraSubfolders(newSubfolders);
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Camera {cam2}</label>
-                    <Input
-                      placeholder={`Cam${cam2}`}
-                      value={cameraSubfolders[1] || ''}
-                      onChange={e => {
-                        const newSubfolders = [...cameraSubfolders];
-                        while (newSubfolders.length < 2) newSubfolders.push('');
-                        newSubfolders[1] = e.target.value;
-                        setCameraSubfolders(newSubfolders);
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={[cam1, cam2]}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Section 3: Stereo Validation Status */}
@@ -408,7 +414,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 pendingLabel="Validating…"
                 customSuccessMessage={
                   validation.valid
-                    ? `Found ${validation.matching_count === 'container' ? 'container files' : `${validation.matching_count} matching calibration image pairs`}`
+                    ? `Found ${validation.matching_count} matching calibration image pairs`
                     : undefined
                 }
               />
@@ -416,11 +422,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               {!validating && validation.cam1 && validation.cam2 && (
                 <div className="flex gap-4 text-xs text-muted-foreground">
                   <span className={validation.cam1.valid ? "text-green-600" : "text-red-500"}>
-                    Cam {cam1}: {validation.cam1.found_count === 'container' ? 'container' : `${validation.cam1.found_count} images`}
+                    Cam {cam1}: {validation.cam1.found_count} images
                     {validation.cam1.error && ` (${validation.cam1.error})`}
                   </span>
                   <span className={validation.cam2.valid ? "text-green-600" : "text-red-500"}>
-                    Cam {cam2}: {validation.cam2.found_count === 'container' ? 'container' : `${validation.cam2.found_count} images`}
+                    Cam {cam2}: {validation.cam2.found_count} images
                     {validation.cam2.error && ` (${validation.cam2.error})`}
                   </span>
                 </div>
@@ -443,25 +449,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Suggested Subfolder Button */}
-          {validation && !validating && !validation.valid && (validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder) && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Subfolder suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setUseCameraSubfolders(true);
-                  setCameraSubfolders([
-                    validation.cam1?.suggested_subfolder || validation.cam2?.suggested_subfolder || '',
-                    validation.cam2?.suggested_subfolder || validation.cam1?.suggested_subfolder || '',
-                  ]);
-                }}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use "{validation.cam1?.suggested_subfolder}" / "{validation.cam2?.suggested_subfolder}"
-              </Button>
-            </div>
+          {/* Suggested Subfolder Button: each camera's own suggestion, written to its own slot */}
+          {validation && !validating && !validation.valid && (
+            <SubfolderSuggestion
+              suggestions={subfolderSuggestions({ [cam1]: validation.cam1, [cam2]: validation.cam2 })}
+              onApply={applySubfolderSuggestions}
+            />
           )}
 
           {/* Section 4: Grid Parameters */}
@@ -503,7 +496,12 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   min={1}
                   value={datumFrameInput}
                   onChange={e => setDatumFrameInput(e.target.value)}
-                  onBlur={() => setDatumFrame(parseInt(datumFrameInput) || 1)}
+                  onBlur={() => {
+                    // Invalid input reverts to the current frame; never a silent frame 1.
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">World origin image (1-based)</p>
               </div>
@@ -555,7 +553,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={activeCam}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               refreshKey={viewerRefreshKey}
               stereoParams={{ cam1, cam2 }}
               onFrameChange={handleFrameChange}
@@ -563,22 +561,32 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               showSavedOverlay={showOverlay}
               onSavedOverlayChange={setShowOverlay}
               pointSelectMode={wfIsSelecting}
-              onPointSelect={(px, py) => { if (wfIsSelecting) wf.handlePoint(px, py); }}
-              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wf) : []}
+              onPointSelect={(px, py) => { if (wfIsSelecting) wfActive.handlePoint(px, py); }}
+              selectedMarkers={wfOnDatum ? getWorldFrameMarkers(wfActive) : []}
               detectionLoading={modelLoading}
               settingsBarExtras={
                 <div className="flex items-center gap-3 flex-wrap">
                   <Button
-                    variant="outline" size="sm" disabled={wf.busy || detecting}
-                    onClick={async () => { await wf.prepare(); await detectAllViews(); setShowOverlay(true); }}
+                    variant="outline" size="sm" disabled={wf1.busy || wf2.busy || detecting}
+                    onClick={async () => {
+                      // Both cameras' datum detections, so either camera can be picked on.
+                      await wf1.prepare();
+                      await wf2.prepare();
+                      await detectAllViews();
+                      setShowOverlay(true);
+                    }}
                   >
-                    {(wf.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
+                    {(wf1.busy || wf2.busy || detecting) && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}Detect Dots
                   </Button>
                   {wfOnDatum ? (
-                    <WorldFrameControls wf={wf} />
+                    <WorldFrameControls
+                      wf={wfActive}
+                      label={`Cam ${activeCam} frame:`}
+                      showOriginMm={activeCam === cam1}
+                    />
                   ) : (
                     <span className="text-xs text-muted-foreground">
-                      World frame is set on Camera {cam1}, datum frame {datumNum}.
+                      World frame is picked on both cameras, datum frame {datumNum}.
                     </span>
                   )}
                 </div>
@@ -591,9 +599,11 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <div className="flex gap-3 items-center flex-wrap">
               {/* Generate Stereo Model */}
               <Button
-                onClick={async () => { await generateStereoModel(wf.payload); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
-                disabled={isCalibrating || !validation?.valid || !wf.complete}
-                title={!wf.complete ? `Set the world frame on Camera ${cam1} first: Detect Dots → Origin → +X → +Y` : undefined}
+                onClick={() => generateWithFrames()}
+                disabled={isCalibrating || !validation?.valid || !bothFramesSet}
+                title={missingFrameCam !== null
+                  ? `Set the world frame on Camera ${missingFrameCam} first: Detect Dots → Origin → +X → +Y`
+                  : undefined}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isCalibrating ? (
@@ -609,16 +619,17 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               {/* Re-detect: ignore the cached detections and detect fresh, then recalibrate */}
               <Button
                 variant="outline"
-                onClick={async () => { await generateStereoModel(wf.payload, { forceRedetect: true }); detectFrame(currentFrame, cam1); detectFrame(currentFrame, cam2); setShowOverlay(true); }}
-                disabled={isCalibrating || !validation?.valid || !wf.complete}
+                onClick={() => generateWithFrames({ forceRedetect: true })}
+                disabled={isCalibrating || !validation?.valid || !bothFramesSet}
                 title="Ignore cached detections and re-detect from the images, then recalibrate"
               >
                 Re-detect
               </Button>
 
-              {/* Reconstruct 3D Vectors with type selector */}
-              <div className="flex gap-2 items-center">
-                <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange}>
+              {/* Reconstruct 3D Vectors: PIV type, cam2 interpolator, target datasets */}
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-sm font-medium">Reconstruct 3D vectors:</span>
+                <Select value={reconstructTypeName} onValueChange={handleReconstructTypeChange} disabled={isReconstructing}>
                   <SelectTrigger className="w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -628,46 +639,34 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                   </SelectContent>
                 </Select>
                 <InterpolatorSelect value={interpolator} onValueChange={setInterpolator} disabled={isReconstructing} />
-                <Button
-                  onClick={() => reconstructVectors(reconstructTypeName)}
-                  disabled={!hasModel || isReconstructing}
-                  variant="outline"
-                  className="border-green-500 text-green-700 hover:bg-green-50"
+                <ApplyDatasetButtons
+                  basePaths={basePaths}
+                  defaultIdx={defaultDatasetIdx(config)}
+                  jobs={applyJobs}
+                  onApply={datasets => reconstructVectors(reconstructTypeName, datasets)}
+                  disabled={!hasModel}
                   title={!hasModel ? "Generate or load a stereo model first" : "Reconstruct 3D velocity vectors"}
-                >
-                  {isReconstructing ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Reconstructing...
-                    </>
-                  ) : (
-                    'Reconstruct 3D Vectors'
-                  )}
-                </Button>
+                  buttonClassName="border border-green-500 bg-white text-green-700 hover:bg-green-50"
+                />
               </div>
 
               {/* Set as Active Method */}
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                className={isActive ? "bg-green-600 hover:bg-green-600 text-white" : ""}
-                variant={isActive ? "default" : "outline"}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="stereo_dotboard" config={config} updateConfig={updateConfig} />
             </div>
 
-            {validation?.valid && !wf.complete && (
+            {validation?.valid && missingFrameCam !== null && (
               <p className="text-xs text-muted-foreground mt-2">
-                Set the coordinate frame before generating: open the viewer on Camera {cam1}, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+                Set the coordinate frame on both cameras before generating: open the viewer, click <strong>Detect Dots</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame of Camera {cam1}, then the <strong>same three dots</strong> on Camera {cam2} (the viewer switches over). Camera {missingFrameCam} is not set yet.
               </p>
+            )}
+
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
+
+            {modelLoadError && (
+              <div className="text-sm text-red-600 flex items-center gap-1 mt-2">
+                <AlertTriangle className="h-4 w-4" />
+                {modelLoadError}
+              </div>
             )}
 
             {detectionsStale && (
@@ -700,7 +699,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground mt-1">
                   Progress: {jobStatus.progress?.toFixed(0) || 0}%
                   {jobStatus.processed_pairs !== undefined && (
-                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs}</span>
+                    <span> | Pairs: {jobStatus.processed_pairs}/{jobStatus.total_pairs ?? '?'}</span>
                   )}
                 </div>
               </div>
@@ -712,10 +711,10 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Stereo calibration completed successfully!
                 {jobStatus.cam1_rms_error !== undefined && (
-                  <span className="ml-2">RMS Cam {cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
+                  <span className="ml-2">RMS Cam {jobStatus.cam1}: {jobStatus.cam1_rms_error?.toFixed(4)} px</span>
                 )}
                 {jobStatus.cam2_rms_error !== undefined && (
-                  <span className="ml-2">| RMS Cam {cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
+                  <span className="ml-2">| RMS Cam {jobStatus.cam2}: {jobStatus.cam2_rms_error?.toFixed(4)} px</span>
                 )}
               </div>
             )}
@@ -728,24 +727,9 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
               </div>
             )}
 
-            {/* Reconstruction Job Progress */}
-            <CalibrationJobProgress job={reconstructJobStatus} title="3D Reconstruction" />
-
-            {/* Reconstruction Job Completed */}
-            {reconstructJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                3D reconstruction completed!
-              </div>
-            )}
-
-            {/* Reconstruction Job Failed */}
-            {reconstructJobStatus?.status === 'failed' && (
-              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Reconstruction error: {reconstructJobStatus.error || 'Unknown error'}
-              </div>
-            )}
+            {/* 3D reconstruction progress / results, one per target dataset selection */}
+            <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="3D reconstruction"
+              onCancel={cancelApply} />
           </div>
         </CardContent>
       </Card>
@@ -756,18 +740,18 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           <CardHeader>
             <CardTitle>Stereo Model Results</CardTitle>
             <CardDescription>
-              Stereo calibration for Cameras {cam1} and {cam2}
+              Stereo calibration for Cameras {stereoModel.cam1} and {stereoModel.cam2} (solve order)
             </CardDescription>
           </CardHeader>
           <CardContent>
             {/* Quality Metrics */}
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">RMS Cam {cam1}</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {stereoModel.cam1}</div>
                 <div className="text-lg font-semibold">{stereoModel.rms_cam1?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
-                <div className="text-xs text-muted-foreground">RMS Cam {cam2}</div>
+                <div className="text-xs text-muted-foreground">RMS Cam {stereoModel.cam2}</div>
                 <div className="text-lg font-semibold">{stereoModel.rms_cam2?.toFixed(4)} px</div>
               </div>
               <div className="p-3 bg-muted rounded">
@@ -795,8 +779,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             {/* Per-Camera Intrinsics */}
             <div className="grid md:grid-cols-2 gap-6">
               {[
-                { num: cam1, intr: stereoModel.intrinsics1 },
-                { num: cam2, intr: stereoModel.intrinsics2 },
+                { num: stereoModel.cam1, intr: stereoModel.intrinsics1 },
+                { num: stereoModel.cam2, intr: stereoModel.intrinsics2 },
               ].map(({ num, intr }) => (
                 <div key={num} className="p-3 border rounded space-y-2">
                   <h4 className="text-sm font-semibold">Camera {num}</h4>

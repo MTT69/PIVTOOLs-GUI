@@ -11,8 +11,12 @@ import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react"
 import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
 import { Progress } from "@/components/ui/progress";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
-import { CalibrationJobProgress } from "@/components/setup/CalibrationJobProgress";
+import { SetActiveButton } from "@/components/setup/SetActiveButton";
+import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
+import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
+import { CameraSubfolderInputs, SubfolderSuggestion } from "@/components/setup/CameraSubfolderInputs";
+import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
   useWorldFrame,
@@ -20,7 +24,6 @@ import {
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
 import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
-import { postJson, errorMessage } from "@/lib/api";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -51,12 +54,18 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setImageType,
     numImages,
     setNumImages,
+    zeroBasedIndexing,
+    setZeroBasedIndexing,
+    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
-    setCameraSubfolders,
+    setSubfolderFor,
+    applySubfolderSuggestions,
+    frameCount,
+    autoViewCountText,
 
     // Board params
     squaresH,
@@ -92,8 +101,10 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     isMultiCameraCalibrating,
 
     // Vector calibration job tracking
-    vectorJobStatus,
+    applyJobs,
     isVectorCalibrating,
+    cancelApply,
+    changedSinceGenerate,
 
     // Model and detections
     cameraModel,
@@ -122,9 +133,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
   // Track the frame currently shown in the viewer (1-based, matches datumFrame).
   // Stable handler so the viewer's onFrameChange effect never re-fires from closure identity.
-  const [currentFrame, setCurrentFrame] = useState<number>(parseInt(datumFrame) || 1);
+  const [currentFrame, setCurrentFrame] = useState<number>(datumFrame);
   const handleFrameChange = useCallback((idx: number) => setCurrentFrame(idx), []);
-  const datumNum = parseInt(datumFrame) || 1;
+  const datumNum = datumFrame;
   const onDatumFrame = currentFrame === datumNum;
 
   // Multi-camera datasets are always solved jointly (one shared board); a single camera uses the
@@ -134,7 +145,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
   // World-frame (coordinate-system x,y) picker — datum frame only (single-camera mono solve).
   const wf = useWorldFrame({
-    board: "charuco", camera, sourcePathIdx, datumFrame: parseInt(datumFrame) || 1,
+    board: "charuco", camera, sourcePathIdx, datumFrame,
     // Empty fields are omitted — the backend falls to the sidecar value or errors.
     boardParams: () => {
       const p: Record<string, unknown> = {};
@@ -149,17 +160,26 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     imageFormat, imageType,
   });
   const wfIsSelecting = onDatumFrame && wf.mode !== "none";
+  // ChArUco corner ids are absolute, so the backend's default frame is board-anchored and no
+  // clicks are needed. A PARTLY picked frame would be dropped in favour of that default, so
+  // Generate waits until the pick is either empty or complete.
+  const wfPartial = !wf.complete && !!(wf.clicks.origin || wf.clicks.x_axis || wf.clicks.y_axis);
+  const partialTitle = wfPartial ? "Finish the world frame (Origin → +X → +Y) or clear it to use the board's default frame" : undefined;
 
-  // When a saved model loads, restore its world frame + show the overlay.
-  // The dots themselves are restored from inputs.mat by the hook's own effect,
-  // independently of whether a model exists -- detections survive a model delete,
-  // and re-detecting them here was the whole cost this change removes.
+  // Restore the saved world frame whenever one is stored — from the model, or from inputs.mat
+  // after a model delete. The dots are restored from inputs.mat by the hook. A loaded model
+  // also shows the overlay.
   React.useEffect(() => {
-    if (!hasModel) return;
     if (loadedWorldFrame) wf.restore(loadedWorldFrame);
-    setShowOverlay(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasModel, loadedWorldFrame]);
+  }, [loadedWorldFrame]);
+  React.useEffect(() => {
+    if (hasModel) setShowOverlay(true);
+  }, [hasModel, setShowOverlay]);
+
+  // Datum frame commits on blur (a half-typed number must not re-target the world frame).
+  const [datumFrameInput, setDatumFrameInput] = useState(String(datumFrame));
+  React.useEffect(() => { setDatumFrameInput(String(datumFrame)); }, [datumFrame]);
 
   // Local state
   // Open by default (2026-09-16): frames are warmed on validation and the dot
@@ -168,6 +188,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   // PIV result type for the apply step — rig.piv_type in the per-source settings
   // sidecar, hydrated and persisted (debounced) by the calibration hook.
   const vectorTypeName = calibration.pivType;
+  // PIV datasets the saved model can be applied to (Settings → Directories).
+  const basePaths: string[] = config?.paths?.base_paths ?? [];
   const handleVectorTypeChange = (value: 'instantaneous' | 'ensemble') =>
     calibration.setPivType(value);
 
@@ -181,28 +203,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         result[frameIdx] = {
           grid_points: value.grid_points,
           grid_indices: value.grid_indices,
-          reprojection_error: value.reprojection_error,
         };
       }
     }
     return Object.keys(result).length > 0 ? result : undefined;
   }, [detections]);
 
-  // Set as active calibration method
-  const setAsActiveMethod = useCallback(async () => {
-    try {
-      const json = await postJson("/backend/update_config", {
-        calibration: { active: "charuco" },
-      });
-      if (json.updated?.calibration) {
-        updateConfig(["calibration"], { ...config.calibration, ...json.updated.calibration });
-      }
-    } catch (err) {
-      console.error("Failed to set active calibration method:", errorMessage(err));
-    }
-  }, [config.calibration, updateConfig]);
 
-  const isActive = config.calibration?.active === "charuco";
 
   return (
     <div className="space-y-6">
@@ -285,17 +292,20 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 type="text" inputMode="numeric"
                 min={1}
                 value={numImages}
+                placeholder="auto"
                 onChange={e => setNumImages(e.target.value)}
-                onBlur={() => {
-                  const finalVal = parseInt(numImages) || 10;
-                  setNumImages(String(finalVal));
-                }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Leave blank to count the images found.</p>
+              {autoViewCountText && <p className="text-xs text-muted-foreground">{autoViewCountText}</p>}
             </div>
           </div>
 
-          {/* Use Camera Subfolders Toggle - for standard and IM7 formats */}
-          {(imageType === "standard" || imageType === "lavision_im7") && (
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
+            suggestedZeroBased={suggestedZeroBased} />
+
+          {/* Use Camera Subfolders Toggle - for standard and IM7 formats; hidden for a one-camera rig, which
+              always resolves at the source root (rig size, not the selected cameras) */}
+          {(imageType === "standard" || imageType === "lavision_im7") && config?.paths?.camera_count !== 1 && (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Switch
@@ -318,39 +328,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
           {useCameraSubfolders && cameraOptions.length > 1 && (
-            <div className="space-y-4 border rounded-lg p-4 bg-muted/30">
-              <h4 className="text-sm font-medium">Camera Subfolder Configuration</h4>
-              <p className="text-xs text-muted-foreground">
-                Camera subfolders are relative to the calibration source path.
-                Example: {calibrationSources[sourcePathIdx] || '/path/to/calibration'}/{cameraSubfolders[0] || `Cam${cameraOptions[0]}`}/
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Camera Subfolder Names (optional)</label>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Custom folder names for each camera. Leave empty to use defaults (Cam1, Cam2, ...).
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {cameraOptions.map((cam, idx) => (
-                    <div key={cam}>
-                      <label className="text-xs text-muted-foreground">Camera {cam}</label>
-                      <Input
-                        placeholder={`Cam${cam}`}
-                        value={cameraSubfolders[idx] || ''}
-                        onChange={e => {
-                          const newSubfolders = [...cameraSubfolders];
-                          while (newSubfolders.length < cameraOptions.length) {
-                            newSubfolders.push('');
-                          }
-                          newSubfolders[idx] = e.target.value;
-                          setCameraSubfolders(newSubfolders);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <CameraSubfolderInputs
+              cameras={cameraOptions}
+              cameraSubfolders={cameraSubfolders}
+              setSubfolderFor={setSubfolderFor}
+              sourcePath={calibrationSources[sourcePathIdx] || ""}
+            />
           )}
 
           {/* Section 3: Validation Status */}
@@ -364,7 +347,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               pendingLabel="Validating…"
               customSuccessMessage={
                 validation.valid
-                  ? `Found ${validation.found_count === 'container' ? 'container file' : `${validation.found_count} calibration images`}`
+                  ? `Found ${validation.found_count} calibration images`
                   : undefined
               }
             />
@@ -385,28 +368,14 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </div>
           )}
 
-          {/* Suggested Subfolder Button */}
+          {/* Suggested Subfolder Button. Only the selected camera is validated, so the other
+              cameras' folders are inferred by swapping the camera number into its suggestion;
+              each is written to its own camera's slot. */}
           {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
             const sub = validation.suggested_subfolder!;
-            const cams: number[] = config?.paths?.camera_numbers || [1, 2];
-            const perCam = cams.map((c: number) => sub.replace(/\d+/, String(c)));
-            const label = [...new Set(perCam)].join('" / "');
-            return (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Subfolder suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setUseCameraSubfolders(true);
-                    setCameraSubfolders(perCam);
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use "{label}"
-                </Button>
-              </div>
-            );
+            const perCam: Record<number, string> = {};
+            for (const c of cameraOptions) perCam[c] = sub.replace(/\d+/, String(c));
+            return <SubfolderSuggestion suggestions={perCam} onApply={applySubfolderSuggestions} />;
           })()}
 
           {/* Section 4: ChArUco Board Parameters */}
@@ -508,9 +477,13 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 <Input
                   type="text" inputMode="numeric"
                   min={1}
-                  value={datumFrame}
-                  onChange={e => setDatumFrame(e.target.value)}
-                  onBlur={() => setDatumFrame(String(parseInt(datumFrame) || 1))}
+                  value={datumFrameInput}
+                  onChange={e => setDatumFrameInput(e.target.value)}
+                  onBlur={() => {
+                    const v = parseInt(datumFrameInput, 10);
+                    if (Number.isFinite(v) && v >= 1) setDatumFrame(v);
+                    else setDatumFrameInput(String(datumFrame));
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Calibration image defining world origin</p>
               </div>
@@ -525,17 +498,23 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               board="charuco"
               cameraOptions={cameraOptions}
               sourcePathIdx={sourcePathIdx}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               imageFormat={imageFormat}
               imageType={imageType}
               modelType={modelType}
               validationValid={!!validation?.valid}
               viewerRefreshKey={viewerRefreshKey}
-              datumFrame={parseInt(datumFrame) || 1}
+              datumFrame={datumFrame}
               dt={Number.isFinite(parseFloat(dt)) ? parseFloat(dt) : null}
               calibrateVectors={calibrateVectors}
-              vectorJobStatus={vectorJobStatus}
+              applyJobs={applyJobs}
               isVectorCalibrating={isVectorCalibrating}
+              onCancelApply={cancelApply}
+              basePaths={basePaths}
+              defaultDatasetIdx={defaultDatasetIdx(config)}
+              pivType={vectorTypeName}
+              onPivTypeChange={handleVectorTypeChange}
+              setActiveControl={<SetActiveButton method="charuco" config={config} updateConfig={updateConfig} />}
             />
           )}
 
@@ -574,7 +553,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               backendUrl="/backend"
               sourcePathIdx={sourcePathIdx}
               camera={camera}
-              numImages={parseInt(numImages) || 10}
+              numImages={frameCount}
               refreshKey={viewerRefreshKey}
               onFrameChange={handleFrameChange}
               savedDetections={savedDetections}
@@ -612,8 +591,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <div className="flex gap-2 items-center flex-wrap">
               <Button
                 onClick={async () => { await generateCameraModelAll(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
-                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
-                title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || wfPartial}
+                title={partialTitle}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {(isCalibrating || isMultiCameraCalibrating) ? (
@@ -629,33 +608,19 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               {cameraOptions.length > 1 && (
                 <Button
                   onClick={async () => { await generateCameraModel(wf.payload); detectFrame(currentFrame); setShowOverlay(true); }}
-                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || !wf.complete}
-                  title={!wf.complete ? "Set the world frame first: Detect Markers → Origin → +X → +Y" : undefined}
+                  disabled={isCalibrating || isMultiCameraCalibrating || !validation?.valid || wfPartial}
+                  title={partialTitle}
                   variant="outline"
                 >
                   This Camera Only
                 </Button>
               )}
 
-              {/* Calibrate Vectors with type selection */}
-              <div className="flex items-center gap-1">
-                <Button
-                  onClick={() => calibrateVectors(true, vectorTypeName)}
-                  disabled={!hasModel || isVectorCalibrating}
-                  className="bg-green-600 hover:bg-green-700 text-white rounded-r-none"
-                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
-                >
-                  {isVectorCalibrating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Calibrating...
-                    </>
-                  ) : (
-                    'Calibrate Vectors'
-                  )}
-                </Button>
+              {/* Calibrate Vectors: PIV type + target datasets */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">Calibrate vectors:</span>
                 <Select value={vectorTypeName} onValueChange={handleVectorTypeChange} disabled={isVectorCalibrating}>
-                  <SelectTrigger className="w-[130px] rounded-l-none border-l-0 bg-green-600 hover:bg-green-700 text-white border-green-600">
+                  <SelectTrigger className="w-[130px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -663,30 +628,30 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                     <SelectItem value="ensemble">Ensemble</SelectItem>
                   </SelectContent>
                 </Select>
+                <ApplyDatasetButtons
+                  basePaths={basePaths}
+                  defaultIdx={defaultDatasetIdx(config)}
+                  jobs={applyJobs}
+                  onApply={datasets => calibrateVectors(vectorTypeName, datasets)}
+                  disabled={!hasModel}
+                  title={!hasModel ? "Generate or load a camera model first" : "Calibrate vectors for all cameras"}
+                  buttonClassName="bg-green-600 hover:bg-green-700 text-white"
+                  cameraCount={cameraOptions.length}
+                />
               </div>
 
-              <Button
-                onClick={setAsActiveMethod}
-                disabled={isActive}
-                variant={isActive ? "default" : "outline"}
-                className={isActive ? "bg-green-600 hover:bg-green-600" : ""}
-              >
-                {isActive ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                    Active
-                  </>
-                ) : (
-                  'Set as Active'
-                )}
-              </Button>
+              <SetActiveButton method="charuco" config={config} updateConfig={updateConfig} />
             </div>
 
             {validation?.valid && !wf.complete && (
               <p className="text-xs text-muted-foreground">
-                Set the coordinate frame before generating: open the viewer, click <strong>Detect Markers</strong>, then pick <strong>Origin → +X → +Y</strong> on the datum frame.
+                {wfPartial
+                  ? <>Finish the world frame (<strong>Origin → +X → +Y</strong>) or clear it before generating.</>
+                  : <>No world frame picked: the model uses the board&apos;s default frame (origin at the lowest-index corner, axes along the board). To set your own, click <strong>Detect Markers</strong> in the viewer and pick <strong>Origin → +X → +Y</strong> on the datum frame.</>}
               </p>
             )}
+
+            <ChangedSinceGenerate fields={changedSinceGenerate} />
 
             {modelLoadError && (
               <div className="text-sm text-red-600 flex items-center gap-1">
@@ -725,7 +690,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                 <div className="text-xs text-muted-foreground mt-1">
                   Progress: {jobStatus.progress?.toFixed(0) || 0}%
                   {jobStatus.processed_images !== undefined && (
-                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images}</span>
+                    <span> | Images: {jobStatus.processed_images}/{jobStatus.total_images ?? '?'}</span>
                   )}
                   {jobStatus.valid_images !== undefined && jobStatus.valid_images > 0 && (
                     <span> | Valid: {jobStatus.valid_images}</span>
@@ -739,8 +704,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
                 <CheckCircle2 className="h-4 w-4 inline mr-2" />
                 Camera model generation completed!
-                {jobStatus.rms_error && (
-                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} px</span>
+                {jobStatus.rms_error != null && (
+                  <span className="ml-2">RMS: {Number(jobStatus.rms_error).toFixed(4)} {jobStatus.rms_unit ?? 'px'}</span>
                 )}
                 {jobStatus.num_images_used && (
                   <span className="ml-2">({jobStatus.num_images_used} images used)</span>
@@ -779,15 +744,18 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
             {/* Multi-Camera Job Completed */}
             {multiCameraJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Multi-camera model generation completed! ({multiCameraJobStatus.processed_cameras} cameras)
+              <div className={`mt-4 p-3 border rounded text-sm ${multiCameraJobStatus.succeeded_cameras
+                ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {multiCameraJobStatus.succeeded_cameras
+                  ? <CheckCircle2 className="h-4 w-4 inline mr-2" />
+                  : <AlertTriangle className="h-4 w-4 inline mr-2" />}
+                Multi-camera model generation finished: {multiCameraJobStatus.succeeded_cameras ?? 0} of {multiCameraJobStatus.total_cameras} cameras succeeded
                 {multiCameraJobStatus.camera_results && (
                   <div className="mt-1 text-xs">
                     {Object.entries(multiCameraJobStatus.camera_results).map(([cam, res]: [string, any]) => (
                       <span key={cam} className="mr-3">
-                        {cam}: {res.status === 'completed' && res.rms_error
-                          ? `RMS ${Number(res.rms_error).toFixed(4)} px (${res.num_images_used} images)`
+                        {cam}: {res.status === 'completed' && res.rms_error != null
+                          ? `RMS ${Number(res.rms_error).toFixed(4)} ${res.rms_unit ?? 'px'} (${res.num_images_used} images)`
                           : `${res.status}${res.error ? `: ${res.error}` : ""}`}
                       </span>
                     ))}
@@ -796,24 +764,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
               </div>
             )}
 
-            {/* Vector Calibration Progress */}
-            <CalibrationJobProgress job={vectorJobStatus} title="Vector Calibration" />
-
-            {/* Vector Calibration Completed */}
-            {vectorJobStatus?.status === 'completed' && (
-              <div className="mt-4 p-3 border rounded bg-green-50 text-green-700 text-sm">
-                <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                Vector calibration completed! ({vectorJobStatus.total_units} datasets)
-              </div>
-            )}
-
-            {/* Vector Calibration Failed */}
-            {vectorJobStatus?.status === 'failed' && (
-              <div className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 inline mr-2" />
-                Vector calibration error: {vectorJobStatus.error || 'Unknown error'}
-              </div>
-            )}
+            {/* Vector Calibration progress / results, one per target dataset selection */}
+            <ApplyJobsStatus jobs={applyJobs} basePaths={basePaths} title="Vector calibration"
+              onCancel={cancelApply} />
           </div>
           </>
           )}

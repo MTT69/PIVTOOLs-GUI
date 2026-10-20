@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCalibration } from '@/hooks/useCalibration';
@@ -37,19 +37,13 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
   // useGlobalCoordinates' pair-merge effect from firing on every re-render.
   const { cameraOptions, sourcePaths } = useCalibration(config);
 
-  // Restore the last-used method tab. The switch itself only touches client
-  // state here; `calibration.active` is persisted by each tab hook's debounced
-  // save (active: <board>), not by this handler. Fall back to the first tab if
-  // the saved method is one no longer shown (e.g. the removed mono 'stepped'),
-  // so the user never lands on a blank hidden tab.
-  const [tab, setTab] = useState<string>(() => {
-    const saved = config?.calibration?.active;
-    return saved && TABS.some((t) => t.id === saved) ? saved : TABS[0].id;
-  });
-  const onTab = useCallback((id: string) => {
-    setTab(id);
-    updateConfig(['calibration', 'active'], id);
-  }, [updateConfig]);
+  // Which tab is open is view state only. `calibration.active` (the method applied to
+  // vectors) is written ONLY by a tab's "Set as Active" button — browsing or editing a tab
+  // never changes it. Open on the active method; fall back to the first tab if that method is
+  // no longer shown (e.g. the removed mono 'stepped').
+  const active: string | undefined = config?.calibration?.active;
+  const [tab, setTab] = useState<string>(() =>
+    active && TABS.some((t) => t.id === active) ? active : TABS[0].id);
 
   const common = { config, updateConfig, cameraOptions, sourcePaths };
 
@@ -60,10 +54,17 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
           <CardTitle>Calibration Setup</CardTitle>
         </CardHeader>
         <CardContent>
-          <Tabs value={tab} onValueChange={onTab}>
+          <Tabs value={tab} onValueChange={setTab}>
             <TabsList className="grid w-full grid-cols-2 md:grid-cols-6">
               {TABS.map((t) => (
-                <TabsTrigger key={t.id} value={t.id}>{t.label}</TabsTrigger>
+                <TabsTrigger key={t.id} value={t.id}>
+                  {t.label}
+                  {t.id === active && (
+                    <span className="ml-1.5 rounded bg-green-600 px-1.5 text-[10px] font-semibold uppercase text-white">
+                      Active
+                    </span>
+                  )}
+                </TabsTrigger>
               ))}
             </TabsList>
 

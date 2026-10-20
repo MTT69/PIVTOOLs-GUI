@@ -33,6 +33,11 @@ export interface ValidationState {
   detectedCount?: number | null;
   /** Sample files found in the source folder (shown on validation error for context) */
   sampleFiles?: string[];
+  /**
+   * Set when a wrong 0/1 start index left an expected file missing: true = switch to
+   * 0-based (start_index 0), false = switch to 1-based (start_index 1).
+   */
+  suggestedZeroBased?: boolean | null;
   // Legacy fields for backward compatibility
   suggested_pattern?: string | null;
   suggested_pattern_b?: string | null;  // For A/B pair detection
@@ -127,6 +132,7 @@ export function useAutoValidation(config: any) {
 
     // Validate after short delay
     timerRef.current = setTimeout(async () => {
+      timerRef.current = null; // fired: the cleanup must no longer treat it as pending
       const sourcePaths = config.paths?.source_paths || [];
       const cameraNumbers = config.paths?.camera_numbers || [1];
       const cameraToTest = cameraNumbers[0] || 1;
@@ -163,6 +169,9 @@ export function useAutoValidation(config: any) {
           });
 
           const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
+          // A valid set can still start at the other 0/1 index (the hint is in `message`).
+          const hinted = Object.values(details).find(
+            (d: any) => typeof d?.suggested_zero_based === 'boolean') as any;
 
           setValidation({
             valid: true,
@@ -172,6 +181,7 @@ export function useAutoValidation(config: any) {
             abCountWarning,
             detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
             sampleFiles,
+            suggestedZeroBased: hinted ? hinted.suggested_zero_based : null,
           });
 
           // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
@@ -184,6 +194,7 @@ export function useAutoValidation(config: any) {
           let suggestedPatternB: string | null = null;
           let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
           let suggestedSubfolder: string | null = null;
+          let suggestedZeroBased: boolean | null = null;
           const perCameraSuggestions: Record<string, string> = {};
 
           Object.entries(details).forEach(([key, value]: [string, any]) => {
@@ -212,7 +223,16 @@ export function useAutoValidation(config: any) {
               if (value.suggested_mode && !suggestedMode) {
                 suggestedMode = value.suggested_mode;
               }
-            } else if (value.status === 'warning') {
+            }
+            // The backend folds the start-index hint into a camera's error only on some
+            // failure paths; add it where the error does not already carry it.
+            if (value.indexing_warning && !(value.error ?? '').includes(value.indexing_warning)) {
+              warnings.push(`${key}: ${value.indexing_warning}`);
+            }
+            if (typeof value.suggested_zero_based === 'boolean' && suggestedZeroBased === null) {
+              suggestedZeroBased = value.suggested_zero_based;
+            }
+            if (value.status === 'warning') {
               const expected = value.expected_count || 0;
               const actual = value.actual_count || 0;
               warnings.push(`${key}: Found ${actual}/${expected} files`);
@@ -236,6 +256,7 @@ export function useAutoValidation(config: any) {
             suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
             suggestedCameraCount: typeof json.suggested_camera_count === 'number' ? json.suggested_camera_count : null,
             suggestedCameraCountFiles: Array.isArray(json.suggested_camera_count_files) ? json.suggested_camera_count_files : undefined,
+            suggestedZeroBased,
             // Legacy fields
             suggested_pattern: suggestedPattern,
             suggested_pattern_b: suggestedPatternB,
@@ -249,8 +270,13 @@ export function useAutoValidation(config: any) {
     }, 500);
 
     return () => {
+      // A validation cancelled before it fired never ran: forget its key, so the next run
+      // re-schedules even when the key is unchanged or back to an earlier value (else the
+      // "Validating..." state set above would stick).
       if (timerRef.current) {
         clearTimeout(timerRef.current);
+        timerRef.current = null;
+        lastValidatedRef.current = '';
       }
     };
   }, [

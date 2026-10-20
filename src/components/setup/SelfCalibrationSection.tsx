@@ -149,7 +149,7 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
         {sc.result && (
           <div className="space-y-4">
             <h4 className="text-sm font-semibold flex items-center gap-2">
-              Recovered sheet (baked into both camera models)
+              This run&apos;s correction (added to the baked sheet)
               {sc.result.converged ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Converged</span>
               ) : (
@@ -203,10 +203,13 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
           </div>
         )}
 
-        {/* Saved status (no fresh result, but the record already carries a baked correction) */}
-        {!sc.result && sc.hasSelfCal && sc.status && (
+        {/* Total sheet baked into the record, across every run (shown alongside a fresh run's
+            increment, so the two are never confused). RMS/iterations are the last run's. */}
+        {sc.hasSelfCal && sc.status && (
           <div className="p-3 bg-muted rounded text-sm">
-            <div className="font-semibold mb-1">Baked Self-Calibration{sc.status.source === "manual" ? " (manual)" : ""}</div>
+            <div className="font-semibold mb-1">
+              Total sheet{sc.status.n_bakes != null ? ` (${sc.status.n_bakes} run${sc.status.n_bakes === 1 ? "" : "s"})` : ""}
+            </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div>Z-offset: <span className="font-mono">{sc.status.z_offset.toFixed(4)} mm</span></div>
               <div>Tilt X: <span className="font-mono">{sc.status.tilt_x_deg.toFixed(4)}&deg;</span></div>

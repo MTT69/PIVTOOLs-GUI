@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchJson } from "@/lib/api";
+import { errorMessage, fetchJson } from "@/lib/api";
 
 const BASE = "/backend/calibration";
 
@@ -33,7 +33,11 @@ export function CalibrationFigureGallery({
   trigger?: unknown;
   title?: string;
 }) {
-  const [figures, setFigures] = useState<string[]>([]);
+  // The listing is tagged with the query it was fetched for: after a source/camera switch the
+  // previous listing must not be rendered against the new query (its names 404 there).
+  // `error` is why the listing failed; a failure is shown, never rendered as "no figures".
+  const [listing, setListing] = useState<{ query: string; figures: string[]; error: string | null }>(
+    { query: "", figures: [], error: null });
   const [bust, setBust] = useState(0);
   const queryStr = qs(query);
 
@@ -43,11 +47,11 @@ export function CalibrationFigureGallery({
       try {
         const data = await fetchJson(`${BASE}/figures?${queryStr}`);
         if (!cancelled) {
-          setFigures(data.figures || []);
+          setListing({ query: queryStr, figures: data.figures || [], error: null });
           setBust(Date.now());
         }
-      } catch {
-        if (!cancelled) setFigures([]);
+      } catch (e) {
+        if (!cancelled) setListing({ query: queryStr, figures: [], error: errorMessage(e) });
       }
     })();
     return () => {
@@ -55,6 +59,15 @@ export function CalibrationFigureGallery({
     };
   }, [queryStr, trigger]);
 
+  const current = listing.query === queryStr;
+  const figures = current ? listing.figures : [];
+  if (current && listing.error) {
+    return (
+      <div className="mt-4 pt-4 border-t text-xs text-red-600">
+        {title}: could not list the figures ({listing.error})
+      </div>
+    );
+  }
   if (figures.length === 0) return null;
   return (
     <div className="mt-4 pt-4 border-t">
