@@ -1016,6 +1016,11 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                       <span className="ml-2 text-muted-foreground text-sm">
                         (Step {fiducialStepIdx + 1} of {FIDUCIAL_STEPS.length})
                       </span>
+                      {currentStep.slot === 2 && (
+                        <div className="text-sm text-muted-foreground font-normal mt-1">
+                          Click the same physical dot you picked on Cam {cam1} — the origin, +X and +Y dots must be the same three dots in both cameras.
+                        </div>
+                      )}
                       {pickRefused && <div className="text-sm text-red-600 font-normal mt-1">{pickRefused}</div>}
                     </AlertDescription>
                   </Alert>
