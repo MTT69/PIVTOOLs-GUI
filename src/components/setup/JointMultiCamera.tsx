@@ -1363,6 +1363,13 @@ const JointModelResults: React.FC<{
               </tbody>
             </table>
             <ExcludedViewsLine views={model.excluded_views} />
+            {model.missing_cameras && model.missing_cameras.length > 0 && (
+              <div className="mt-1 text-sm text-amber-700">
+                No polynomial record for{" "}
+                {model.missing_cameras.map((c) => `Cam ${c}`).join(", ")} — the model is
+                partial; regenerate it.
+              </div>
+            )}
 
             {/* The actual fitted cubic per camera: pixel normalisation + the two 10-term
                 coefficient vectors (image-px → world-mm), the polynomial analogue of the pinhole
