@@ -45,6 +45,12 @@ export interface ApplyJobStatus {
   dt_source?: ('request' | 'model')[];
   /** Non-fatal problems the run reported; undefined when the backend sent none. */
   warnings?: string[];
+  /**
+   * Stereo frame pairs skipped because the reconstructed pass is absent in one or both
+   * cameras. Written by the backend on completion; `readApplyJobStatus` reads 0 until then
+   * (always 0 for mono). Undefined only on the client's own placeholder statuses.
+   */
+  n_frames_skipped?: number;
   /** Number of cameras the job calibrates; undefined until the backend reports it. */
   n_cameras?: number;
   /** Camera numbers the job calibrates; undefined until the backend reports them. */
@@ -76,6 +82,7 @@ export function readApplyJobStatus(data: any): ApplyJobStatus {
     dt_used: data.dt_used,
     dt_source: data.dt_source,
     warnings: isStringArray(data.warnings) ? data.warnings : undefined,
+    n_frames_skipped: typeof data.n_frames_skipped === 'number' ? data.n_frames_skipped : 0,
     n_cameras: typeof data.n_cameras === 'number' ? data.n_cameras : undefined,
     cameras: isNumberArray(data.cameras) ? data.cameras : undefined,
     error: data.error,

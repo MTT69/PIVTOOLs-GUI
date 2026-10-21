@@ -143,6 +143,11 @@ export const ApplyJobsStatus: React.FC<ApplyJobsStatusProps> = ({ jobs, basePath
             <CheckCircle2 className="h-4 w-4 inline mr-2" />
             {title} completed for {targets}.
             {dtUsed && <div className="text-xs mt-1">{dtUsed}</div>}
+            {!!job.status.n_frames_skipped && (
+              <div className="text-xs mt-1 text-amber-700">
+                {job.status.n_frames_skipped} frame(s) skipped (pass absent)
+              </div>
+            )}
             {outDirs.length > 0 && (
               <div className="text-xs mt-1">
                 Written to:

@@ -86,6 +86,8 @@ export interface JointJobStatus {
   paths?: string[];
   /** Pinhole only; null for polynomial. */
   pose_diversity?: JointPoseDiversity | null;
+  /** [camera, 1-based frame] views outside the solve (no detection, or not anchored to the global grid). */
+  excluded_views?: [number, number][];
   error?: string;
 }
 
@@ -164,6 +166,8 @@ export interface JointModel {
   baselines_mm?: Record<string, number>;
   /** Pinhole only. null = record predates the diagnostic; absent for polynomial. */
   pose_diversity?: JointPoseDiversity | null;
+  /** [camera, 1-based frame] views outside the solve (no detection, or not anchored to the global grid). */
+  excluded_views?: [number, number][];
 }
 
 const POLL_MS = 700;
