@@ -1286,6 +1286,22 @@ const JointJobProgress: React.FC<{ jobStatus: JointJobStatus | null }> = ({ jobS
           (per camera: {perCam.map((v) => v.toFixed(2)).join(" / ")} {unit})
         </span>
       )}
+      <ExcludedViewsLine views={jobStatus.excluded_views} />
+    </div>
+  );
+};
+
+/**
+ * One amber line naming the views the solve did not use ([camera, 1-based frame]); nothing when
+ * every view was used. Exclusion comes from the global grid, so a view that detected but was
+ * never anchored is listed too.
+ */
+const ExcludedViewsLine: React.FC<{ views?: [number, number][] }> = ({ views }) => {
+  if (!views || views.length === 0) return null;
+  return (
+    <div className="mt-1 text-sm text-amber-700">
+      Excluded from the solve: {views.map(([c, f]) => `Cam ${c} frame ${f}`).join(", ")} (no
+      detection or not anchored to the global grid)
     </div>
   );
 };
@@ -1346,6 +1362,7 @@ const JointModelResults: React.FC<{
                 })}
               </tbody>
             </table>
+            <ExcludedViewsLine views={model.excluded_views} />
 
             {/* The actual fitted cubic per camera: pixel normalisation + the two 10-term
                 coefficient vectors (image-px → world-mm), the polynomial analogue of the pinhole
@@ -1410,6 +1427,7 @@ const JointModelResults: React.FC<{
                   stopping tolerance reads "no" on excellent sub-pixel fits and only misleads.
                   Overall RMS above is the quality number. */}
             </div>
+            <ExcludedViewsLine views={model.excluded_views} />
 
             {/* Per-camera intrinsics + extrinsics (camera position/rotation relative to the
                 board). Focal length is px only — mm would need the sensor pixel size. */}
