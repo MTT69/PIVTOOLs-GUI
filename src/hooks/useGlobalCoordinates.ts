@@ -179,8 +179,9 @@ export function useGlobalCoordinates(
             source_path_idx: sourcePathIdx,
             settings: { global_coordinates: payload },
           });
+          setGlobalError(null);
         } catch (e) {
-          console.error('Failed to save global coordinates:', errorMessage(e));
+          setGlobalError(`Failed to save global coordinates: ${errorMessage(e)}`);
         }
       }, 300);
     },

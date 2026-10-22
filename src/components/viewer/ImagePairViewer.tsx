@@ -630,6 +630,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
             size="sm"
             variant={playing ? "default" : "outline"}
             onClick={() => setPlaying(!playing)}
+            disabled={camera === undefined}
             className="flex items-center gap-1"
           >
             {playing ? <span>&#10073;&#10073; Pause</span> : <span>&#9654; Play</span>}
