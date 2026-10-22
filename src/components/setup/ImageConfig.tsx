@@ -220,7 +220,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     const vpTrimmed = vp.trim();
 
     const camCount = Number(numCameras) || 1;
-    const cameraNumbers = Array.from({ length: camCount }, (_, i) => i + 1);
 
     // images.num_images is required: a blank or non-integer field is never sent (it would
     // persist null); the stored value stays until a valid one is entered.
@@ -244,12 +243,13 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       // patterns, see page.tsx); a save from the patterns instance sending
       // camera fields from its own local state can resurrect stale values the
       // core instance just cleared (same clobber class as the num_images
-      // guard above).
+      // guard above). camera_numbers is never sent: the backend resets it to 1..camera_count
+      // when the count changes and clips it otherwise, so a selection written elsewhere (a PIV
+      // tab, an applied suggestion) survives an unrelated Setup edit.
       ...(sectionsToShow.includes('core')
         ? {
             paths: {
               camera_count: camCount,
-              camera_numbers: cameraNumbers,
               camera_subfolders: csf,
             },
           }
@@ -604,7 +604,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
               {Number(numCameras) > 1 && imageType === "lavision_set" && (
                 <div className="mt-4 flex items-start gap-2 text-sm text-muted-foreground">
                   <Info className="h-4 w-4 mt-0.5 text-blue-500" />
-                  <p>LaVision .set files store all cameras in a single file - no camera subfolders needed.</p>
+                  <p>A LaVision recording holds all cameras - no camera subfolders needed.</p>
                 </div>
               )}
 

@@ -320,7 +320,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [persist]);
   // True from the end of the apply's flush until the apply settles: no save may post then.
   const applyingRef = useRef(false);
-  // Bumped when an apply settles, so the timer effect re-arms one save for edits typed meanwhile.
+  // Bumped when an apply settles, so the timer effect re-arms one save. After a successful apply
+  // the rehydrated form wins, so that save carries typed edits only when the apply wrote nothing.
   const [persistTick, setPersistTick] = useState(0);
   // Saves are chained, so awaiting `persistInFlightRef` awaits every earlier save too.
   const runPersist = useCallback(() => {

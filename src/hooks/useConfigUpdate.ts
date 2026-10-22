@@ -19,7 +19,7 @@ export interface PatternValidation {
   pattern: string;
   valid: boolean;
   found_count?: number | 'container';
-  error?: string | null;
+  error: string | null;
   suggestions: Suggestion[];
   sample_files?: string[];
 }
@@ -91,7 +91,7 @@ function parsePatternValidation(raw: unknown): PatternValidation {
   const pv = raw as Record<string, unknown>;
   if (
     typeof pv.index !== 'number' || typeof pv.label !== 'string' || typeof pv.pattern !== 'string' ||
-    typeof pv.valid !== 'boolean' || !isStringOrNull(pv.error ?? null) || !isStringList(pv.sample_files)
+    typeof pv.valid !== 'boolean' || !isStringOrNull(pv.error) || !isStringList(pv.sample_files)
   ) {
     throw new Error('Pattern validation needs "index", "label", "pattern", "valid", "error" and "sample_files"');
   }
@@ -104,7 +104,7 @@ function parsePatternValidation(raw: unknown): PatternValidation {
     pattern: pv.pattern,
     valid: pv.valid,
     found_count: pv.found_count as PatternValidation['found_count'],
-    error: pv.error as string | null | undefined,
+    error: pv.error,
     // Pattern suggestions share the diagnosis suggestion shape; validate them with its guard.
     suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null }).suggestions,
     sample_files: pv.sample_files,
@@ -117,6 +117,7 @@ function parseCameraResult(camera: number, raw: unknown): SetupCameraResult {
   const d = raw as Record<string, unknown>;
   if (d.status !== 'ok' && d.status !== 'error') throw new Error(`camera_${camera}: unknown status ${String(d.status)}`);
   if (!isStringOrNull(d.error)) throw new Error(`camera_${camera}: "error" must be a string or null`);
+  if (d.status === 'error' && typeof d.error !== 'string') throw new Error(`camera_${camera}: status "error" carries no error`);
   const keys = Object.keys(d);
   if (keys.length === SHORT_DETAIL_KEYS.length && keys.every((k) => SHORT_DETAIL_KEYS.includes(k))) {
     return {

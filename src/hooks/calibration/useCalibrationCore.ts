@@ -187,6 +187,10 @@ export function useCalibrationCore({
   const [hydrationTick, setHydrationTick] = useState(0);
   // Bumped after an applied suggestion rehydrated; validation runs in the render that follows.
   const [revalidateTick, setRevalidateTick] = useState(0);
+  // Bumped when an apply settles, so both save effects re-run once. After a successful apply the
+  // rehydrated form is the baseline and nothing saves; after an apply that wrote nothing, edits
+  // made meanwhile are saved.
+  const [applySettled, setApplySettled] = useState(0);
 
   // ---------- Refs ----------
   const configLoadedRef = useRef(false);
@@ -203,6 +207,10 @@ export function useCalibrationCore({
   const savedSourcesRef = useRef<string | null>(null);
   // The settings an applied suggestion rehydrated from, for the re-validation it schedules.
   const revalidateSettingsRef = useRef<SidecarSettings | null>(null);
+  // True from before an apply's flush until the apply settles: neither save effect may schedule
+  // then, so a form change made meanwhile (typing, or the camera reset that follows a
+  // camera-count write) cannot post the old form over what the apply wrote.
+  const applyingRef = useRef(false);
 
   const settingsSeq = useRequestSeq();
   const validateSeq = useRequestSeq();
@@ -421,6 +429,7 @@ export function useCalibrationCore({
 
   // ---------- Debounced sidecar save (user edits only) ----------
   useEffect(() => {
+    if (applyingRef.current) return;
     if (!configLoaded || !settingsReadyRef.current) return;
     if (settingsPayload === savedPayloadRef.current) return;
     // Mid path-edit the form belongs to the old directory; the reload rehydrates instead.
@@ -456,7 +465,7 @@ export function useCalibrationCore({
       // re-validate after a save.
       if (followUp) void validateRef.current();
     });
-  }, [settingsPayload, configLoaded, calibrationSources, sourcePathIdx, settingsSave]);
+  }, [settingsPayload, configLoaded, calibrationSources, sourcePathIdx, settingsSave, applySettled]);
 
   // ---------- Config-pointer save (calibration_sources only) ----------
   /** Rehydrate settings, model and detections from the directory `path` at index `idx`. */
@@ -483,6 +492,7 @@ export function useCalibrationCore({
   }, [rehydrateSource]);
 
   useEffect(() => {
+    if (applyingRef.current) return;
     if (!sourcesLoadedRef.current) return;
     const sourcesJson = JSON.stringify(calibrationSources);
     if (sourcesJson === savedSourcesRef.current) return;
@@ -500,7 +510,7 @@ export function useCalibrationCore({
       setSourcesError(null);
       if (loadedSourcePathRef.current !== loadedBefore) void validateRef.current(s);
     });
-  }, [calibrationSources, sourcePathIdx, sourcesSave, saveSources]);
+  }, [calibrationSources, sourcePathIdx, sourcesSave, saveSources, applySettled]);
 
   // ---------- Applied suggestion: rehydrate from the server, then re-validate ----------
   const reloadSource = useCallback(async (sources: string[]) => {
@@ -518,13 +528,28 @@ export function useCalibrationCore({
     void validateRef.current(revalidateSettingsRef.current);
   }, [revalidateTick]);
 
-  const applySuggestion = useCallback((apply: SuggestionApply) => applyCalibrationSuggestion(apply, {
-    sourcePathIdx,
-    calibrationSources,
-    refetchConfig,
-    beforeWrite: () => Promise.all([settingsSave.flush(), sourcesSave.flush()]).then(() => {}),
-    reload: reloadSource,
-  }), [sourcePathIdx, calibrationSources, refetchConfig, settingsSave, sourcesSave, reloadSource]);
+  // `applyingRef` closes before the flush: the flush runs the pending saves directly (not through
+  // the effects), so they still land, while any change the flush or the apply causes cannot
+  // schedule another save until the apply settles.
+  const applySuggestion = useCallback(async (apply: SuggestionApply) => {
+    // An unloaded list is [] here: a source_path write would wipe the server's other sources.
+    if (!sourcesLoadedRef.current) {
+      throw new Error('Calibration sources did not load; reload the page before applying a fix');
+    }
+    applyingRef.current = true;
+    try {
+      await applyCalibrationSuggestion(apply, {
+        sourcePathIdx,
+        calibrationSources,
+        refetchConfig,
+        beforeWrite: () => Promise.all([settingsSave.flush(), sourcesSave.flush()]).then(() => {}),
+        reload: reloadSource,
+      });
+    } finally {
+      applyingRef.current = false;
+      setApplySettled(n => n + 1);
+    }
+  }, [sourcePathIdx, calibrationSources, refetchConfig, settingsSave, sourcesSave, reloadSource]);
 
   // ---------- Pending-validation state the instant a validation input changes ----------
   // The backend resolves validation from the PERSISTED sidecar, so without this a previous

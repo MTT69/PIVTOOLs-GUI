@@ -230,11 +230,13 @@ export function imageTypeDefaults(imageType: string, currentStartIndex: number):
         image_type: imageType, image_format: ['B%05d.im7'], pairing_preset: 'pre_paired',
         frame_stride: 0, pair_stride: 1, start_index: currentStartIndex,
       };
-    default:
+    case 'standard':
       return {
         image_type: imageType, image_format: ['B%05d_A.tif', 'B%05d_B.tif'], pairing_preset: 'ab_format',
         frame_stride: 0, pair_stride: 1, start_index: currentStartIndex,
       };
+    default:
+      throw new Error(`Unknown image_type "${imageType}"`);
   }
 }
 
