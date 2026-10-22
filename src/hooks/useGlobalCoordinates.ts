@@ -71,6 +71,7 @@ export function useGlobalCoordinates(
   const [savedShifts, setSavedShifts] = useState<GlobalShiftResult | null>(null);
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [autosaveError, setAutosaveError] = useState<string | null>(null);
 
   // Debounce timer ref
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -179,9 +180,9 @@ export function useGlobalCoordinates(
             source_path_idx: sourcePathIdx,
             settings: { global_coordinates: payload },
           });
-          setGlobalError(null);
+          setAutosaveError(null);
         } catch (e) {
-          setGlobalError(`Failed to save global coordinates: ${errorMessage(e)}`);
+          setAutosaveError(`Failed to save global coordinates: ${errorMessage(e)}`);
         }
       }, 300);
     },
@@ -306,5 +307,6 @@ export function useGlobalCoordinates(
     savedShifts,
     savingGlobal,
     globalError,
+    autosaveError,
   };
 }

@@ -68,6 +68,7 @@ export function GlobalFrameSummary({
           </span>
         )}
         {gc.globalError && <span className="text-xs text-red-600">{gc.globalError}</span>}
+        {gc.autosaveError && <span className="text-xs text-red-600">{gc.autosaveError}</span>}
       </div>
     </div>
   );
@@ -298,6 +299,9 @@ export function GCInlineControls({
                 )}
                 {gc.globalError && (
                   <span className="text-[11px] text-red-600 whitespace-nowrap">{gc.globalError}</span>
+                )}
+                {gc.autosaveError && (
+                  <span className="text-[11px] text-red-600 whitespace-nowrap">{gc.autosaveError}</span>
                 )}
               </div>
             </>
