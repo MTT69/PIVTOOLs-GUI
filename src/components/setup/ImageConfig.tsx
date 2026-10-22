@@ -51,7 +51,6 @@ const deriveABPatterns = (pattern: string): [string, string] => {
   return [`${base}_A${ext}`, `${base}_B${ext}`];
 };
 
-// Preset → stride mapping
 /** A whole image count of at least 1, as typed (no blanks, signs, decimals or exponents). */
 const isPositiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) >= 1;
 

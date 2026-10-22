@@ -106,10 +106,29 @@ export function parseApply(raw: unknown): SuggestionApply {
       throw new Error(`Suggestion field "${key}" has the wrong type`);
     }
   }
-  if ('camera_count' in obj && !('camera_numbers' in obj)) {
-    throw new Error('Suggestion field "camera_count" requires "camera_numbers"');
+  if ('camera_count' in obj !== 'camera_numbers' in obj) {
+    throw new Error('Suggestion fields "camera_count" and "camera_numbers" must come together');
   }
-  return obj as SuggestionApply;
+  return { ...obj } as SuggestionApply;
+}
+
+const STREAM_FIELDS = ['index', 'prefix', 'width', 'height', 'decoder', 'camera'];
+
+function parseStream(raw: unknown): StreamInfo {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('Stream must be an object');
+  }
+  const s = raw as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (!STREAM_FIELDS.includes(key)) throw new Error(`Unknown stream field "${key}"`);
+  }
+  if (
+    !isInt(s.index) || !isString(s.prefix) || !isInt(s.width) || !isInt(s.height) ||
+    !isString(s.decoder) || !(s.camera === null || isInt(s.camera))
+  ) {
+    throw new Error('Stream needs int "index"/"width"/"height", string "prefix"/"decoder" and int-or-null "camera"');
+  }
+  return s as unknown as StreamInfo;
 }
 
 function parseSuggestion(raw: unknown): Suggestion {
@@ -137,7 +156,7 @@ export function parseDiagnosis(raw: unknown): Diagnosis {
   return {
     found: r.found,
     suggestions: r.suggestions.map(parseSuggestion),
-    streams: r.streams as StreamInfo[] | null,
+    streams: r.streams === null ? null : (r.streams as unknown[]).map(parseStream),
   };
 }
 
@@ -238,6 +257,7 @@ export function buildSetupPayload(
   config: SetupConfigView,
   sourcePathIdx: number,
 ): SetupPayload {
+  parseApply(apply);
   const paths: Record<string, unknown> = {};
   const images: Record<string, unknown> = {};
 
@@ -251,9 +271,9 @@ export function buildSetupPayload(
   if (apply.start_index !== undefined) images.start_index = apply.start_index;
   if (apply.use_camera_subfolders !== undefined) images.use_camera_subfolders = apply.use_camera_subfolders;
   if (apply.camera_subfolders !== undefined) paths.camera_subfolders = apply.camera_subfolders;
-  if (apply.camera_count !== undefined && apply.camera_numbers !== undefined) {
+  if (apply.camera_count !== undefined) {
     paths.camera_count = apply.camera_count;
-    paths.camera_numbers = apply.camera_numbers;
+    paths.camera_numbers = apply.camera_numbers; // parseApply guarantees the pair
   }
   if (apply.pairing_preset !== undefined) {
     const strides = PRESET_STRIDES[apply.pairing_preset];
@@ -283,11 +303,12 @@ export interface CalibrationWrites {
 
 /** Map an apply onto the calibration config pointer keys and per-source sidecar fields. */
 export function calibrationWrites(apply: SuggestionApply): CalibrationWrites {
+  parseApply(apply);
   const out: CalibrationWrites = {};
   const image: NonNullable<CalibrationWrites['image']> = {};
 
-  if (apply.camera_count !== undefined && apply.camera_numbers !== undefined) {
-    out.configPaths = { camera_count: apply.camera_count, camera_numbers: apply.camera_numbers };
+  if (apply.camera_count !== undefined) {
+    out.configPaths = { camera_count: apply.camera_count, camera_numbers: apply.camera_numbers! }; // parseApply guarantees the pair
   }
   if (apply.source_path !== undefined) out.sourcePath = sanitizePath(apply.source_path);
   if (apply.image_type !== undefined) image.image_type = apply.image_type;
