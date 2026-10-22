@@ -72,6 +72,7 @@ const InfillingSettings = memo(function InfillingSettings({
                 <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                 <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
                 <SelectItem value="biharmonic">Biharmonic</SelectItem>
+                <SelectItem value="harmonic">Harmonic (smooth least-squares, noise-robust)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -160,6 +161,7 @@ const InfillingSettings = memo(function InfillingSettings({
                   <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                   <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
                   <SelectItem value="biharmonic">Biharmonic</SelectItem>
+                  <SelectItem value="harmonic">Harmonic (smooth least-squares, noise-robust)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

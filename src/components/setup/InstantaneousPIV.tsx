@@ -18,6 +18,7 @@ import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import GainNormalisationToggle from "@/components/shared/GainNormalisationToggle";
 import CameraSelector from "@/components/shared/CameraSelector";
+import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
 import { useNumericInput } from "@/hooks/useNumericInput";
 
 interface InstantaneousPIVProps {
@@ -303,6 +304,12 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                     Interpolation kernel for image warping during predictor-corrector passes. Cubic is faster; Lanczos-3 preserves sharper particle images.
                   </p>
                 </div>
+
+                <BoundaryConditionEditor
+                  section="instantaneous_piv"
+                  conditions={config?.instantaneous_piv?.predictor_boundary_conditions || []}
+                  updateConfigValue={updateConfigValue}
+                />
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">

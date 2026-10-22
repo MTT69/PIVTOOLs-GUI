@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useImagePair } from "@/hooks/useImagePair";
-import { useMaskingConfig } from "@/hooks/useMaskingConfig";
+import { useMaskingConfig, type PredictorFill } from "@/hooks/useMaskingConfig";
 import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { basename } from "@/lib/utils";
@@ -304,7 +304,9 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		updateRectangularLeft,
 		updateRectangularRight,
 		updateEnabled,
-		updateMode
+		updateMode,
+		predictorFill,
+		updatePredictorFill
 	} = useMaskingConfig(config?.masking, updateConfig!);
 
 	// Local string state for inputs to allow empty values during editing
@@ -454,8 +456,27 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 									/>
 									<Label htmlFor="apply-mask-piv" className="text-sm">Apply Mask for PIV</Label>
 								</div>
+								<div>
+									<Label htmlFor="predictor-fill-select">Predictor fill (masked windows)</Label>
+									<Select
+										value={predictorFill}
+										onValueChange={(value: PredictorFill) => updatePredictorFill(value)}
+									>
+										<SelectTrigger id="predictor-fill-select" className="w-56">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="harmonic">Harmonic (default)</SelectItem>
+											<SelectItem value="nearest">Nearest</SelectItem>
+											<SelectItem value="none">None (masked = 0, legacy)</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
 							</div>
 						</div>
+						<p className="text-xs text-muted-foreground">
+							Fills masked windows before they seed the next pass; outputs keep masked windows at 0.
+						</p>
 						
 						{maskingMode === 'pixel_border' ? (
 							<div className="grid grid-cols-2 gap-4">

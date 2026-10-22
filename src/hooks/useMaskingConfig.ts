@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { postJson, errorMessage } from '@/lib/api';
 
 export interface MaskingConfig {
@@ -12,7 +12,10 @@ export interface MaskingConfig {
     left: number;
     right: number;
   };
+  predictor_fill?: PredictorFill;
 }
+
+export type PredictorFill = 'harmonic' | 'nearest' | 'none';
 
 export function useMaskingConfig(
   initialConfig: MaskingConfig | undefined,
@@ -27,6 +30,11 @@ export function useMaskingConfig(
   const [rectangularBottom, setRectangularBottom] = useState(initialConfig?.rectangular?.bottom ?? 64);
   const [rectangularLeft, setRectangularLeft] = useState(initialConfig?.rectangular?.left ?? 0);
   const [rectangularRight, setRectangularRight] = useState(initialConfig?.rectangular?.right ?? 0);
+  const [predictorFill, setPredictorFill] = useState<PredictorFill>(initialConfig?.predictor_fill ?? 'harmonic');
+  // /backend/update_config echoes only the subset it was sent, and that echo
+  // replaces the local masking object. Every save therefore resends the current
+  // predictor_fill (read from a ref so memoised updaters never send a stale one).
+  const predictorFillRef = useRef<PredictorFill>(predictorFill);
 
   // Sync with config changes
   useEffect(() => {
@@ -50,10 +58,17 @@ export function useMaskingConfig(
     }
   }, [initialConfig?.rectangular]);
 
+  useEffect(() => {
+    if (initialConfig?.predictor_fill) {
+      setPredictorFill(initialConfig.predictor_fill);
+      predictorFillRef.current = initialConfig.predictor_fill;
+    }
+  }, [initialConfig?.predictor_fill]);
+
   const saveMaskingConfig = useCallback(async (config: Partial<MaskingConfig>) => {
     try {
       const payload = {
-        masking: config
+        masking: { predictor_fill: predictorFillRef.current, ...config }
       };
 
       const json = await postJson('/backend/update_config', payload);
@@ -182,6 +197,24 @@ export function useMaskingConfig(
     }
   }, [enabled, mode, rectangularTop, rectangularBottom, rectangularLeft, saveMaskingConfig]);
 
+  const updatePredictorFill = useCallback(async (value: PredictorFill) => {
+    setPredictorFill(value);
+    predictorFillRef.current = value;
+    await saveMaskingConfig({
+      enabled,
+      mode: mode === 'polygon' ? 'file' : 'rectangular',
+      predictor_fill: value,
+      ...(mode === 'pixel_border' && {
+        rectangular: {
+          top: rectangularTop,
+          bottom: rectangularBottom,
+          left: rectangularLeft,
+          right: rectangularRight
+        }
+      })
+    });
+  }, [enabled, mode, rectangularTop, rectangularBottom, rectangularLeft, rectangularRight, saveMaskingConfig]);
+
   return {
     enabled,
     mode,
@@ -189,6 +222,7 @@ export function useMaskingConfig(
     rectangularBottom,
     rectangularLeft,
     rectangularRight,
+    predictorFill,
     setRectangularTop,
     setRectangularBottom,
     setRectangularLeft,
@@ -199,6 +233,7 @@ export function useMaskingConfig(
     updateRectangularRight,
     updateEnabled,
     updateMode,
-    updateRectangular
+    updateRectangular,
+    updatePredictorFill
   };
 }

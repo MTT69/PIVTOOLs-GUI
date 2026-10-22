@@ -544,6 +544,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 </div>
 
                 <BoundaryConditionEditor
+                  section="ensemble_piv"
                   conditions={config?.ensemble_piv?.predictor_boundary_conditions || []}
                   updateConfigValue={updateConfigValue}
                 />

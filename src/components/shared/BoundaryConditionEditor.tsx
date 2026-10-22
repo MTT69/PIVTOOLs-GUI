@@ -15,6 +15,7 @@ interface BoundaryCondition {
 }
 
 interface BoundaryConditionEditorProps {
+  section: 'ensemble_piv' | 'instantaneous_piv';
   conditions: BoundaryCondition[];
   updateConfigValue: (path: string[], value: any) => void;
 }
@@ -57,6 +58,7 @@ function BCNumericInput({ value, onCommit, mode = 'int' }: {
 }
 
 export default function BoundaryConditionEditor({
+  section,
   conditions,
   updateConfigValue,
 }: BoundaryConditionEditorProps) {
@@ -64,18 +66,18 @@ export default function BoundaryConditionEditor({
 
   const addBC = () => {
     const newBCs = [...bcs, { y_position: 0, ux: 0, uy: 0, edge: "bottom" as const }];
-    updateConfigValue(['ensemble_piv', 'predictor_boundary_conditions'], newBCs);
+    updateConfigValue([section, 'predictor_boundary_conditions'], newBCs);
   };
 
   const removeBC = (index: number) => {
     const newBCs = bcs.filter((_, i) => i !== index);
-    updateConfigValue(['ensemble_piv', 'predictor_boundary_conditions'], newBCs);
+    updateConfigValue([section, 'predictor_boundary_conditions'], newBCs);
   };
 
   const updateBC = (index: number, field: string, value: any) => {
     const newBCs = [...bcs];
     newBCs[index] = { ...newBCs[index], [field]: value };
-    updateConfigValue(['ensemble_piv', 'predictor_boundary_conditions'], newBCs);
+    updateConfigValue([section, 'predictor_boundary_conditions'], newBCs);
   };
 
   return (
