@@ -259,7 +259,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
               <label className="text-sm font-medium">Cameras to Process</label>
               <div className="text-sm text-muted-foreground mt-2 p-2 bg-muted rounded">
                 {cameraOptions.length > 0
-                  ? `Cameras ${cameraOptions.join(', ')} (from config.camera_numbers)`
+                  ? `${cameraOptions.length === 1 ? 'Camera' : 'Cameras'} ${cameraOptions.join(', ')}`
                   : 'No cameras configured'}
               </div>
             </div>

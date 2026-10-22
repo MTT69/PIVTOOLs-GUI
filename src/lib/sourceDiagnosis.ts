@@ -106,8 +106,8 @@ export function parseApply(raw: unknown): SuggestionApply {
       throw new Error(`Suggestion field "${key}" has the wrong type`);
     }
   }
-  if ('camera_count' in obj !== 'camera_numbers' in obj) {
-    throw new Error('Suggestion fields "camera_count" and "camera_numbers" must come together');
+  if ('camera_count' in obj && !('camera_numbers' in obj)) {
+    throw new Error('Suggestion field "camera_count" must come with "camera_numbers"');
   }
   return { ...obj } as SuggestionApply;
 }
@@ -273,10 +273,8 @@ export function buildSetupPayload(
   if (apply.start_index !== undefined) images.start_index = apply.start_index;
   if (apply.use_camera_subfolders !== undefined) images.use_camera_subfolders = apply.use_camera_subfolders;
   if (apply.camera_subfolders !== undefined) paths.camera_subfolders = apply.camera_subfolders;
-  if (apply.camera_count !== undefined) {
-    paths.camera_count = apply.camera_count;
-    paths.camera_numbers = apply.camera_numbers; // parseApply guarantees the pair
-  }
+  if (apply.camera_count !== undefined) paths.camera_count = apply.camera_count;
+  if (apply.camera_numbers !== undefined) paths.camera_numbers = apply.camera_numbers;
   if (apply.pairing_preset !== undefined) {
     const strides = PRESET_STRIDES[apply.pairing_preset];
     if (!strides) throw new Error(`Unknown pairing_preset "${apply.pairing_preset}"`);
@@ -292,7 +290,7 @@ export function buildSetupPayload(
 }
 
 export interface CalibrationWrites {
-  configPaths?: { camera_count: number; camera_numbers: number[] };
+  configPaths?: { camera_count?: number; camera_numbers: number[] };
   sourcePath?: string;
   image?: {
     image_type?: string;
@@ -309,8 +307,9 @@ export function calibrationWrites(apply: SuggestionApply): CalibrationWrites {
   const out: CalibrationWrites = {};
   const image: NonNullable<CalibrationWrites['image']> = {};
 
-  if (apply.camera_count !== undefined) {
-    out.configPaths = { camera_count: apply.camera_count, camera_numbers: apply.camera_numbers! }; // parseApply guarantees the pair
+  if (apply.camera_numbers !== undefined) {
+    out.configPaths = { camera_numbers: apply.camera_numbers };
+    if (apply.camera_count !== undefined) out.configPaths.camera_count = apply.camera_count;
   }
   if (apply.source_path !== undefined) out.sourcePath = sanitizePath(apply.source_path);
   if (apply.image_type !== undefined) image.image_type = apply.image_type;

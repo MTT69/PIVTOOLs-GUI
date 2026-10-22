@@ -115,10 +115,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
     setNumImages(images.num_images !== undefined ? String(images.num_images) : "");
 
-    const cameraCount = paths.camera_count !== undefined
-      ? paths.camera_count
-      : (Array.isArray(paths.camera_numbers) ? paths.camera_numbers.length : 1);
-    setNumCameras(String(cameraCount));
+    setNumCameras(paths.camera_count !== undefined ? String(paths.camera_count) : "");
 
     // New stride-based config
     setPairingPreset(images.pairing_preset || "ab_format");
@@ -158,8 +155,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   // Gate on the authoritative config value (not the local `numImages` state) and
   // persist ONLY images.num_images — never the full saveConfig payload. On remount
   // the local state defaults (numCameras="1") haven't synced from config yet, so
-  // routing this through saveConfig would clobber camera_count/camera_numbers back
-  // to 1 every time the Setup tab is reopened.
+  // routing this through saveConfig would clobber camera_count back to 1 every time
+  // the Setup tab is reopened.
   useEffect(() => {
     if (!configLoadedRef.current) return;
     const cfgNum = config.images?.num_images;

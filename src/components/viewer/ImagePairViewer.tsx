@@ -68,7 +68,8 @@ const LoadingSpinner = ({ className = "" }: { className?: string }) => (
 export default function ImagePairViewer({ backendUrl = "/backend", config, onFiltersChange, updateConfig }: ImagePairViewerProps) {
   // --- UI State ---
   const [sourcePathIdx, setSourcePathIdx] = useState(0);
-  const [camera, setCamera] = useState(1);
+  // The user's camera pick; `camera` below resolves it against the configured selection
+  const [cameraChoice, setCamera] = useState<number | null>(null);
   const [index, setIndex] = useState(1);
   const [colormap, setColormap] = useState<"gray" | "viridis">("gray");
   
@@ -134,6 +135,15 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   }, [playing]);
   const [frameInputValue, setFrameInputValue] = useState<string>(String(index));
 
+  const cameraOptions: number[] = useMemo(() => {
+    return config?.paths?.camera_numbers || [];
+  }, [config?.paths?.camera_numbers]);
+  // The shown camera: the user's pick while it is still selected, else the first selected camera.
+  // Undefined while no camera is selected (or config has not loaded): nothing is requested then.
+  const camera: number | undefined =
+    cameraChoice !== null && cameraOptions.includes(cameraChoice) ? cameraChoice : cameraOptions[0];
+  const cameraKey = camera === undefined ? '' : `Cam${camera}`;
+
   // --- Hooks for Logic ---
   // Disable raw fetching during processed playback to avoid bandwidth competition
   const rawFetchEnabled = !(playing && playbackSource === "processed");
@@ -141,7 +151,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // the auto toggle would refetch the same image when a drag switches auto off. The window is carried
   // by rawDisplayBounds.
   const { loading, error, imgARaw, imgBRaw, imgA, imgB, stats: rawStatsAB, metadata, prefetchSurrounding, isFrameCached } =
-    useImagePair(backendUrl, sourcePathIdx, `Cam${camera}`, index, imageFormat, true, rawFetchEnabled, rawDisplayBounds);
+    useImagePair(backendUrl, sourcePathIdx, cameraKey, index, imageFormat, true, rawFetchEnabled, rawDisplayBounds);
   const {
     filters, setFilters, addFilter, removeFilter, runProcessing, autoProcessFrame,
     procLoading, procImgA, procImgB, procStats, fetchProcessed, updateFilter, moveFilter, downloadImage,
@@ -158,18 +168,6 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
   // Time/POD results come from the /filter store, encoded at the auto window only, so a manual window
   // is a client remap there and must not be sent (or trigger a refetch)
   const procRequestBounds = hasTemporalFilters ? null : procDisplayBounds;
-
-  // Memoize camera options and initialize camera
-  const cameraOptions = useMemo(() => {
-    return config?.paths?.camera_numbers || [];
-  }, [config?.paths?.camera_numbers]);
-
-  // Initialize camera from first available option when config loads
-  useEffect(() => {
-    if (cameraOptions.length > 0) {
-      setCamera(cameraOptions[0]);
-    }
-  }, [cameraOptions]);
 
   // Track if filters have been initialized to prevent overwriting
   const filtersInitializedRef = useRef(false);
@@ -210,12 +208,13 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
       if (playing && playbackSource === "raw") {
         return;
       }
+      if (!cameraKey) return;
 
-      await autoProcessFrame(`Cam${camera}`, index, sourcePathIdx, true, previewOverride, procRequestBounds);
+      await autoProcessFrame(cameraKey, index, sourcePathIdx, true, previewOverride, procRequestBounds);
     };
 
     fetchProcessedForCurrentFrame();
-  }, [camera, index, sourcePathIdx, autoProcessFrame, previewOverride, procRequestBounds, playing, playbackSource]);
+  }, [cameraKey, index, sourcePathIdx, autoProcessFrame, previewOverride, procRequestBounds, playing, playbackSource]);
 
   // Sync frame input value with index
   useEffect(() => {
@@ -477,7 +476,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                 />
               ))}
             </div>
-            <Button className="w-full" onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, true, undefined, procRequestBounds)} disabled={procLoading || filters.length === 0}>
+            <Button className="w-full" onClick={() => runProcessing(cameraKey, index, sourcePathIdx, true, undefined, procRequestBounds)} disabled={procLoading || filters.length === 0 || camera === undefined}>
               {procLoading ? "Processing..." : "Test Filters"}
             </Button>
         </div>
@@ -539,7 +538,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               className="px-2"
               disabled={cameraOptions.length <= 1}
               onClick={() => {
-                const i = cameraOptions.indexOf(camera);
+                const i = camera === undefined ? -1 : cameraOptions.indexOf(camera);
                 const n = cameraOptions.length;
                 setCamera(cameraOptions[(i - 1 + n) % n]);
               }}
@@ -556,7 +555,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               className="px-2"
               disabled={cameraOptions.length <= 1}
               onClick={() => {
-                const i = cameraOptions.indexOf(camera);
+                const i = camera === undefined ? -1 : cameraOptions.indexOf(camera);
                 const n = cameraOptions.length;
                 setCamera(cameraOptions[(i + 1) % n]);
               }}
@@ -821,10 +820,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               )}
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => downloadImage('raw', 'A', imgA || '', index, camera)} disabled={!imgA && !imgARaw}>
+              <Button size="sm" onClick={() => camera !== undefined && downloadImage('raw', 'A', imgA || '', index, camera)} disabled={camera === undefined || (!imgA && !imgARaw)}>
                 Download Raw A
               </Button>
-              <Button size="sm" onClick={() => downloadImage('raw', 'B', imgB || '', index, camera)} disabled={!imgB && !imgBRaw}>
+              <Button size="sm" onClick={() => camera !== undefined && downloadImage('raw', 'B', imgB || '', index, camera)} disabled={camera === undefined || (!imgB && !imgBRaw)}>
                 Download Raw B
               </Button>
             </div>
@@ -853,7 +852,8 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
                   <p className="text-gray-600 text-sm mb-3">Frame not yet processed</p>
                   <Button
                     size="sm"
-                    onClick={() => runProcessing(`Cam${camera}`, index, sourcePathIdx, true, undefined, procRequestBounds)}
+                    onClick={() => runProcessing(cameraKey, index, sourcePathIdx, true, undefined, procRequestBounds)}
+                    disabled={camera === undefined}
                   >
                     Test Filters
                   </Button>
@@ -933,10 +933,10 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               )}
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => downloadImage('processed', 'A', procImgA || '', index, camera)} disabled={!procImgA}>
+              <Button size="sm" onClick={() => camera !== undefined && downloadImage('processed', 'A', procImgA || '', index, camera)} disabled={camera === undefined || !procImgA}>
                 Download Processed A
               </Button>
-              <Button size="sm" onClick={() => downloadImage('processed', 'B', procImgB || '', index, camera)} disabled={!procImgB}>
+              <Button size="sm" onClick={() => camera !== undefined && downloadImage('processed', 'B', procImgB || '', index, camera)} disabled={camera === undefined || !procImgB}>
                 Download Processed B
               </Button>
             </div>
