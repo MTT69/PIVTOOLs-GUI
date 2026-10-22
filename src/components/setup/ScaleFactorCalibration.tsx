@@ -17,7 +17,11 @@ import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
+import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { isApplyJobActive } from "@/lib/applyJob";
+import { DiagnosisEntry, SuggestionApply, parseDiagnosis } from "@/lib/sourceDiagnosis";
+import { CameraValidationResult, emptyValidation } from "@/hooks/calibration/shared";
+import { applyCalibrationSuggestion } from "@/hooks/calibration/useCalibrationCore";
 import { CalibrationJobFamily, useCalibrationJobs } from "@/contexts/CalibrationJobContext";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
 import { useCalibrationApi } from "@/hooks/useCalibrationApi";
@@ -35,6 +39,7 @@ interface ScaleFactorCalibrationProps {
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
   sourcePaths: string[];
+  refetchConfig: () => Promise<void>;
 }
 
 type AxisDirX = "right" | "left";
@@ -48,6 +53,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   updateConfig,
   cameraOptions,
   sourcePaths,
+  refetchConfig,
 }) => {
   const c2 = useCalibrationApi();
 
@@ -139,18 +145,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     }
   }, [sourcePathIdx]);
 
-  // --- Source path validation (folder/pattern "Did you mean" suggestions) -------
-  interface SFValidation {
-    valid: boolean;
-    error?: string;
-    found_count?: number;
-    camera_path?: string;
-    image_size?: [number, number];
-    suggested_pattern?: string;
-    suggested_subfolder?: string;
-    suggested_zero_based?: boolean | null;
-  }
-  const [validation, setValidation] = useState<SFValidation | null>(null);
+  // --- Source path validation (folder/pattern diagnosis with one-click fixes) ---
+  const [validation, setValidation] = useState<CameraValidationResult | null>(null);
   const [validating, setValidating] = useState(false);
   const [viewerRefreshKey, setViewerRefreshKey] = useState('');
 
@@ -220,7 +216,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           // Guard stays CLOSED: the form still holds another source's values
           // and an open guard would let the debounced save write them into
           // THIS source's sidecar. Surface the failure in the validation panel.
-          setValidation({ valid: false, error: `Failed to load calibration settings: ${data.error ?? "no settings in response"}` });
+          setValidation(emptyValidation(`Failed to load calibration settings: ${data.error ?? "no settings in response"}`));
           return;
         }
         const img = data.settings.image || {};
@@ -241,7 +237,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         setSettingsEpoch(n => n + 1);
       } catch (e) {
         if (seq !== settingsSeqRef.current) return;
-        setValidation({ valid: false, error: `Failed to load calibration settings: ${errorMessage(e)}` });
+        setValidation(emptyValidation(`Failed to load calibration settings: ${errorMessage(e)}`));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -251,81 +247,97 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   // The source list saves as soon as it has loaded — NOT only after a sidecar
   // hydrate, which needs a saved source path to succeed. The sidecar write keeps
   // its own `settingsReadyRef` guard below.
-  useEffect(() => {
-    if (!configLoaded) return;
-    const t = setTimeout(async () => {
-      // Both writes report into one line, so a later success cannot hide an earlier failure.
-      const failures: string[] = [];
+  // `persist` never rejects (every write is caught into `saveError`). The timer and an applied
+  // suggestion both go through `runPersist`, which keeps the running save in `persistInFlightRef`
+  // so the apply can wait for it instead of racing its POSTs.
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistInFlightRef = useRef<Promise<void>>(Promise.resolve());
+  const persist = useCallback(async () => {
+    // Both writes report into one line, so a later success cannot hide an earlier failure.
+    const failures: string[] = [];
+    try {
+      await postJson("/backend/update_config", {
+        calibration: { calibration_sources: calibrationSources },
+      });
+    } catch (e) {
+      failures.push(`calibration sources not saved: ${errorMessage(e)}`);
+    }
+    // Sidecars are per-source: never write the form into a source it wasn't
+    // hydrated from — an in-place path edit repoints the index at a NEW
+    // directory while the form still shows the old one's values.
+    const currentPath = calibrationSources[sourcePathIdx] ?? '';
+    const pathEdited = currentPath !== loadedSourcePathRef.current;
+    if (!pathEdited && settingsReadyRef.current) {
       try {
-        await postJson("/backend/update_config", {
-          calibration: { calibration_sources: calibrationSources },
-        });
-      } catch (e) {
-        failures.push(`calibration sources not saved: ${errorMessage(e)}`);
-      }
-      // Sidecars are per-source: never write the form into a source it wasn't
-      // hydrated from — an in-place path edit repoints the index at a NEW
-      // directory while the form still shows the old one's values.
-      const currentPath = calibrationSources[sourcePathIdx] ?? '';
-      const pathEdited = currentPath !== loadedSourcePathRef.current;
-      if (!pathEdited && settingsReadyRef.current) {
-        try {
-          const res = await postJson("/backend/calibration/settings", {
-            source_path_idx: sourcePathIdx,
-            settings: {
-              image: {
-                image_format: imageFormat,
-                image_type: imageType,
-                zero_based_indexing: zeroBasedIndexing,
-                use_camera_subfolders: useCameraSubfolders,
-                camera_subfolders: cameraSubfolders,
-              },
-              rig: { dt: (() => { const v = parseFloat(dt); return Number.isFinite(v) ? v : null; })() },
-              methods: {
-                scale_factor: {
-                  px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
-                  use_images: useImages,
-                },
+        const res = await postJson("/backend/calibration/settings", {
+          source_path_idx: sourcePathIdx,
+          settings: {
+            image: {
+              image_format: imageFormat,
+              image_type: imageType,
+              zero_based_indexing: zeroBasedIndexing,
+              use_camera_subfolders: useCameraSubfolders,
+              camera_subfolders: cameraSubfolders,
+            },
+            rig: { dt: (() => { const v = parseFloat(dt); return Number.isFinite(v) ? v : null; })() },
+            methods: {
+              scale_factor: {
+                px_per_mm: (() => { const v = parseFloat(pxPerMm); return Number.isFinite(v) ? v : null; })(),
+                use_images: useImages,
               },
             },
-          });
-          // The backend prunes camera_subfolders to the camera count and echoes the stored
-          // list; adopt it (unless edited meanwhile) so stale entries are not re-sent.
-          const stored = res.settings?.image?.camera_subfolders;
-          if (!Array.isArray(stored)) {
-            throw new Error("settings save response carries no image.camera_subfolders");
-          }
-          const sentSubfolders = JSON.stringify(cameraSubfolders);
-          if (JSON.stringify(stored) !== sentSubfolders) {
-            setCameraSubfolders(prev => (JSON.stringify(prev) === sentSubfolders ? stored : prev));
-          }
-        } catch (e) {
-          failures.push(`calibration settings not saved: ${errorMessage(e)}`);
+          },
+        });
+        // The backend prunes camera_subfolders to the camera count and echoes the stored
+        // list; adopt it (unless edited meanwhile) so stale entries are not re-sent.
+        const stored = res.settings?.image?.camera_subfolders;
+        if (!Array.isArray(stored)) {
+          throw new Error("settings save response carries no image.camera_subfolders");
         }
+        const sentSubfolders = JSON.stringify(cameraSubfolders);
+        if (JSON.stringify(stored) !== sentSubfolders) {
+          setCameraSubfolders(prev => (JSON.stringify(prev) === sentSubfolders ? stored : prev));
+        }
+      } catch (e) {
+        failures.push(`calibration settings not saved: ${errorMessage(e)}`);
       }
-      setSaveError(failures.length ? failures.join("; ") : null);
-      if (pathEdited) {
-        // The persisted sources list now points elsewhere: drop the stale
-        // model/overlay and rehydrate settings + model from the new directory.
-        loadedSourcePathRef.current = currentPath;
-        setResult(null);
-        restoredFor.current = "";
-        setSourceReloadTick(n => n + 1);
-      }
-    }, 500);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }
+    setSaveError(failures.length ? failures.join("; ") : null);
+    if (pathEdited) {
+      // The persisted sources list now points elsewhere: drop the stale
+      // model/overlay and rehydrate settings + model from the new directory.
+      loadedSourcePathRef.current = currentPath;
+      setResult(null);
+      restoredFor.current = "";
+      setSourceReloadTick(n => n + 1);
+    }
   }, [imageFormat, imageType, zeroBasedIndexing, calibrationSources, useCameraSubfolders, cameraSubfolders,
-      pxPerMm, useImages, dt, settingsEpoch, sourcePathIdx, configLoaded]);
+      pxPerMm, useImages, dt, sourcePathIdx]);
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
+  const runPersist = useCallback(() => {
+    const p = persistRef.current();
+    persistInFlightRef.current = p;
+    return p;
+  }, []);
+
+  // `settingsEpoch` re-fires the save once after each hydration (echo save of a fresh seed).
+  useEffect(() => {
+    if (!configLoaded) return;
+    const t = setTimeout(() => { persistTimerRef.current = null; void runPersist(); }, 500);
+    persistTimerRef.current = t;
+    return () => clearTimeout(t);
+  }, [persist, runPersist, settingsEpoch, configLoaded]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
     setValidating(true);
     try {
-      const result = await postJson(`${BASE}/validate`, {
+      const raw = await postJson(`${BASE}/validate`, {
         camera, source_path_idx: sourcePathIdx,
         image_format: imageFormat, image_type: imageType, frame_total: 1,
       });
+      const result: CameraValidationResult = { ...raw, ...parseDiagnosis(raw) };
       setValidation(result);
       // This tab used to clear the frame cache but never warm it, even though its
       // viewer mounts as soon as the source validates -- so every frame it showed
@@ -348,7 +360,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         });
       }
     } catch (e) {
-      setValidation({ valid: false, error: errorMessage(e) });
+      setValidation(emptyValidation(errorMessage(e)));
     } finally {
       setValidating(false);
     }
@@ -434,6 +446,37 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourcePathIdx, camera, sourceReloadTick]);
+
+  // --- Applied suggestion: land pending saves, write, then rehydrate -------------
+  const diagnosis = useMemo((): DiagnosisEntry[] => {
+    if (!validation) return [];
+    const { found, suggestions, streams } = validation;
+    return [{ label: `Camera ${camera}`, found, suggestions, streams }];
+  }, [validation, camera]);
+
+  // Flush rather than drop the pending save: cancel the timer, wait for a save already in flight,
+  // then run one now. Nothing is left that could write the old form over the apply. The guard is
+  // not closed here, since a failed apply that wrote nothing never reloads to re-open it.
+  const beforeWrite = useCallback(async () => {
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    await persistInFlightRef.current;
+    await runPersist();
+  }, [runPersist]);
+
+  const reload = useCallback(async (sources: string[]) => {
+    setCalibrationSources(sources);
+    loadedSourcePathRef.current = sources[sourcePathIdx] ?? '';
+    setResult(null);
+    restoredFor.current = "";
+    setSourceReloadTick(n => n + 1);
+  }, [sourcePathIdx]);
+
+  const applySuggestion = useCallback((apply: SuggestionApply) => applyCalibrationSuggestion(apply, {
+    sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload,
+  }), [sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload]);
 
   // --- Click routing ------------------------------------------------------------
   // Receives the camera/frame the viewer attributed the click to (it may be driven to
@@ -711,7 +754,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             />
           )}
 
-          {/* Source validation + "Did you mean" suggestions */}
+          {/* Source validation + diagnosis with one-click fixes */}
           {validation && (
             <ValidationAlert
               validation={{
@@ -728,42 +771,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             />
           )}
 
-          {validation && !validating && !validation.valid && validation.suggested_pattern && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setImageFormat(validation.suggested_pattern!)}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use &quot;{validation.suggested_pattern}&quot;
-              </Button>
-            </div>
-          )}
-
-          {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
-            const sub = validation.suggested_subfolder!;
-            const perCam = cameraOptions.map(c => sub.replace(/\d+/, String(c)));
-            const label = [...new Set(perCam)].join('" / "');
-            return (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Subfolder suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setUseCameraSubfolders(true);
-                    // Slot by camera number, as the inputs above do.
-                    cameraOptions.forEach((c, i) => setSubfolderFor(c, perCam[i]));
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use &quot;{label}&quot;
-                </Button>
-              </div>
-            );
-          })()}
+          <SourceDiagnosis entries={diagnosis} onApply={applySuggestion} busy={validating} />
 
           {/* Image viewer with origin/measure picking (shared component — same as other tabs).
               Gated on a valid source (Dotboard pattern) whose settings have loaded, so a 404 never
