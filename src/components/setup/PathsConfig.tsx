@@ -1,13 +1,16 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Folder, Plus, X, CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { useConfigUpdate, ValidationState } from "@/hooks/useConfigUpdate";
+import { useConfigUpdate, ValidationState, applySetupSuggestion, entryLabel } from "@/hooks/useConfigUpdate";
+import { DiagnosisEntry } from "@/lib/sourceDiagnosis";
+import { sanitizePath } from "@/lib/sourcePath";
 import { ValidationAlert } from "./ValidationAlert";
+import { SourceDiagnosis } from "./SourceDiagnosis";
 
 interface PathsConfigProps {
   config: any;
@@ -28,7 +31,20 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
     setSaveStatus('idle');
   }, [config.paths]);
 
-  const sanitizePath = (p: string) => p.replace(/^["']+|["']+$/g, "").trim();
+  // Diagnosis entries per source, memoized on the validation state: SourceDiagnosis
+  // clears a shown apply error whenever the `entries` identity changes.
+  const diagnosisBySource = useMemo(
+    () => validation.sources.map((s): { sourcePath: string; entries: DiagnosisEntry[] } => ({
+      sourcePath: s.sourcePath,
+      entries: s.cameras.map((c) => ({
+        label: entryLabel(1, s.sourceIdx, c.camera),
+        found: c.found,
+        suggestions: c.suggestions,
+        streams: c.streams,
+      })),
+    })),
+    [validation.sources],
+  );
 
   const postUpdatePaths = async (nextBaseDirs: string[], nextSourceDirs: string[]) => {
     setSaveStatus('saving');
@@ -47,41 +63,6 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
     } else {
       setSaveStatus('error');
     }
-  };
-
-  const postUpdateCameraPaths = async (cameraPaths: {
-    camera_count?: number;
-    camera_numbers?: number[];
-    camera_subfolders?: string[];
-  }) => {
-    setSaveStatus('saving');
-    const result = await updateConfigBackend({ paths: cameraPaths });
-
-    if (result.success && result.data?.updated?.paths) {
-      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
-      setSaveStatus('success');
-    } else {
-      setSaveStatus('error');
-    }
-  };
-
-  const applySuggestedCameraCount = (n: number) => {
-    postUpdateCameraPaths({
-      camera_count: n,
-      camera_numbers: Array.from({ length: n }, (_, i) => i + 1),
-      camera_subfolders: [],
-    });
-  };
-
-  const applySuggestedSubfolder = (subfolder: string) => {
-    // Derive subfolders for all cameras by replacing the numeric portion
-    const camCount = config.paths?.camera_count
-      ?? (Array.isArray(config.paths?.camera_numbers) ? config.paths.camera_numbers.length : 1);
-    const newSubfolders = Array.from(
-      { length: camCount },
-      (_, i) => subfolder.replace(/\d+/, String(i + 1))
-    );
-    postUpdateCameraPaths({ camera_subfolders: newSubfolders });
   };
 
   const SaveStatusIcon = () => {
@@ -104,11 +85,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
       </div>
 
       {/* Validation Status */}
-      <ValidationAlert
-        validation={validation}
-        onApplySuggestedCameraCount={applySuggestedCameraCount}
-        onApplySuggestedSubfolder={applySuggestedSubfolder}
-      />
+      <ValidationAlert validation={validation} />
       <div className="space-y-6">
         <Card>
           <CardHeader>
@@ -158,6 +135,13 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                         <p className="text-xs text-muted-foreground mt-1">
                           Storage: <code className="bg-muted px-1">{dir.replace(/\.set$/, '_data/')}</code>
                         </p>
+                      )}
+                      {diagnosisBySource[index]?.sourcePath === sanitizePath(dir) && (
+                        <SourceDiagnosis
+                          entries={diagnosisBySource[index].entries}
+                          onApply={a => applySetupSuggestion(a, { config, sourcePathIdx: index, updateConfig })}
+                          busy={!validation.checked}
+                        />
                       )}
                     </div>
                     <Button

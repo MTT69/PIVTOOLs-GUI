@@ -1,7 +1,18 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
-import { postJson, errorMessage } from '@/lib/api';
+import { postJson, errorMessage, ApiError } from '@/lib/api';
+import {
+  Diagnosis,
+  DiagnosisEntry,
+  MergedSuggestion,
+  SetupConfigView,
+  Suggestion,
+  SuggestionApply,
+  buildSetupPayload,
+  mergeSuggestions,
+  parseDiagnosis,
+} from '@/lib/sourceDiagnosis';
 
-/** Validation result for a single pattern (A or B) */
+/** Validation result for a single pattern (A or B) of one camera */
 export interface PatternValidation {
   index: number;
   label: string;  // "A", "B", or "pattern"
@@ -9,39 +20,258 @@ export interface PatternValidation {
   valid: boolean;
   found_count?: number | 'container';
   error?: string | null;
-  suggested_pattern?: string | null;
+  suggestions: Suggestion[];
   sample_files?: string[];
 }
 
-export interface ValidationState {
+/** One camera's `/validate_files` detail, with the source diagnosis. */
+export interface SetupCameraResult extends Diagnosis {
+  camera: number;
+  status: 'ok' | 'error';
+  error: string | null;
+  sample_files: string[];
+  pattern_validations: PatternValidation[];
+  color_detected: boolean;
+  indexing_warning: string | null;
+  ab_count_warning: string | null;
+}
+
+/** The validation of one configured source path. */
+export interface SourceValidation {
+  sourceIdx: number;
+  /** The source path this result was computed for (stale once the config changes). */
+  sourcePath: string;
   valid: boolean;
-  error?: string | null;
+  /** The request's own failure (e.g. the 400 for a bad source index); `cameras` is then []. */
+  requestError: string | null;
+  detectedCount: number | null;
+  cameras: SetupCameraResult[];
+}
+
+/** One pattern index summarised over every (source, camera). */
+export interface PatternSummary {
+  index: number;
+  valid: boolean;
+  failures: { label: string; error: string }[];
+  suggestions: MergedSuggestion[];
+}
+
+export interface ValidationState {
+  /** Nothing to validate yet (config not fetched, or no source path). */
+  idle: boolean;
+  valid: boolean;
   checked: boolean;
-  /** Per-pattern validation results (new) */
-  patternValidations?: PatternValidation[];
+  error?: string | null;
+  sources: SourceValidation[];
+  patterns: PatternSummary[];
+  /** Auto-detected frame/file count of source 0 (feeds the num_images auto-fill) */
+  detectedCount: number | null;
   /** Warning if A/B file counts differ significantly */
-  abCountWarning?: string | null;
-  /** Suggested camera subfolder when the configured one doesn't exist (first match, legacy) */
-  suggested_subfolder?: string | null;
-  /** Per-camera suggested subfolders (camera key → suggestion) */
-  suggested_subfolders?: Record<string, string>;
-  /** Suggested camera count when files match directly in the source folder (stale multi-camera config) */
-  suggestedCameraCount?: number | null;
-  /** Sample files backing the camera-count suggestion */
-  suggestedCameraCountFiles?: string[];
-  /** Auto-detected frame/file count from container metadata or glob */
-  detectedCount?: number | null;
-  /** Sample files found in the source folder (shown on validation error for context) */
-  sampleFiles?: string[];
-  /**
-   * Set when a wrong 0/1 start index left an expected file missing: true = switch to
-   * 0-based (start_index 0), false = switch to 1-based (start_index 1).
-   */
-  suggestedZeroBased?: boolean | null;
-  // Legacy fields for backward compatibility
-  suggested_pattern?: string | null;
-  suggested_pattern_b?: string | null;  // For A/B pair detection
-  suggested_mode?: 'ab_format' | 'skip_frames' | null;  // Detected pairing mode
+  abCountWarning: string | null;
+  /** Files found in the folder of each failing camera (shown on validation error for context) */
+  sampleFiles: { label: string; files: string[] }[];
+}
+
+/** `Camera N` with one source, `Source S, camera N` otherwise. */
+export function entryLabel(sourceCount: number, sourceIdx: number, camera: number): string {
+  return sourceCount === 1 ? `Camera ${camera}` : `Source ${sourceIdx + 1}, camera ${camera}`;
+}
+
+/**
+ * Keys of a camera detail on the backend's short branches (blank source, per-camera
+ * exception): the list fields and flags of the full detail are absent there.
+ */
+const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams'];
+
+const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+function parsePatternValidation(raw: unknown): PatternValidation {
+  if (typeof raw !== 'object' || raw === null) throw new Error('Pattern validation must be an object');
+  const pv = raw as Record<string, unknown>;
+  if (
+    typeof pv.index !== 'number' || typeof pv.label !== 'string' || typeof pv.pattern !== 'string' ||
+    typeof pv.valid !== 'boolean' || !isStringOrNull(pv.error ?? null) || !isStringList(pv.sample_files)
+  ) {
+    throw new Error('Pattern validation needs "index", "label", "pattern", "valid", "error" and "sample_files"');
+  }
+  if (!pv.valid && typeof pv.error !== 'string') {
+    throw new Error(`Pattern ${pv.label} is invalid but carries no error`);
+  }
+  return {
+    index: pv.index,
+    label: pv.label,
+    pattern: pv.pattern,
+    valid: pv.valid,
+    found_count: pv.found_count as PatternValidation['found_count'],
+    error: pv.error as string | null | undefined,
+    // Pattern suggestions share the diagnosis suggestion shape; validate them with its guard.
+    suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null }).suggestions,
+    sample_files: pv.sample_files,
+  };
+}
+
+/** Validate one `details["camera_N"]` entry. Throws on any shape violation. */
+function parseCameraResult(camera: number, raw: unknown): SetupCameraResult {
+  const diagnosis = parseDiagnosis(raw);
+  const d = raw as Record<string, unknown>;
+  if (d.status !== 'ok' && d.status !== 'error') throw new Error(`camera_${camera}: unknown status ${String(d.status)}`);
+  if (!isStringOrNull(d.error)) throw new Error(`camera_${camera}: "error" must be a string or null`);
+  const keys = Object.keys(d);
+  if (keys.length === SHORT_DETAIL_KEYS.length && keys.every((k) => SHORT_DETAIL_KEYS.includes(k))) {
+    return {
+      ...diagnosis, camera, status: d.status, error: d.error,
+      sample_files: [], pattern_validations: [], color_detected: false, indexing_warning: null, ab_count_warning: null,
+    };
+  }
+  if (
+    !isStringList(d.sample_files) || !Array.isArray(d.pattern_validations) || typeof d.color_detected !== 'boolean' ||
+    !isStringOrNull(d.indexing_warning) || !isStringOrNull(d.ab_count_warning)
+  ) {
+    throw new Error(
+      `camera_${camera}: needs "sample_files", "pattern_validations", "color_detected", "indexing_warning" and "ab_count_warning"`,
+    );
+  }
+  return {
+    ...diagnosis,
+    camera,
+    status: d.status,
+    error: d.error,
+    sample_files: d.sample_files,
+    pattern_validations: d.pattern_validations.map(parsePatternValidation),
+    color_detected: d.color_detected,
+    indexing_warning: d.indexing_warning,
+    ab_count_warning: d.ab_count_warning,
+  };
+}
+
+/** Parse `details` into per-camera results. Every key must be `camera_N`. */
+function parseCameraDetails(details: unknown): SetupCameraResult[] {
+  if (typeof details !== 'object' || details === null) throw new Error('validate response has no "details"');
+  return Object.entries(details).map(([key, value]) => {
+    const match = /^camera_(\d+)$/.exec(key);
+    if (!match) throw new Error(`Unexpected validation detail key "${key}"`);
+    return parseCameraResult(Number(match[1]), value);
+  });
+}
+
+/** Validate one source. Only the request's own failure (`ApiError`) is kept per source. */
+async function validateSource(sourceIdx: number, sourcePath: string): Promise<SourceValidation> {
+  try {
+    const json = await postJson('/backend/validate_files', { source_path_idx: sourceIdx });
+    if (typeof json?.valid !== 'boolean') throw new Error('validate response has no "valid"');
+    return {
+      sourceIdx,
+      sourcePath,
+      valid: json.valid,
+      requestError: null,
+      detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
+      cameras: parseCameraDetails(json.details),
+    };
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    return { sourceIdx, sourcePath, valid: false, requestError: e.message, detectedCount: null, cameras: [] };
+  }
+}
+
+const IDLE_FIELDS = {
+  sources: [], patterns: [], detectedCount: null, abCountWarning: null, sampleFiles: [],
+} satisfies Partial<ValidationState>;
+
+/** Gather pattern index `i` over every (source, camera). */
+function summarisePatterns(sources: SourceValidation[]): PatternSummary[] {
+  const count = Math.max(0, ...sources.flatMap((s) => s.cameras.map((c) => c.pattern_validations.length)));
+  return Array.from({ length: count }, (_, i) => {
+    const entries = sources.flatMap((s) => s.cameras.flatMap((c) => {
+      const pv = c.pattern_validations[i];
+      return pv ? [{ label: entryLabel(sources.length, s.sourceIdx, c.camera), pv }] : [];
+    }));
+    const failed = entries.filter((e) => !e.pv.valid);
+    const failedEntries: DiagnosisEntry[] = failed.map((e) => ({
+      label: e.label, found: null, suggestions: e.pv.suggestions, streams: null,
+    }));
+    return {
+      index: i,
+      valid: failed.length === 0,
+      failures: failed.map((e) => ({ label: e.label, error: e.pv.error as string })),
+      suggestions: mergeSuggestions(failedEntries),
+    };
+  });
+}
+
+/** Aggregate per-source results into the Setup validation state. */
+function aggregate(sources: SourceValidation[]): ValidationState {
+  const valid = sources.every((s) => s.valid);
+  const cameras = sources.flatMap((s) => s.cameras);
+  let error: string | undefined;
+
+  if (valid) {
+    // Check for color images or subset processing
+    const messages: string[] = [];
+    cameras.forEach((detail) => {
+      if (detail.color_detected) {
+        messages.push('Color images will be converted to grayscale');
+      }
+      if (detail.error && detail.error.startsWith('Processing subset:')) {
+        messages.push(detail.error);
+      }
+      if (detail.indexing_warning) {
+        messages.push(detail.indexing_warning);
+      }
+      if (detail.ab_count_warning) {
+        messages.push(detail.ab_count_warning);
+      }
+    });
+    error = messages.length > 0 ? messages.join('. ') + '.' : undefined;
+  } else {
+    const lines: string[] = [];
+    sources.forEach((s) => {
+      if (s.requestError !== null) lines.push(`Source ${s.sourceIdx + 1}: ${s.requestError}`);
+      s.cameras.forEach((c) => {
+        if (c.status === 'error') lines.push(`${entryLabel(sources.length, s.sourceIdx, c.camera)}: ${c.error}`);
+      });
+    });
+    error = lines.join('; ');
+  }
+
+  const sampleFiles = sources.flatMap((s) => s.cameras
+    .filter((c) => c.status === 'error' && c.sample_files.length > 0)
+    .map((c) => ({ label: entryLabel(sources.length, s.sourceIdx, c.camera), files: c.sample_files })));
+
+  return {
+    idle: false,
+    valid,
+    checked: true,
+    error,
+    sources,
+    patterns: summarisePatterns(sources),
+    detectedCount: sources[0].detectedCount,
+    abCountWarning: cameras.find((c) => c.ab_count_warning !== null)?.ab_count_warning ?? null,
+    sampleFiles,
+  };
+}
+
+/**
+ * Apply a source-diagnosis suggestion to the Setup config: post the mapped patch to
+ * `/backend/update_config` and merge the server's `updated` sections into the local
+ * config. Throws on failure (the caller shows the error).
+ */
+export async function applySetupSuggestion(
+  apply: SuggestionApply,
+  target: {
+    config: SetupConfigView & Record<string, any>;
+    sourcePathIdx: number;
+    updateConfig: (path: string[], value: unknown) => void;
+  },
+): Promise<void> {
+  const { config, sourcePathIdx, updateConfig } = target;
+  const json = await postJson('/backend/update_config', buildSetupPayload(apply, config, sourcePathIdx));
+  const updated = json?.updated;
+  if (typeof updated !== 'object' || updated === null) {
+    throw new Error('update_config response has no "updated"');
+  }
+  if (updated.images) updateConfig(['images'], { ...config.images, ...updated.images });
+  if (updated.paths) updateConfig(['paths'], { ...config.paths, ...updated.paths });
 }
 
 export function useConfigUpdate() {
@@ -80,8 +310,11 @@ export function useConfigUpdate() {
  */
 export function useAutoValidation(config: any) {
   const [validation, setValidation] = useState<ValidationState>({
+    idle: true,
     valid: false,
     checked: false,
+    error: null,
+    ...IDLE_FIELDS,
   });
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -98,6 +331,9 @@ export function useAutoValidation(config: any) {
     const validationKey = JSON.stringify({
       sourcePaths: config?.paths?.source_paths,
       imageFormat: config?.images?.image_format,
+      imageType: config?.images?.image_type,
+      useCameraSubfolders: config?.images?.use_camera_subfolders,
+      numLoops: config?.images?.num_loops,
       cameraNumbers: config?.paths?.camera_numbers,
       cameraSubfolders: config?.paths?.camera_subfolders,
       cameraCount: config?.paths?.camera_count,
@@ -111,11 +347,22 @@ export function useAutoValidation(config: any) {
       return;
     }
 
-    // Skip if no meaningful config
-    const hasConfig = config?.paths?.source_paths?.length > 0;
-    if (!hasConfig) {
+    // Nothing to validate: config not fetched yet (undefined) or no source path ([]).
+    const sourcePaths: string[] | undefined = config?.paths?.source_paths;
+    if (sourcePaths === undefined || sourcePaths.length === 0) {
       requestSeqRef.current++; // invalidate any in-flight validation
-      setValidation({ valid: false, checked: false, error: 'No configuration loaded' });
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      lastValidatedRef.current = '';
+      setValidation({
+        idle: true,
+        valid: false,
+        checked: false,
+        error: sourcePaths === undefined ? null : 'No source path yet.',
+        ...IDLE_FIELDS,
+      });
       return;
     }
 
@@ -128,144 +375,26 @@ export function useAutoValidation(config: any) {
     }
 
     // Set pending state
-    setValidation({ valid: false, checked: false, error: 'Validating...' });
+    setValidation({ idle: false, valid: false, checked: false, error: 'Validating...', ...IDLE_FIELDS });
 
     // Validate after short delay
     timerRef.current = setTimeout(async () => {
       timerRef.current = null; // fired: the cleanup must no longer treat it as pending
-      const sourcePaths = config.paths?.source_paths || [];
-      const cameraNumbers = config.paths?.camera_numbers || [1];
-      const cameraToTest = cameraNumbers[0] || 1;
-
       try {
-        // Use new smart validation endpoint
-        const json = await postJson('/backend/validate_files', { source_path_idx: 0 });
+        const sources = await Promise.all(sourcePaths.map((path, idx) => validateSource(idx, path)));
         if (seq !== requestSeqRef.current) return; // stale response — a newer validation superseded this one
-        const details = json.details || {};
-
-        // Extract per-pattern validations, A/B count warning, and sample files from first camera
-        const firstCamera = Object.values(details)[0] as any;
-        const patternValidations: PatternValidation[] = firstCamera?.pattern_validations || [];
-        const abCountWarning = firstCamera?.ab_count_warning || null;
-        const sampleFiles: string[] = firstCamera?.sample_files || [];
-
-        if (json.valid) {
-          // Check for color images or subset processing
-          const messages: string[] = [];
-
-          Object.values(details).forEach((detail: any) => {
-            if (detail.color_detected) {
-              messages.push('Color images will be converted to grayscale');
-            }
-            if (detail.error && detail.error.startsWith('Processing subset:')) {
-              messages.push(detail.error);
-            }
-            if (detail.indexing_warning) {
-              messages.push(detail.indexing_warning);
-            }
-            if (detail.ab_count_warning) {
-              messages.push(detail.ab_count_warning);
-            }
-          });
-
-          const message = messages.length > 0 ? messages.join('. ') + '.' : undefined;
-          // A valid set can still start at the other 0/1 index (the hint is in `message`).
-          const hinted = Object.values(details).find(
-            (d: any) => typeof d?.suggested_zero_based === 'boolean') as any;
-
-          setValidation({
-            valid: true,
-            checked: true,
-            error: message,
-            patternValidations,
-            abCountWarning,
-            detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
-            sampleFiles,
-            suggestedZeroBased: hinted ? hinted.suggested_zero_based : null,
-          });
-
-          // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
-          // We don't preload here to avoid loading the wrong format (jpeg vs png)
-        } else {
-          // Build detailed error message from validation results
-          const errors: string[] = [];
-          const warnings: string[] = [];
-          let suggestedPattern: string | null = null;
-          let suggestedPatternB: string | null = null;
-          let suggestedMode: 'ab_format' | 'skip_frames' | null = null;
-          let suggestedSubfolder: string | null = null;
-          let suggestedZeroBased: boolean | null = null;
-          const perCameraSuggestions: Record<string, string> = {};
-
-          Object.entries(details).forEach(([key, value]: [string, any]) => {
-            if (value.status === 'error') {
-              // Use the detailed error message if available
-              const errorDetail = value.error ||
-                (value.expected_count && value.actual_count !== value.expected_count
-                  ? `Found ${value.actual_count}/${value.expected_count} files`
-                  : 'Cannot read files');
-              errors.push(`${key}: ${errorDetail}`);
-              // Capture per-camera suggested subfolder
-              if (value.suggested_subfolder) {
-                perCameraSuggestions[key] = value.suggested_subfolder;
-                if (!suggestedSubfolder) {
-                  suggestedSubfolder = value.suggested_subfolder;
-                }
-              }
-              // Capture first suggested pattern from any camera (legacy)
-              if (value.suggested_pattern && !suggestedPattern) {
-                suggestedPattern = value.suggested_pattern;
-              }
-              // Capture A/B pair suggestion if available (legacy)
-              if (value.suggested_pattern_b && !suggestedPatternB) {
-                suggestedPatternB = value.suggested_pattern_b;
-              }
-              if (value.suggested_mode && !suggestedMode) {
-                suggestedMode = value.suggested_mode;
-              }
-            }
-            // The backend folds the start-index hint into a camera's error only on some
-            // failure paths; add it where the error does not already carry it.
-            if (value.indexing_warning && !(value.error ?? '').includes(value.indexing_warning)) {
-              warnings.push(`${key}: ${value.indexing_warning}`);
-            }
-            if (typeof value.suggested_zero_based === 'boolean' && suggestedZeroBased === null) {
-              suggestedZeroBased = value.suggested_zero_based;
-            }
-            if (value.status === 'warning') {
-              const expected = value.expected_count || 0;
-              const actual = value.actual_count || 0;
-              warnings.push(`${key}: Found ${actual}/${expected} files`);
-            }
-          });
-
-          const errorMsg = [
-            ...errors,
-            ...warnings,
-          ].join('; ') || 'Image files not found';
-
-          setValidation({
-            valid: false,
-            checked: true,
-            error: errorMsg,
-            patternValidations,
-            abCountWarning,
-            detectedCount: typeof json.detected_count === 'number' ? json.detected_count : null,
-            sampleFiles,
-            suggested_subfolder: suggestedSubfolder,
-            suggested_subfolders: Object.keys(perCameraSuggestions).length > 0 ? perCameraSuggestions : undefined,
-            suggestedCameraCount: typeof json.suggested_camera_count === 'number' ? json.suggested_camera_count : null,
-            suggestedCameraCountFiles: Array.isArray(json.suggested_camera_count_files) ? json.suggested_camera_count_files : undefined,
-            suggestedZeroBased,
-            // Legacy fields
-            suggested_pattern: suggestedPattern,
-            suggested_pattern_b: suggestedPatternB,
-            suggested_mode: suggestedMode,
-          });
-        }
+        setValidation(aggregate(sources));
+        // Note: Preloading is handled by ImagePairViewer which knows the user's format preference
+        // We don't preload here to avoid loading the wrong format (jpeg vs png)
       } catch (e) {
         if (seq !== requestSeqRef.current) return; // stale response
-        setValidation({ valid: false, checked: true, error: `Validation failed: ${errorMessage(e)}` });
+        setValidation({
+          idle: false,
+          valid: false,
+          checked: true,
+          error: `Validation failed: ${errorMessage(e)}`,
+          ...IDLE_FIELDS,
+        });
       }
     }, 500);
 
@@ -282,6 +411,9 @@ export function useAutoValidation(config: any) {
   }, [
     config?.paths?.source_paths,
     config?.images?.image_format,
+    config?.images?.image_type,
+    config?.images?.use_camera_subfolders,
+    config?.images?.num_loops,
     config?.paths?.camera_numbers,
     config?.paths?.camera_subfolders,
     config?.paths?.camera_count,

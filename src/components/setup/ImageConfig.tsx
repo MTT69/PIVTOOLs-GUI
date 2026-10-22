@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Minus, Image as ImageIcon, Info, CheckCircle, XCircle } from "lucide-react";
-import { useConfigUpdate, PatternValidation, ValidationState } from "@/hooks/useConfigUpdate";
+import { useConfigUpdate, ValidationState, applySetupSuggestion } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
+import { InlineSuggestion } from "./SourceDiagnosis";
 import { cn } from "@/lib/utils";
 import { fetchJson } from "@/lib/api";
 import { PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
@@ -264,28 +265,6 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       if (result.data.updated.paths) {
         updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
       }
-      setSavingMeta("Saved successfully!");
-    } else {
-      setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
-    }
-
-    setTimeout(() => setSavingMeta(""), 2000);
-  };
-
-  // Targeted camera-state update for callers outside the 'core' section
-  // (saveConfig excludes paths there — see the payload gating above). Sends
-  // only the changed keys and merges the server-reconciled paths back into
-  // the context, mirroring PathsConfig.postUpdateCameraPaths.
-  const postUpdateCameraPaths = async (cameraPaths: {
-    camera_count?: number;
-    camera_numbers?: number[];
-    camera_subfolders?: string[];
-  }) => {
-    setSavingMeta("Saving...");
-    const result = await updateConfigBackend({ paths: cameraPaths });
-
-    if (result.success && result.data?.updated?.paths) {
-      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
       setSavingMeta("Saved successfully!");
     } else {
       setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
@@ -894,9 +873,9 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
                 <div className="space-y-3 mt-2">
                   {rawPatterns.map((p, i) => {
-                    const patternValidation = validation.patternValidations?.[i];
-                    const isValid = patternValidation?.valid;
-                    const hasValidation = patternValidation !== undefined && validation.checked;
+                    const patternSummary = validation.patterns[i];
+                    const isValid = patternSummary?.valid;
+                    const hasValidation = patternSummary !== undefined && validation.checked;
 
                     return (
                       <div key={i} className="space-y-1">
@@ -940,80 +919,24 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                           )}
                         </div>
 
-                        {hasValidation && !isValid && patternValidation?.suggested_pattern && (
-                          <div className="flex items-center gap-2 text-sm ml-5">
-                            <span className="text-muted-foreground">Did you mean:</span>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const nextPatterns = [...rawPatterns];
-                                nextPatterns[i] = patternValidation.suggested_pattern!;
-                                setRawPatterns(nextPatterns);
-                                saveConfig({ rawPatterns: nextPatterns });
-                              }}
-                              className="font-mono text-xs text-blue-600 border-blue-300 hover:bg-blue-50"
-                            >
-                              {patternValidation.suggested_pattern}
-                            </Button>
+                        {hasValidation && !isValid && (
+                          <div className="ml-5 text-sm">
+                            {patternSummary.failures.map(({ label, error }) => (
+                              <p key={label} className="text-xs text-red-600">{`${label}: ${error}`}</p>
+                            ))}
+                            {patternSummary.suggestions[0] && (
+                              <InlineSuggestion
+                                suggestion={patternSummary.suggestions[0]}
+                                onApply={a => applySetupSuggestion(a, { config, sourcePathIdx: 0, updateConfig })}
+                              />
+                            )}
                           </div>
-                        )}
-
-                        {hasValidation && !isValid && !patternValidation?.suggested_pattern && patternValidation?.error && (
-                          <p className="text-xs text-red-600 ml-5">
-                            {patternValidation.error}
-                          </p>
                         )}
                       </div>
                     );
                   })}
 
-                  <ValidationAlert
-                    validation={validation}
-                    currentMode={pairingPreset === 'ab_format' ? 'ab_format' : 'skip_frames'}
-                    onApplySuggestedPattern={(pattern, patternB, suggestedMode) => {
-                      let newPatterns: string[];
-                      const shouldUseABMode =
-                        suggestedMode === 'ab_format' || pairingPreset === 'ab_format';
-
-                      if (shouldUseABMode) {
-                        if (patternB) {
-                          newPatterns = [pattern, patternB];
-                        } else {
-                          newPatterns = deriveABPatterns(pattern);
-                        }
-                      } else {
-                        newPatterns = [pattern];
-                      }
-
-                      setRawPatterns(newPatterns);
-                      saveConfig({ rawPatterns: newPatterns });
-                    }}
-                    onApplySuggestedSubfolder={(subfolder) => {
-                      // Derive subfolders for all cameras by replacing the numeric portion
-                      const newSubfolders = Array.from(
-                        { length: Number(numCameras) },
-                        (_, i) => subfolder.replace(/\d+/, String(i + 1))
-                      );
-                      setCameraSubfolders(newSubfolders);
-                      postUpdateCameraPaths({ camera_subfolders: newSubfolders });
-                    }}
-                    onApplySuggestedCameraCount={(n) => {
-                      setNumCameras(String(n));
-                      setCameraSubfolders([]);
-                      postUpdateCameraPaths({
-                        camera_count: n,
-                        camera_numbers: Array.from({ length: n }, (_, i) => i + 1),
-                        camera_subfolders: [],
-                      });
-                    }}
-                    onApplySuggestedStartIndex={(si) => {
-                      // Same path as the "First Frame Number" 0/1 buttons.
-                      setStartIndex(si);
-                      setStartIndexStr(String(si));
-                      saveConfig({ startIndex: si });
-                    }}
-                  />
+                  <ValidationAlert validation={validation} />
                   {pairingPreset !== "ab_format" && (
                     <Button
                       variant="outline"

@@ -1,7 +1,5 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
-import { PatternValidation } from "@/hooks/useConfigUpdate";
 
 /**
  * Base validation state that ValidationAlert accepts.
@@ -12,16 +10,11 @@ interface BaseValidationState {
   valid: boolean;
   checked: boolean;
   error?: string | null;
-  suggested_pattern?: string | null;
-  suggested_pattern_b?: string | null;
-  suggested_mode?: 'ab_format' | 'skip_frames' | null;
-  suggested_subfolder?: string | null;
-  suggestedCameraCount?: number | null;
-  /** true = files are 0-based, false = 1-based (a wrong start index left a file missing). */
-  suggestedZeroBased?: boolean | null;
-  patternValidations?: PatternValidation[];
+  /** Nothing to validate yet: `error` (if any) is shown as a muted note. */
+  idle?: boolean;
   abCountWarning?: string | null;
-  sampleFiles?: string[];
+  /** Files found in each failing camera's folder, headed by the camera's label. */
+  sampleFiles?: { label: string; files: string[] }[];
 }
 
 interface ValidationAlertProps {
@@ -38,19 +31,16 @@ interface ValidationAlertProps {
   pendingLabel?: string;
   /** Optional count of found items to display */
   foundCount?: number | string;
-  /** Current pairing mode from config (used to preserve mode when applying suggestions) */
-  currentMode?: 'ab_format' | 'skip_frames';
-  /** Callback when user clicks to apply suggested pattern(s) */
-  onApplySuggestedPattern?: (pattern: string, patternB?: string | null, mode?: string | null) => void;
-  /** Callback when user clicks to apply a suggested camera subfolder */
-  onApplySuggestedSubfolder?: (subfolder: string) => void;
-  /** Callback when user clicks to apply a suggested camera count (stale multi-camera config) */
-  onApplySuggestedCameraCount?: (count: number) => void;
-  /** Callback when user clicks to switch the start index (0 or 1) the files actually use */
-  onApplySuggestedStartIndex?: (startIndex: 0 | 1) => void;
 }
 
-export function ValidationAlert({ validation, customSuccessMessage, foundCount, currentMode, pendingLabel, onApplySuggestedPattern, onApplySuggestedSubfolder, onApplySuggestedCameraCount, onApplySuggestedStartIndex }: ValidationAlertProps) {
+export function ValidationAlert({ validation, customSuccessMessage, foundCount, pendingLabel }: ValidationAlertProps) {
+  // Idle: nothing to validate yet. No spinner, no alert colour.
+  if (validation.idle) {
+    return validation.error ? (
+      <p className="text-sm text-muted-foreground">{validation.error}</p>
+    ) : null;
+  }
+
   // Checking / re-validating state: show the in-flight error if one is present, else the
   // opt-in pending label. Callers that pass `pendingLabel` get a neutral spinner while a
   // fresh check runs; callers that don't keep the original "nothing until error" behaviour.
@@ -74,24 +64,8 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
         : "Image files found and validated successfully!";
 
     // A valid set can still carry notes (grayscale conversion, subset, a 0/1 start-index
-    // hint); they are shown under the success line, with the start-index switch when offered.
-    const notes = (
-      <>
-        {validation.error && <div className="mt-1 text-xs">{validation.error}</div>}
-        {validation.suggestedZeroBased != null && onApplySuggestedStartIndex && (
-          <div className="mt-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onApplySuggestedStartIndex(validation.suggestedZeroBased ? 0 : 1)}
-              className="text-blue-600 border-blue-300 hover:bg-blue-50"
-            >
-              Switch to {validation.suggestedZeroBased ? 0 : 1}-based
-            </Button>
-          </div>
-        )}
-      </>
-    );
+    // hint); they are shown under the success line.
+    const notes = validation.error && <div className="mt-1 text-xs">{validation.error}</div>;
 
     // A/B count mismatch is a warning, not a failure
     if (validation.abCountWarning) {
@@ -124,104 +98,22 @@ export function ValidationAlert({ validation, customSuccessMessage, foundCount, 
 
   // Error state
   if (validation.checked && !validation.valid && validation.error) {
-    // Check if we have per-pattern validations with individual suggestions
-    // In this case, show a simpler overall message since suggestions are shown inline
-    const hasPerPatternSuggestions = validation.patternValidations?.some(
-      pv => !pv.valid && pv.suggested_pattern
-    );
-
-    // Count invalid patterns
-    const invalidPatterns = validation.patternValidations?.filter(pv => !pv.valid) || [];
-    const invalidCount = invalidPatterns.length;
-    const totalPatterns = validation.patternValidations?.length || 0;
-
-    // Build a cleaner error summary when per-pattern details are shown inline
-    let errorSummary = validation.error;
-    if (hasPerPatternSuggestions && totalPatterns > 0) {
-      if (invalidCount === totalPatterns) {
-        errorSummary = totalPatterns === 1
-          ? "Pattern validation failed"
-          : "All patterns failed validation";
-      } else {
-        const failedLabels = invalidPatterns.map(p => `Pattern ${p.label}`).join(', ');
-        errorSummary = `${failedLabels} failed validation`;
-      }
-    }
-
     return (
       <Alert variant="destructive">
         <XCircle className="h-4 w-4" />
         <AlertTitle>Validation Failed</AlertTitle>
         <AlertDescription className="text-sm">
-          {errorSummary}
-          {/* Show files found in folder for context */}
-          {validation.sampleFiles && validation.sampleFiles.length > 0 && (
-            <div className="mt-2 p-2 bg-muted/30 rounded text-xs font-mono">
+          {validation.error}
+          {/* Show files found in each failing camera's folder for context */}
+          {validation.sampleFiles?.map(({ label, files }) => (
+            <div key={label} className="mt-2 p-2 bg-muted/30 rounded text-xs font-mono">
+              <p className="font-medium text-muted-foreground">{label}</p>
               <p className="font-medium text-muted-foreground mb-1">Files found in folder:</p>
-              {validation.sampleFiles.map((f, i) => (
+              {files.map((f, i) => (
                 <div key={i} className="text-muted-foreground">{f}</div>
               ))}
             </div>
-          )}
-          {/* Only show legacy global suggestion if no per-pattern suggestions */}
-          {!hasPerPatternSuggestions && validation.suggested_pattern && onApplySuggestedPattern && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-muted-foreground">Did you mean:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onApplySuggestedPattern(
-                  validation.suggested_pattern!,
-                  validation.suggested_pattern_b,
-                  validation.suggested_mode
-                )}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
-              >
-                {validation.suggested_pattern}
-                {validation.suggested_pattern_b && ` + ${validation.suggested_pattern_b}`}
-              </Button>
-            </div>
-          )}
-          {validation.suggested_subfolder && onApplySuggestedSubfolder && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-muted-foreground">Did you mean folder:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onApplySuggestedSubfolder(validation.suggested_subfolder!)}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50 font-mono"
-              >
-                {validation.suggested_subfolder}
-              </Button>
-            </div>
-          )}
-          {validation.suggestedCameraCount != null && onApplySuggestedCameraCount && (
-            <div className="mt-2">
-              <p className="text-muted-foreground">
-                Image files matching your pattern were found directly in the source folder — this looks like a single-camera dataset.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onApplySuggestedCameraCount(validation.suggestedCameraCount!)}
-                className="mt-1 text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Switch to {validation.suggestedCameraCount} camera{validation.suggestedCameraCount !== 1 ? 's' : ''}
-              </Button>
-            </div>
-          )}
-          {validation.suggestedZeroBased != null && onApplySuggestedStartIndex && (
-            <div className="mt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onApplySuggestedStartIndex(validation.suggestedZeroBased ? 0 : 1)}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Switch to {validation.suggestedZeroBased ? 0 : 1}-based
-              </Button>
-            </div>
-          )}
+          ))}
         </AlertDescription>
       </Alert>
     );
