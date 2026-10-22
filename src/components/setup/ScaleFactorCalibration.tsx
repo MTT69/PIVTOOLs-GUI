@@ -720,8 +720,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 <SelectContent>
                   <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
                   <SelectItem value="cine">Phantom CINE</SelectItem>
-                  <SelectItem value="lavision_set">LaVision SET</SelectItem>
-                  <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
+                  <SelectItem value="lavision_set">LaVision recording (.set + .ims folder)</SelectItem>
+                  <SelectItem value="lavision_im7">LaVision images (.im7)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

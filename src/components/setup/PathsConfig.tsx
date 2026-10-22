@@ -92,7 +92,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
             <CardTitle>{config.images?.image_type === "lavision_set" ? "Source Files" : "Source Directories"}</CardTitle>
             <CardDescription>
               {config.images?.image_type === "lavision_set" ? (
-                <>Full paths to your .set files. Each .set file contains all cameras and frames. Masks will be stored in <code className="bg-muted px-1">*_data</code> subfolders.</>
+                <>Point at the .set file (not its folder). Its data lives in the folder of the same name next to it.</>
               ) : (
                 <>Locations where your raw image sequences are stored. These directories will be searched for image files matching your patterns.</>
               )}
@@ -131,11 +131,22 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                           target.style.height = target.scrollHeight + 'px';
                         }}
                       />
-                      {config.images?.image_type === "lavision_set" && dir && dir.endsWith('.set') && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Storage: <code className="bg-muted px-1">{dir.replace(/\.set$/, '_data/')}</code>
-                        </p>
-                      )}
+                      {config.images?.image_type === "lavision_set" && /\.set$/i.test(sanitizePath(dir)) && (() => {
+                        const base = sanitizePath(dir).replace(/\.set$/i, '');
+                        const validated = diagnosisBySource[index]?.sourcePath === sanitizePath(dir);
+                        const dataFound = validated && diagnosisBySource[index].entries.some(e => e.streams !== null);
+                        return (
+                          <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                            <p>
+                              Data folder: <code className="bg-muted px-1">{base}/</code>
+                              {validated && (dataFound
+                                ? <span className="ml-2 text-green-600">✓ found</span>
+                                : <span className="ml-2 text-red-600">✗ missing</span>)}
+                            </p>
+                            <p>Masks saved in: <code className="bg-muted px-1">{base}_data/</code></p>
+                          </div>
+                        );
+                      })()}
                       {diagnosisBySource[index]?.sourcePath === sanitizePath(dir) && (
                         <SourceDiagnosis
                           entries={diagnosisBySource[index].entries}

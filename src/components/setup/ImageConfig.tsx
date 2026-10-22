@@ -21,8 +21,8 @@ const detectImageType = (pattern: string | undefined): string => {
   if (!pattern) return "standard";
   const lower = pattern.toLowerCase();
   if (lower.includes('.cine')) return "cine";
-  if (lower.includes('.set')) return "lavision_set";
-  if (lower.includes('.im7') || lower.includes('.ims')) return "lavision_im7";
+  if (lower.includes('.set') || lower.includes('.ims')) return "lavision_set";
+  if (lower.includes('.im7')) return "lavision_im7";
   return "standard";
 };
 
@@ -428,19 +428,19 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     <SelectContent>
                       <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
                       <SelectItem value="cine">Phantom CINE</SelectItem>
-                      <SelectItem value="lavision_set">LaVision SET</SelectItem>
-                      <SelectItem value="lavision_im7">LaVision IM7</SelectItem>
+                      <SelectItem value="lavision_set">LaVision recording (.set + .ims folder)</SelectItem>
+                      <SelectItem value="lavision_im7">LaVision images (.im7)</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
                     {imageType === "cine" && "High-speed camera video files"}
-                    {imageType === "lavision_set" && "LaVision container (all cameras in one file)"}
+                    {imageType === "lavision_set" && "A .set file plus a folder of the same name holding its .ims streams; all cameras in one recording"}
                     {imageType === "lavision_im7" && "LaVision image sequence"}
                     {imageType === "standard" && "Standard image sequences"}
                   </p>
                 </div>
                 <div>
-                  <Label htmlFor="num_images">Number of {imageType === "cine" ? "Frames" : "Image Files"}</Label>
+                  <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : imageType === "cine" ? "Number of frames" : "Number of Image Files"}</Label>
                   <Input
                     id="num_images"
                     type="text" inputMode="numeric"
@@ -862,8 +862,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   <Info className="h-4 w-4" />
                   <AlertTitle>LaVision .set Files</AlertTitle>
                   <AlertDescription>
-                    For .set files, enter the full path to each .set file in Source Paths (e.g., <code>/data/experiment.set</code>).
-                    No filename pattern is needed. Masks will be stored in a <code>*_data</code> subfolder next to each .set file.
+                    Point at the .set file (not its folder). Its data lives in the folder of the same name next to it.
                   </AlertDescription>
                 </Alert>
               ) : (
