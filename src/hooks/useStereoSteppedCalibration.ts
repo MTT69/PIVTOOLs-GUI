@@ -101,6 +101,13 @@ export interface StereoModel {
   // Resolved same-side / transmission — returned by generate_model only, not the load route.
   stereo_config?: string;
   method?: string;
+  /** +1: the clicked frame's +Z points toward camera 1; -1: into the board, away from it. */
+  world_z_toward_camera?: number | null;
+  /** Dots the reprojection gate removed per camera (pinhole only) and its limit in px. */
+  n_gated_points1?: number | null;
+  n_gated_points2?: number | null;
+  gate_limit_px1?: number | null;
+  gate_limit_px2?: number | null;
 }
 
 /** Two-camera validation roll-up. */
@@ -143,6 +150,11 @@ export interface JobStatus {
   method?: string;
   assumed_poses?: Record<string, number[]>;
   model_path?: string;
+  world_z_toward_camera?: number | null;
+  n_gated_points1?: number | null;
+  n_gated_points2?: number | null;
+  gate_limit_px1?: number | null;
+  gate_limit_px2?: number | null;
   figures?: string[];
   error?: string;
 }
@@ -761,6 +773,11 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
       model_path: d.model_path,
       method: d.method,
       stereo_config: d.stereo_config ?? resolvedStereoConfig ?? undefined,
+      world_z_toward_camera: d.world_z_toward_camera ?? null,
+      n_gated_points1: d.n_gated_points1 ?? null,
+      n_gated_points2: d.n_gated_points2 ?? null,
+      gate_limit_px1: d.gate_limit_px1 ?? null,
+      gate_limit_px2: d.gate_limit_px2 ?? null,
     };
   }, [core.modelData, resolvedStereoConfig]);
 
