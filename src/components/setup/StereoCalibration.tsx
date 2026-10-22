@@ -15,7 +15,8 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
-import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs, Im7SubfolderToggle, usesCameraFolders } from "@/components/setup/CameraSubfolderInputs";
+import { sanitizePath, withSourceAt } from "@/lib/sourcePath";
 import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
@@ -257,11 +258,8 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
             <label className="text-sm font-medium">Calibration Images Location</label>
             <Input
               value={calibrationSources[sourcePathIdx] || ""}
-              onChange={e => {
-                const newSources = [...calibrationSources];
-                newSources[sourcePathIdx] = e.target.value;
-                setCalibrationSources(newSources);
-              }}
+              onChange={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, e.target.value))}
+              onBlur={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, sanitizePath(e.target.value)))}
               placeholder="/path/to/calibration/images"
               className="font-mono"
             />
@@ -350,27 +348,13 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
 
           <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
-          {/* Use Camera Subfolders Toggle */}
-          {(imageType === "standard" || imageType === "lavision_im7") && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="stereo-dotboard-use-camera-subfolders"
-                  checked={useCameraSubfolders}
-                  onCheckedChange={setUseCameraSubfolders}
-                />
-                <Label htmlFor="stereo-dotboard-use-camera-subfolders" className="text-sm">
-                  Use camera subfolders
-                </Label>
-              </div>
-              <p className="text-xs text-muted-foreground ml-10">
-                {useCameraSubfolders
-                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                  : "Images in source directory without camera subfolders."
-                }
-              </p>
-            </div>
-          )}
+          <Im7SubfolderToggle
+            id="stereo-dotboard-use-camera-subfolders"
+            imageType={imageType}
+            cameraCount={config?.paths?.camera_count}
+            checked={useCameraSubfolders}
+            onCheckedChange={setUseCameraSubfolders}
+          />
 
           {/* Fix radial k2 = 0 — only relevant with <3 frames, where k2 is unconstrained */}
           {showFixK2 && (
@@ -395,7 +379,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
           )}
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
-          {useCameraSubfolders && (
+          {usesCameraFolders(imageType, config?.paths?.camera_count, useCameraSubfolders) && (
             <CameraSubfolderInputs
               cameras={[cam1, cam2]}
               cameraSubfolders={cameraSubfolders}

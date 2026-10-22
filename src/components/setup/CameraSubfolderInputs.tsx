@@ -1,5 +1,7 @@
 import React from "react";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 
 interface CameraSubfolderInputsProps {
   /** Cameras to show a box for. */
@@ -47,3 +49,53 @@ export const CameraSubfolderInputs: React.FC<CameraSubfolderInputsProps> = ({
     </div>
   );
 };
+
+interface Im7SubfolderToggleProps {
+  id: string;
+  imageType: string;
+  /** Rig size from Setup (`paths.camera_count`). */
+  cameraCount: number | undefined;
+  checked: boolean;
+  onCheckedChange: (v: boolean) => void;
+}
+
+/**
+ * The IM7 "one camera per file" switch. IM7 is the only format the flag applies to
+ * (`camera_subfolder_name`), and it is meaningful at any camera count.
+ */
+export const Im7SubfolderToggle: React.FC<Im7SubfolderToggleProps> = ({
+  id, imageType, cameraCount, checked, onCheckedChange,
+}) => {
+  if (imageType !== "lavision_im7") return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+        <Label htmlFor={id} className="text-sm">
+          IM7 files in camera subfolders (one camera per file)
+        </Label>
+      </div>
+      <p className="text-xs text-muted-foreground ml-10">
+        {checked
+          ? "Each .im7 file contains ONE camera only. Files expected in Cam1/, Cam2/ subfolders."
+          : "Each .im7 file contains ALL cameras. Files in source directory, camera extracted by index."}
+      </p>
+      {cameraCount === 1 && (
+        <p className="text-xs text-muted-foreground ml-10">Camera count is 1 (set in Setup)</p>
+      )}
+    </div>
+  );
+};
+
+/** Mirror of the backend `camera_subfolder_name`: true when a camera's images sit in a subfolder. */
+export function usesCameraFolders(
+  imageType: string,
+  cameraCount: number | undefined,
+  useCameraSubfolders: boolean,
+): boolean {
+  return (
+    cameraCount !== undefined &&
+    cameraCount > 1 &&
+    (imageType === "standard" || (imageType === "lavision_im7" && useCameraSubfolders))
+  );
+}

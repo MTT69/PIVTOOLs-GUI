@@ -14,7 +14,8 @@ import { clearCalibrationFrameCache, warmCalibrationFrameCache, calibrationViewe
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { SetActiveButton } from "@/components/setup/SetActiveButton";
-import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs, Im7SubfolderToggle, usesCameraFolders } from "@/components/setup/CameraSubfolderInputs";
+import { sanitizePath, withSourceAt } from "@/lib/sourcePath";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
@@ -669,12 +670,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </Label>
             <Input
               value={calibrationSources[sourcePathIdx] || ""}
-              onChange={e => {
-                const newSources = [...calibrationSources];
-                while (newSources.length <= sourcePathIdx) newSources.push("");
-                newSources[sourcePathIdx] = e.target.value;
-                setCalibrationSources(newSources);
-              }}
+              onChange={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, e.target.value))}
+              onBlur={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, sanitizePath(e.target.value)))}
               placeholder={useImages ? "/path/to/calibration/images" : "/path/to/calibration/folder"}
               className="font-mono"
             />
@@ -737,31 +734,16 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
           <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
-          {/* Camera subfolders toggle — for standard and IM7 formats; hidden for a one-camera rig, which
-              always resolves at the source root (rig size, not the selected cameras) */}
-          {(imageType === "standard" || imageType === "lavision_im7") && config?.paths?.camera_count !== 1 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="sf-use-camera-subfolders"
-                  checked={useCameraSubfolders}
-                  onCheckedChange={setUseCameraSubfolders}
-                />
-                <Label htmlFor="sf-use-camera-subfolders" className="text-sm">
-                  Use camera subfolders
-                </Label>
-              </div>
-              <p className="text-xs text-muted-foreground ml-10">
-                {useCameraSubfolders
-                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                  : "Images in source directory without camera subfolders."
-                }
-              </p>
-            </div>
-          )}
+          <Im7SubfolderToggle
+            id="sf-use-camera-subfolders"
+            imageType={imageType}
+            cameraCount={config?.paths?.camera_count}
+            checked={useCameraSubfolders}
+            onCheckedChange={setUseCameraSubfolders}
+          />
 
           {/* Camera subfolder names — only when using camera subfolders */}
-          {useCameraSubfolders && cameraOptions.length > 1 && (
+          {usesCameraFolders(imageType, config?.paths?.camera_count, useCameraSubfolders) && cameraOptions.length > 1 && (
             <CameraSubfolderInputs
               cameras={cameraOptions}
               cameraSubfolders={cameraSubfolders}

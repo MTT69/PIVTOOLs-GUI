@@ -12,7 +12,8 @@ import { Progress } from "@/components/ui/progress";
 import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
-import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs, Im7SubfolderToggle, usesCameraFolders } from "@/components/setup/CameraSubfolderInputs";
+import { sanitizePath, withSourceAt } from "@/lib/sourcePath";
 import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import {
@@ -473,11 +474,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               <Label className="text-sm font-medium">Calibration Images Location</Label>
               <Input
                 value={calibrationSources[sourcePathIdx] || ""}
-                onChange={e => {
-                  const newSources = [...calibrationSources];
-                  newSources[sourcePathIdx] = e.target.value;
-                  setCalibrationSources(newSources);
-                }}
+                onChange={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, e.target.value))}
+                onBlur={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, sanitizePath(e.target.value)))}
                 placeholder="/path/to/calibration/images"
                 className="font-mono"
               />
@@ -561,27 +559,15 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
 
             <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
-            {(imageType === "standard" || imageType === "lavision_im7") && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="stereo-stepped-use-camera-subfolders"
-                    checked={useCameraSubfolders}
-                    onCheckedChange={setUseCameraSubfolders}
-                  />
-                  <Label htmlFor="stereo-stepped-use-camera-subfolders" className="text-sm">
-                    Use camera subfolders
-                  </Label>
-                </div>
-                <p className="text-xs text-muted-foreground ml-10">
-                  {useCameraSubfolders
-                    ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                    : "Images in source directory without camera subfolders."}
-                </p>
-              </div>
-            )}
+            <Im7SubfolderToggle
+              id="stereo-stepped-use-camera-subfolders"
+              imageType={imageType}
+              cameraCount={config?.paths?.camera_count}
+              checked={useCameraSubfolders}
+              onCheckedChange={setUseCameraSubfolders}
+            />
 
-            {useCameraSubfolders && (
+            {usesCameraFolders(imageType, config?.paths?.camera_count, useCameraSubfolders) && (
               <CameraSubfolderInputs
                 cameras={[cam1, cam2]}
                 cameraSubfolders={cameraSubfolders}

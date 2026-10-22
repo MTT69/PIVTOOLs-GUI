@@ -4,8 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
 import { useChArUcoCalibration, ARUCO_DICTS } from "@/hooks/useChArUcoCalibration";
@@ -15,7 +13,8 @@ import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
-import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs, Im7SubfolderToggle, usesCameraFolders } from "@/components/setup/CameraSubfolderInputs";
+import { sanitizePath, withSourceAt } from "@/lib/sourcePath";
 import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
@@ -230,11 +229,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             <label className="text-sm font-medium">Calibration Images Location</label>
             <Input
               value={calibrationSources[sourcePathIdx] || ""}
-              onChange={e => {
-                const newSources = [...calibrationSources];
-                newSources[sourcePathIdx] = e.target.value;
-                setCalibrationSources(newSources);
-              }}
+              onChange={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, e.target.value))}
+              onBlur={e => setCalibrationSources(withSourceAt(calibrationSources, sourcePathIdx, sanitizePath(e.target.value)))}
               placeholder="/path/to/calibration/images"
               className="font-mono"
             />
@@ -305,31 +301,16 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
           <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
-          {/* Use Camera Subfolders Toggle - for standard and IM7 formats; hidden for a one-camera rig, which
-              always resolves at the source root (rig size, not the selected cameras) */}
-          {(imageType === "standard" || imageType === "lavision_im7") && config?.paths?.camera_count !== 1 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="charuco-use-camera-subfolders"
-                  checked={useCameraSubfolders}
-                  onCheckedChange={setUseCameraSubfolders}
-                />
-                <Label htmlFor="charuco-use-camera-subfolders" className="text-sm">
-                  Use camera subfolders
-                </Label>
-              </div>
-              <p className="text-xs text-muted-foreground ml-10">
-                {useCameraSubfolders
-                  ? "Images expected in camera subfolders (e.g., Cam1/, Cam2/)."
-                  : "Images in source directory without camera subfolders."
-                }
-              </p>
-            </div>
-          )}
+          <Im7SubfolderToggle
+            id="charuco-use-camera-subfolders"
+            imageType={imageType}
+            cameraCount={config?.paths?.camera_count}
+            checked={useCameraSubfolders}
+            onCheckedChange={setUseCameraSubfolders}
+          />
 
           {/* Camera Subfolder Names - only show when using camera subfolders */}
-          {useCameraSubfolders && cameraOptions.length > 1 && (
+          {usesCameraFolders(imageType, config?.paths?.camera_count, useCameraSubfolders) && cameraOptions.length > 1 && (
             <CameraSubfolderInputs
               cameras={cameraOptions}
               cameraSubfolders={cameraSubfolders}
