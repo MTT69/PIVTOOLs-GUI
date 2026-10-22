@@ -168,6 +168,8 @@ export interface JointModel {
   pose_diversity?: JointPoseDiversity | null;
   /** [camera, 1-based frame] views outside the solve (no detection, or not anchored to the global grid). */
   excluded_views?: [number, number][];
+  /** Polynomial only: configured cameras with no saved per-camera record (model is partial). */
+  missing_cameras?: number[];
 }
 
 const POLL_MS = 700;

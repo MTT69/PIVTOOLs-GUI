@@ -1241,7 +1241,32 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   <span className="ml-2 font-medium">{stereoModel.world_frame_mode}</span>
                 </div>
               )}
+              {stereoModel.world_z_toward_camera != null && (
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">World +Z:</span>
+                  <span className="ml-2 font-medium">
+                    {stereoModel.world_z_toward_camera > 0
+                      ? `toward Cam ${stereoModel.cam1} (from the clicked +X/+Y handedness)`
+                      : `into the board, away from Cam ${stereoModel.cam1} (from the clicked +X/+Y handedness)`}
+                  </span>
+                </div>
+              )}
             </div>
+            {/* Reprojection gate: dots removed from the fit, per camera. Amber only when non-zero. */}
+            {stereoModel.model_type !== 'polynomial3d' &&
+              ((stereoModel.n_gated_points1 ?? 0) > 0 || (stereoModel.n_gated_points2 ?? 0) > 0) && (
+                <p className="text-sm text-amber-600 mb-4">
+                  Reprojection gate removed{' '}
+                  {[
+                    [stereoModel.cam1, stereoModel.n_gated_points1, stereoModel.gate_limit_px1],
+                    [stereoModel.cam2, stereoModel.n_gated_points2, stereoModel.gate_limit_px2],
+                  ]
+                    .filter(([, n]) => (n ?? 0) > 0)
+                    .map(([cam, n, lim]) => `${n} dot(s) from Cam ${cam} (above ${(lim as number)?.toFixed(2)} px)`)
+                    .join(', ')}
+                  . They are listed in the solve log; a dot that fails the gate on every solve is not a reliable mark.
+                </p>
+              )}
 
             {stereoModel.method && (
               <p className="text-xs text-muted-foreground mb-4">
