@@ -65,8 +65,8 @@ export interface CalibrationApplyTarget {
   sourcePathIdx: number;
   calibrationSources: string[];
   refetchConfig: () => Promise<void>;
-  /** Land or disarm the tab's own pending saves before the suggestion writes. */
-  beforeWrite: () => void;
+  /** Land the tab's own pending saves before the suggestion writes (awaited, never dropped). */
+  beforeWrite: () => Promise<void>;
   /** Rehydrate the tab from the server with `sources`, then re-validate. */
   reload: (sources: string[]) => Promise<void>;
 }
@@ -80,18 +80,29 @@ export async function applyCalibrationSuggestion(
   target: CalibrationApplyTarget,
 ): Promise<void> {
   const w = calibrationWrites(apply);
-  target.beforeWrite();
-  if (w.configPaths) {
-    await postJson('/backend/update_config', { paths: w.configPaths });
-    await target.refetchConfig();
-  }
+  await target.beforeWrite();
+  // `sources` is always the list the server holds; once any write landed, a failure still
+  // rehydrates, so a later sources save cannot post a stale list over the server's.
   let sources = target.calibrationSources;
-  if (w.sourcePath !== undefined) {
-    sources = withSourceAt(sources, target.sourcePathIdx, w.sourcePath);
-    await postJson('/backend/update_config', { calibration: { calibration_sources: sources } });
-  }
-  if (w.image) {
-    await postJson('/backend/calibration/settings', { source_path_idx: target.sourcePathIdx, settings: { image: w.image } });
+  let wrote = false;
+  try {
+    if (w.configPaths) {
+      await postJson('/backend/update_config', { paths: w.configPaths });
+      wrote = true;
+      await target.refetchConfig();
+    }
+    if (w.sourcePath !== undefined) {
+      const next = withSourceAt(sources, target.sourcePathIdx, w.sourcePath);
+      await postJson('/backend/update_config', { calibration: { calibration_sources: next } });
+      sources = next;
+      wrote = true;
+    }
+    if (w.image) {
+      await postJson('/backend/calibration/settings', { source_path_idx: target.sourcePathIdx, settings: { image: w.image } });
+    }
+  } catch (e) {
+    if (wrote) await target.reload(sources);
+    throw e;
   }
   await target.reload(sources);
 }
@@ -459,12 +470,15 @@ export function useCalibrationCore({
   /**
    * Persist `calibration_sources`. When the path at `idx` changed in place, the backend now
    * resolves that index to the new directory, so rehydrate from it and return its settings.
+   * `followUp = false` (the unmount flush) only persists: there is no UI left to rehydrate.
    */
-  const saveSources = useCallback(async (sources: string[], idx: number): Promise<SidecarSettings | null> => {
+  const saveSources = useCallback(async (
+    sources: string[], idx: number, followUp: boolean,
+  ): Promise<SidecarSettings | null> => {
     await postJson('/backend/update_config', { calibration: { calibration_sources: sources } });
     savedSourcesRef.current = JSON.stringify(sources);
     const currentPath = sources[idx] ?? '';
-    if (currentPath === loadedSourcePathRef.current) return null;
+    if (!followUp || currentPath === loadedSourcePathRef.current) return null;
     return rehydrateSource(idx, currentPath);
   }, [rehydrateSource]);
 
@@ -477,7 +491,7 @@ export function useCalibrationCore({
       const loadedBefore = loadedSourcePathRef.current;
       let s: SidecarSettings | null;
       try {
-        s = await saveSources(JSON.parse(sourcesJson), idx);
+        s = await saveSources(JSON.parse(sourcesJson), idx, followUp);
       } catch (e) {
         if (followUp) setSourcesError(`Failed to save calibration sources: ${errorMessage(e)}`);
         return;
@@ -508,10 +522,7 @@ export function useCalibrationCore({
     sourcePathIdx,
     calibrationSources,
     refetchConfig,
-    beforeWrite: () => {
-      settingsSave.flush();
-      sourcesSave.flush();
-    },
+    beforeWrite: () => Promise.all([settingsSave.flush(), sourcesSave.flush()]).then(() => {}),
     reload: reloadSource,
   }), [sourcePathIdx, calibrationSources, refetchConfig, settingsSave, sourcesSave, reloadSource]);
 
