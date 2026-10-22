@@ -2,6 +2,8 @@
  * Types and small helpers shared by every calibration tab hook (see `useCalibrationCore`).
  */
 
+import { Diagnosis } from '@/lib/sourceDiagnosis';
+
 /** Parse a numeric form field; null when empty/invalid (the field is unset). */
 export const numOrNull = (s: string): number | null => {
   const v = parseFloat(s);
@@ -35,8 +37,8 @@ export interface SavedWorldFrame {
   origin_mm?: [number, number] | null;
 }
 
-/** One camera's `/calibration/validate` result (`validate_images_generic` shape). */
-export interface CameraValidationResult {
+/** One camera's `/calibration/validate` result (`validate_images_generic` shape plus its diagnosis). */
+export interface CameraValidationResult extends Diagnosis {
   valid: boolean;
   /** Files, .set entries or .cine frames found (the backend's auto view count source). */
   found_count: number;
@@ -47,11 +49,12 @@ export interface CameraValidationResult {
   camera_path?: string;
   format_detected?: string;
   error?: string;
-  suggested_pattern?: string;
-  suggested_subfolder?: string;
-  /** Set when the files start at the other index: true -> switch to 0-based, false -> 1-based. */
-  suggested_zero_based?: boolean | null;
 }
+
+/** A camera whose validation failed before the backend answered: no diagnosis. */
+export const emptyValidation = (error: string): CameraValidationResult => ({
+  valid: false, found_count: 0, error, found: null, suggestions: [], streams: null,
+});
 
 /** Validation of every camera the tab works on, keyed by camera number. */
 export interface CalibrationValidation {

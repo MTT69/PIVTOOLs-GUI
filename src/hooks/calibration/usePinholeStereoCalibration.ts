@@ -102,8 +102,9 @@ export function usePinholeStereoCalibration(
   adapter: BoardAdapter,
   cameraOptions: number[],
   { fixK2 }: PinholeStereoOptions,
+  refetchConfig: () => Promise<void>,
 ) {
-  const core = useCalibrationCore({ adapter, mode: 'pair', cameraOptions, detections: true });
+  const core = useCalibrationCore({ adapter, mode: 'pair', cameraOptions, detections: true, refetchConfig });
   const { cam1, cam2, sourcePathIdx, datumFrame, nViews, frameCount, imageFormat, imageType, dt } = core;
   const [jobStatus, setJobStatus] = useState<StereoJobStatus | null>(null);
   const boardParamsKey = JSON.stringify(adapter.boardParams);
@@ -169,7 +170,7 @@ export function usePinholeStereoCalibration(
   const validation: StereoValidationResult | null = useMemo(() => {
     const v = core.validation;
     if (!v) return null;
-    const missing: CameraValidationResult = { valid: false, found_count: 0 };
+    const missing: CameraValidationResult = { valid: false, found_count: 0, found: null, suggestions: [], streams: null };
     return {
       valid: v.valid,
       cam1: v.cameras[cam1] ?? missing,

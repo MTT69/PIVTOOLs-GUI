@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { errorMessage, fetchJson, postJson } from '@/lib/api';
 import { isApplyJobActive } from '@/lib/applyJob';
+import { DiagnosisEntry, SuggestionApply, calibrationWrites, parseDiagnosis } from '@/lib/sourceDiagnosis';
+import { withSourceAt } from '@/lib/sourcePath';
 import { CalibrationJobFamily, useCalibrationJobs } from '@/contexts/CalibrationJobContext';
 import {
   calibrationViewerRefreshKey,
@@ -19,6 +21,7 @@ import {
   SidecarSettings,
   ViewCount,
   autoViewCountText,
+  emptyValidation,
   numOrNull,
   positiveIntOrNull,
 } from './shared';
@@ -53,9 +56,45 @@ export interface CalibrationCoreOptions {
   cameraOptions: number[];
   /** Overlay detections via restore_detections / detect_views (false for stepped). */
   detections: boolean;
+  /** Re-read config.yaml into the page, so `cameraOptions` follows a camera-count write. */
+  refetchConfig: () => Promise<void>;
 }
 
-const emptyValidation = (error: string): CameraValidationResult => ({ valid: false, found_count: 0, error });
+/** Where a calibration suggestion is written, and how the tab rehydrates afterwards. */
+export interface CalibrationApplyTarget {
+  sourcePathIdx: number;
+  calibrationSources: string[];
+  refetchConfig: () => Promise<void>;
+  /** Land or disarm the tab's own pending saves before the suggestion writes. */
+  beforeWrite: () => void;
+  /** Rehydrate the tab from the server with `sources`, then re-validate. */
+  reload: (sources: string[]) => Promise<void>;
+}
+
+/**
+ * Write one suggestion. Config goes first: the sidecar save prunes `camera_subfolders` to the
+ * configured camera count, so a camera-count change must land before the subfolders do.
+ */
+export async function applyCalibrationSuggestion(
+  apply: SuggestionApply,
+  target: CalibrationApplyTarget,
+): Promise<void> {
+  const w = calibrationWrites(apply);
+  target.beforeWrite();
+  if (w.configPaths) {
+    await postJson('/backend/update_config', { paths: w.configPaths });
+    await target.refetchConfig();
+  }
+  let sources = target.calibrationSources;
+  if (w.sourcePath !== undefined) {
+    sources = withSourceAt(sources, target.sourcePathIdx, w.sourcePath);
+    await postJson('/backend/update_config', { calibration: { calibration_sources: sources } });
+  }
+  if (w.image) {
+    await postJson('/backend/calibration/settings', { source_path_idx: target.sourcePathIdx, settings: { image: w.image } });
+  }
+  await target.reload(sources);
+}
 
 /**
  * The shared skeleton of every calibration tab (planar dotboard/ChArUco, stereo
@@ -80,7 +119,9 @@ const emptyValidation = (error: string): CameraValidationResult => ({ valid: fal
  * the backend resolves it (settings, then frame-count auto-detect). `frameCount` is the count
  * the UI can show (entered value, else what validation found).
  */
-export function useCalibrationCore({ adapter, mode, cameraOptions, detections: withDetections }: CalibrationCoreOptions) {
+export function useCalibrationCore({
+  adapter, mode, cameraOptions, detections: withDetections, refetchConfig,
+}: CalibrationCoreOptions) {
   const adapterRef = useRef(adapter);
   adapterRef.current = adapter;
 
@@ -133,6 +174,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   const [sourceEpoch, setSourceEpoch] = useState(0);
   // Bumped after each hydration so the hydrated form becomes the save baseline.
   const [hydrationTick, setHydrationTick] = useState(0);
+  // Bumped after an applied suggestion rehydrated; validation runs in the render that follows.
+  const [revalidateTick, setRevalidateTick] = useState(0);
 
   // ---------- Refs ----------
   const configLoadedRef = useRef(false);
@@ -147,6 +190,8 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
   // calibration_sources is written only once it was read successfully (never [] on failure).
   const sourcesLoadedRef = useRef(false);
   const savedSourcesRef = useRef<string | null>(null);
+  // The settings an applied suggestion rehydrated from, for the re-validation it schedules.
+  const revalidateSettingsRef = useRef<SidecarSettings | null>(null);
 
   const settingsSeq = useRequestSeq();
   const validateSeq = useRequestSeq();
@@ -257,10 +302,11 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     try {
       const results = await Promise.all(cams.map(async cam => {
         try {
-          const r: CameraValidationResult = await postJson('/backend/calibration/validate', {
+          const raw = await postJson('/backend/calibration/validate', {
             camera: cam, source_path_idx: sourcePathIdx,
             image_format: effFormat, image_type: effType, frame_total: effNViews,
           });
+          const r: CameraValidationResult = { ...raw, ...parseDiagnosis(raw) };
           return r;
         } catch (e) {
           return emptyValidation(errorMessage(e));
@@ -401,33 +447,73 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     });
   }, [settingsPayload, configLoaded, calibrationSources, sourcePathIdx, settingsSave]);
 
-  // ---------- Debounced config-pointer save (calibration_sources only) ----------
+  // ---------- Config-pointer save (calibration_sources only) ----------
+  /** Rehydrate settings, model and detections from the directory `path` at index `idx`. */
+  const rehydrateSource = useCallback(async (idx: number, path: string): Promise<SidecarSettings | null> => {
+    loadedSourcePathRef.current = path;
+    const s = await loadSettings(idx);
+    setSourceEpoch(e => e + 1);
+    return s;
+  }, [loadSettings]);
+
+  /**
+   * Persist `calibration_sources`. When the path at `idx` changed in place, the backend now
+   * resolves that index to the new directory, so rehydrate from it and return its settings.
+   */
+  const saveSources = useCallback(async (sources: string[], idx: number): Promise<SidecarSettings | null> => {
+    await postJson('/backend/update_config', { calibration: { calibration_sources: sources } });
+    savedSourcesRef.current = JSON.stringify(sources);
+    const currentPath = sources[idx] ?? '';
+    if (currentPath === loadedSourcePathRef.current) return null;
+    return rehydrateSource(idx, currentPath);
+  }, [rehydrateSource]);
+
   useEffect(() => {
     if (!sourcesLoadedRef.current) return;
     const sourcesJson = JSON.stringify(calibrationSources);
     if (sourcesJson === savedSourcesRef.current) return;
     const idx = sourcePathIdx;
     sourcesSave.schedule(async (followUp) => {
+      const loadedBefore = loadedSourcePathRef.current;
+      let s: SidecarSettings | null;
       try {
-        await postJson('/backend/update_config', { calibration: { calibration_sources: JSON.parse(sourcesJson) } });
-        savedSourcesRef.current = sourcesJson;
-        if (followUp) setSourcesError(null);
+        s = await saveSources(JSON.parse(sourcesJson), idx);
       } catch (e) {
         if (followUp) setSourcesError(`Failed to save calibration sources: ${errorMessage(e)}`);
         return;
       }
       if (!followUp) return;
-      // In-place edit of the selected source path: the backend now resolves this index to
-      // the new directory, so rehydrate settings, model and detections from it.
-      const currentPath = (JSON.parse(sourcesJson) as string[])[idx] ?? '';
-      if (currentPath !== loadedSourcePathRef.current) {
-        loadedSourcePathRef.current = currentPath;
-        const s = await loadSettings(idx);
-        void validateRef.current(s);
-        setSourceEpoch(e => e + 1);
-      }
+      setSourcesError(null);
+      if (loadedSourcePathRef.current !== loadedBefore) void validateRef.current(s);
     });
-  }, [calibrationSources, sourcePathIdx, sourcesSave, loadSettings]);
+  }, [calibrationSources, sourcePathIdx, sourcesSave, saveSources]);
+
+  // ---------- Applied suggestion: rehydrate from the server, then re-validate ----------
+  const reloadSource = useCallback(async (sources: string[]) => {
+    const idx = sourcePathIdx;
+    savedSourcesRef.current = JSON.stringify(sources);
+    setCalibrationSources(sources);
+    revalidateSettingsRef.current = await rehydrateSource(idx, sources[idx] ?? '');
+    setRevalidateTick(t => t + 1);
+  }, [sourcePathIdx, rehydrateSource]);
+
+  // After the render that carries the refetched cameraOptions; validating straight after
+  // refetchConfig would use the old `cameras` closure.
+  useEffect(() => {
+    if (revalidateTick === 0) return;
+    void validateRef.current(revalidateSettingsRef.current);
+  }, [revalidateTick]);
+
+  const applySuggestion = useCallback((apply: SuggestionApply) => applyCalibrationSuggestion(apply, {
+    sourcePathIdx,
+    calibrationSources,
+    refetchConfig,
+    beforeWrite: () => {
+      settingsSave.flush();
+      sourcesSave.flush();
+    },
+    reload: reloadSource,
+  }), [sourcePathIdx, calibrationSources, refetchConfig, settingsSave, sourcesSave, reloadSource]);
 
   // ---------- Pending-validation state the instant a validation input changes ----------
   // The backend resolves validation from the PERSISTED sidecar, so without this a previous
@@ -649,18 +735,14 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     return { n: counts[0], source };
   }, [nViews, backendViewCount, validation, validating, cameras, imageType]);
 
-  /**
-   * The validate hint "Files start at X but the start index is Y": `suggested_zero_based` of
-   * the first camera that reports one, for the First Frame Number control's switch button.
-   */
-  const suggestedZeroBased = useMemo((): boolean | null => {
-    if (!validation || validating) return null;
-    for (const cam of cameras) {
-      const s = validation.cameras[cam]?.suggested_zero_based;
-      if (s != null) return s;
-    }
-    return null;
-  }, [validation, validating, cameras]);
+  /** One diagnosis entry per validated camera, for `<SourceDiagnosis>`. */
+  const diagnosis = useMemo((): DiagnosisEntry[] => {
+    if (!validation) return [];
+    return cameras.filter(cam => validation.cameras[cam]).map(cam => {
+      const { found, suggestions, streams } = validation.cameras[cam];
+      return { label: `Camera ${cam}`, found, suggestions, streams };
+    });
+  }, [validation, cameras]);
 
   // ---------- Camera selection invariants ----------
   useEffect(() => {
@@ -691,28 +773,6 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
       return next;
     });
   }, []);
-
-  /**
-   * Apply subfolder suggestions by camera number: `byCamera` when given, else each validated
-   * camera's own `suggested_subfolder`. Cameras without a suggestion are untouched.
-   */
-  const applySubfolderSuggestions = useCallback((byCamera?: Record<number, string>) => {
-    const source: Record<number, string> = byCamera ?? Object.fromEntries(
-      Object.entries(validation?.cameras ?? {})
-        .filter(([, r]) => r.suggested_subfolder)
-        .map(([cam, r]) => [Number(cam), r.suggested_subfolder as string]));
-    const suggestions = Object.entries(source).map(([cam, sub]) => [Number(cam), sub] as const);
-    if (suggestions.length === 0) return;
-    setUseCameraSubfolders(true);
-    setCameraSubfolders(prev => {
-      const next = [...prev];
-      for (const [cam, sub] of suggestions) {
-        while (next.length < cam) next.push('');
-        next[cam - 1] = sub;
-      }
-      return next;
-    });
-  }, [validation]);
 
   // ---------- Changed since generate ----------
   const changedSinceGenerate = useMemo((): string[] => {
@@ -760,15 +820,15 @@ export function useCalibrationCore({ adapter, mode, cameraOptions, detections: w
     activeCam, setActiveCam, cameras, cameraOptions,
     // form
     imageFormat, setImageFormat, imageType, setImageType, numImages, setNumImages,
-    zeroBasedIndexing, setZeroBasedIndexing, suggestedZeroBased,
+    zeroBasedIndexing, setZeroBasedIndexing,
     calibrationSources, setCalibrationSources, useCameraSubfolders, setUseCameraSubfolders,
-    cameraSubfolders, setCameraSubfolders, setSubfolderFor, applySubfolderSuggestions,
+    cameraSubfolders, setCameraSubfolders, setSubfolderFor,
     dt, setDt, datumFrame, setDatumFrame, interpolator, setInterpolator, pivType, setPivType,
     nViews, frameCount, autoViewCountText: autoViewCountText(autoViewCount), noteViewCount,
     // status
     configLoaded, sourceEpoch,
     loadError: sourcesError ?? settingsError ?? modelLoadError,
-    validation, validating, validateImages, viewerRefreshKey,
+    validation, validating, validateImages, viewerRefreshKey, diagnosis, applySuggestion,
     modelData, beginGenerate, setGeneratedModel, isGenerateCurrent, loadedWorldFrame, loadedWorldFrame2, modelLoading, loadModel, changedSinceGenerate,
     detections, detectionsStale, detectError, setDetectError, detecting, showOverlay, setShowOverlay,
     restoreDetections, detectFrame, detectAllViews,

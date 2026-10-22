@@ -15,7 +15,8 @@ import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
-import { CameraSubfolderInputs, SubfolderSuggestion } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
 import {
@@ -30,6 +31,7 @@ interface ChArUcoCalibrationProps {
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
   sourcePaths: string[];
+  refetchConfig: () => Promise<void>;
 }
 
 export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
@@ -37,8 +39,9 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
   updateConfig,
   cameraOptions,
   sourcePaths,
+  refetchConfig,
 }) => {
-  const calibration = useChArUcoCalibration(cameraOptions, sourcePaths);
+  const calibration = useChArUcoCalibration(cameraOptions, sourcePaths, refetchConfig);
 
   const {
     // Source selection
@@ -56,14 +59,12 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     setNumImages,
     zeroBasedIndexing,
     setZeroBasedIndexing,
-    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
     setSubfolderFor,
-    applySubfolderSuggestions,
     frameCount,
     autoViewCountText,
 
@@ -91,6 +92,8 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
     validation,
     viewerRefreshKey,
     validating,
+    diagnosis,
+    applySuggestion,
 
     // Single camera job tracking
     jobStatus,
@@ -300,8 +303,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             </div>
           </div>
 
-          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
-            suggestedZeroBased={suggestedZeroBased} />
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
           {/* Use Camera Subfolders Toggle - for standard and IM7 formats; hidden for a one-camera rig, which
               always resolves at the source root (rig size, not the selected cameras) */}
@@ -353,30 +355,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
             />
           )}
 
-          {/* Suggested Pattern Button */}
-          {validation && !validating && !validation.valid && validation.suggested_pattern && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setImageFormat(validation.suggested_pattern!)}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use "{validation.suggested_pattern}"
-              </Button>
-            </div>
-          )}
-
-          {/* Suggested Subfolder Button. Only the selected camera is validated, so the other
-              cameras' folders are inferred by swapping the camera number into its suggestion;
-              each is written to its own camera's slot. */}
-          {validation && !validating && !validation.valid && validation.suggested_subfolder && (() => {
-            const sub = validation.suggested_subfolder!;
-            const perCam: Record<number, string> = {};
-            for (const c of cameraOptions) perCam[c] = sub.replace(/\d+/, String(c));
-            return <SubfolderSuggestion suggestions={perCam} onApply={applySubfolderSuggestions} />;
-          })()}
+          <SourceDiagnosis entries={diagnosis} onApply={applySuggestion} busy={validating} />
 
           {/* Section 4: ChArUco Board Parameters */}
           <div className="border-t pt-4">

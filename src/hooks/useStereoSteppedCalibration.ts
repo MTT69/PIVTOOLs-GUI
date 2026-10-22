@@ -174,7 +174,11 @@ const isStereoConfig = (v: unknown): v is StereoConfig =>
   v === 'auto' || v === 'same_side' || v === 'transmission';
 const flipLevel = (l: string): string => (l === 'peak' ? 'trough' : l === 'trough' ? 'peak' : l);
 
-export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths: string[]) {
+export function useStereoSteppedCalibration(
+  cameraOptions: number[],
+  sourcePaths: string[],
+  refetchConfig: () => Promise<void>,
+) {
   // ---------- Board geometry + stereo selections (sidecar methods blocks) ----------
   const [dotSpacingMm, setDotSpacingMm] = useState('');
   const [stepHeightMm, setStepHeightMm] = useState('');
@@ -233,7 +237,7 @@ export function useStereoSteppedCalibration(cameraOptions: number[], sourcePaths
     },
   };
 
-  const core = useCalibrationCore({ adapter, mode: 'pair', cameraOptions, detections: false });
+  const core = useCalibrationCore({ adapter, mode: 'pair', cameraOptions, detections: false, refetchConfig });
   const { cam1, cam2, sourcePathIdx, datumFrame, frameCount, imageFormat, imageType, dt, configLoaded, sourceEpoch } = core;
 
   // ---------- Sequence + per-camera click state ----------

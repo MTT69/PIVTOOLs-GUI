@@ -16,7 +16,7 @@ import { ScaleFactorCalibration } from './ScaleFactorCalibration';
 interface CalibrationProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
-  refetchConfig?: () => Promise<void>;
+  refetchConfig: () => Promise<void>;
 }
 
 // Supported methods on the calibration backend. Scale-factor is the board-free
@@ -32,7 +32,7 @@ const TABS = [
   { id: 'scale_factor', label: 'Scale Factor' },
 ];
 
-export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }) => {
+export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig, refetchConfig }) => {
   // cameraOptions is memoised inside the hook — a stable identity keeps
   // useGlobalCoordinates' pair-merge effect from firing on every re-render.
   const { cameraOptions, sourcePaths } = useCalibration(config);
@@ -45,7 +45,7 @@ export const Calibration: React.FC<CalibrationProps> = ({ config, updateConfig }
   const [tab, setTab] = useState<string>(() =>
     active && TABS.some((t) => t.id === active) ? active : TABS[0].id);
 
-  const common = { config, updateConfig, cameraOptions, sourcePaths };
+  const common = { config, updateConfig, cameraOptions, sourcePaths, refetchConfig };
 
   return (
     <div className="space-y-6">

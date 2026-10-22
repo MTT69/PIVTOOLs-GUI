@@ -16,7 +16,11 @@ export type {
  * physical board, mono + stereo). Corner IDs are absolute, so the world frame needs no
  * clicks (the backend's default frame is board-anchored); clicks only refine it.
  */
-export function useStereoCharucoCalibration(cameraOptions: number[], sourcePaths: string[]) {
+export function useStereoCharucoCalibration(
+  cameraOptions: number[],
+  sourcePaths: string[],
+  refetchConfig: () => Promise<void>,
+) {
   const b = useCharucoBoard();
   const { readCharuco } = b;
 
@@ -32,7 +36,7 @@ export function useStereoCharucoCalibration(cameraOptions: number[], sourcePaths
     geometryDiff: b.geometryDiff,
   };
 
-  const s = usePinholeStereoCalibration(adapter, cameraOptions, {});
+  const s = usePinholeStereoCalibration(adapter, cameraOptions, {}, refetchConfig);
   const c = s.core;
   const { readCharuco: _r, fields: _f, boardParams: _bp, geometryDiff: _g, ...boardState } = b;
 

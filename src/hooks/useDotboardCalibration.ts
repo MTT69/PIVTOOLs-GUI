@@ -14,7 +14,11 @@ const BOARD = 'dotboard';
  * (`useCalibrationCore`). Dot spacing and dt have no frontend default: empty stays empty and
  * generate fails loudly.
  */
-export function useDotboardCalibration(cameraOptions: number[], sourcePaths: string[]) {
+export function useDotboardCalibration(
+  cameraOptions: number[],
+  sourcePaths: string[],
+  refetchConfig: () => Promise<void>,
+) {
   const [dotSpacingMm, setDotSpacingMm] = useState('');
   const [modelType, setModelType] = useState<PlanarModelType>('pinhole');
 
@@ -42,7 +46,7 @@ export function useDotboardCalibration(cameraOptions: number[], sourcePaths: str
     },
   };
 
-  const p = usePlanarCalibration(adapter, modelType, cameraOptions);
+  const p = usePlanarCalibration(adapter, modelType, cameraOptions, refetchConfig);
   const c = p.core;
 
   return {

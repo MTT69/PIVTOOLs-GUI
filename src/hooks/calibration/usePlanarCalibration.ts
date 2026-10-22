@@ -114,8 +114,9 @@ export function usePlanarCalibration(
   adapter: BoardAdapter,
   modelType: PlanarModelType,
   cameraOptions: number[],
+  refetchConfig: () => Promise<void>,
 ) {
-  const core = useCalibrationCore({ adapter, mode: 'mono', cameraOptions, detections: true });
+  const core = useCalibrationCore({ adapter, mode: 'mono', cameraOptions, detections: true, refetchConfig });
   const { camera, sourcePathIdx, datumFrame, nViews, frameCount, imageFormat, imageType, dt } = core;
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [multiCameraJobStatus, setMultiCameraJobStatus] = useState<MultiCameraJobStatus | null>(null);

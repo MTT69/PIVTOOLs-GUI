@@ -1,5 +1,4 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 interface CameraSubfolderInputsProps {
@@ -48,40 +47,3 @@ export const CameraSubfolderInputs: React.FC<CameraSubfolderInputsProps> = ({
     </div>
   );
 };
-
-interface SubfolderSuggestionProps {
-  /** Suggested subfolder per camera number; cameras without one are left as they are. */
-  suggestions: Record<number, string>;
-  onApply: (suggestions: Record<number, string>) => void;
-}
-
-/** "Use <subfolder>" button for validation's did-you-mean, labelled per camera. */
-export const SubfolderSuggestion: React.FC<SubfolderSuggestionProps> = ({ suggestions, onApply }) => {
-  const entries = Object.entries(suggestions).map(([cam, sub]) => [Number(cam), sub] as const);
-  if (entries.length === 0) return null;
-  const label = entries.map(([cam, sub]) => `Cam ${cam}: "${sub}"`).join(", ");
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className="text-gray-600">Subfolder suggestion:</span>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => onApply(suggestions)}
-        className="text-blue-600 border-blue-300 hover:bg-blue-50"
-      >
-        Use {label}
-      </Button>
-    </div>
-  );
-};
-
-/** Each validated camera's own subfolder suggestion. */
-export function subfolderSuggestions(
-  byCamera: Record<number, { suggested_subfolder?: string } | null | undefined>,
-): Record<number, string> {
-  const out: Record<number, string> = {};
-  for (const [cam, r] of Object.entries(byCamera)) {
-    if (r?.suggested_subfolder) out[Number(cam)] = r.suggested_subfolder;
-  }
-  return out;
-}

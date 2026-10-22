@@ -13,7 +13,11 @@ export type {
  * core in pair mode. Board geometry lives in the SHARED `methods.dotboard` block (one
  * physical board, mono + stereo); `fix_k2` is stored there too.
  */
-export function useStereoCalibration(cameraOptions: number[], sourcePaths: string[]) {
+export function useStereoCalibration(
+  cameraOptions: number[],
+  sourcePaths: string[],
+  refetchConfig: () => Promise<void>,
+) {
   const [dotSpacingMm, setDotSpacingMm] = useState('');
   // Fix radial k2 = 0 for few-view (<3 frame) fits, where k2 is unconstrained and runs away.
   // Defaults ON; hydrated only when a stored value exists (its default is contextual).
@@ -40,7 +44,7 @@ export function useStereoCalibration(cameraOptions: number[], sourcePaths: strin
     },
   };
 
-  const s = usePinholeStereoCalibration(adapter, cameraOptions, { fixK2 });
+  const s = usePinholeStereoCalibration(adapter, cameraOptions, { fixK2 }, refetchConfig);
   const c = s.core;
 
   return {

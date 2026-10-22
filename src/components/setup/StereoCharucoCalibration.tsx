@@ -15,7 +15,8 @@ import { ValidationAlert } from "@/components/setup/ValidationAlert";
 import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
-import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGallery";
 import CalibrationImageViewer, { FrameDetectionData } from "@/components/viewer/CalibrationImageViewer";
@@ -30,6 +31,7 @@ interface StereoCharucoCalibrationProps {
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
   sourcePaths: string[];
+  refetchConfig: () => Promise<void>;
 }
 
 export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> = ({
@@ -37,8 +39,9 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
   updateConfig,
   cameraOptions,
   sourcePaths,
+  refetchConfig,
 }) => {
-  const calibration = useStereoCharucoCalibration(cameraOptions, sourcePaths);
+  const calibration = useStereoCharucoCalibration(cameraOptions, sourcePaths, refetchConfig);
 
   const {
     // Source selection
@@ -62,14 +65,12 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     setNumImages,
     zeroBasedIndexing,
     setZeroBasedIndexing,
-    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
     setSubfolderFor,
-    applySubfolderSuggestions,
     frameCount,
     autoViewCountText,
 
@@ -95,6 +96,8 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
     validation,
     viewerRefreshKey,
     validating,
+    diagnosis,
+    applySuggestion,
 
     // Calibration job tracking
     jobStatus,
@@ -320,8 +323,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             </div>
           </div>
 
-          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
-            suggestedZeroBased={suggestedZeroBased} />
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
           {/* Use Camera Subfolders Toggle */}
           {(imageType === "standard" || imageType === "lavision_im7") && (
@@ -386,28 +388,7 @@ export const StereoCharucoCalibration: React.FC<StereoCharucoCalibrationProps> =
             </div>
           )}
 
-          {/* Suggested Pattern Button */}
-          {validation && !validating && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-600">Suggestion:</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
-                className="text-blue-600 border-blue-300 hover:bg-blue-50"
-              >
-                Use "{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}"
-              </Button>
-            </div>
-          )}
-
-          {/* Suggested Subfolder Button: each camera's own suggestion, written to its own slot */}
-          {validation && !validating && !validation.valid && (
-            <SubfolderSuggestion
-              suggestions={subfolderSuggestions({ [cam1]: validation.cam1, [cam2]: validation.cam2 })}
-              onApply={applySubfolderSuggestions}
-            />
-          )}
+          <SourceDiagnosis entries={diagnosis} onApply={applySuggestion} busy={validating} />
 
           {/* Section 4: ChArUco Board Parameters */}
           <div className="border-t pt-4">

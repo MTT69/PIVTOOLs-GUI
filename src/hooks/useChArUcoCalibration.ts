@@ -95,7 +95,11 @@ export function useCharucoBoard() {
  * Planar ChArUco calibration: the ChArUco board block plus the model type under
  * `methods.charuco`, on the shared core (`useCalibrationCore`).
  */
-export function useChArUcoCalibration(cameraOptions: number[], sourcePaths: string[]) {
+export function useChArUcoCalibration(
+  cameraOptions: number[],
+  sourcePaths: string[],
+  refetchConfig: () => Promise<void>,
+) {
   const b = useCharucoBoard();
   const [modelType, setModelType] = useState<PlanarModelType>('pinhole');
   const { readCharuco } = b;
@@ -118,7 +122,7 @@ export function useChArUcoCalibration(cameraOptions: number[], sourcePaths: stri
     },
   };
 
-  const p = usePlanarCalibration(adapter, modelType, cameraOptions);
+  const p = usePlanarCalibration(adapter, modelType, cameraOptions, refetchConfig);
   const c = p.core;
   const { readCharuco: _r, fields: _f, boardParams: _bp, geometryDiff: _g, ...boardState } = b;
 

@@ -12,7 +12,8 @@ import { Progress } from "@/components/ui/progress";
 import { SetActiveButton } from "@/components/setup/SetActiveButton";
 import { ApplyDatasetButtons, ApplyJobsStatus, defaultDatasetIdx } from "@/components/setup/ApplyToDatasets";
 import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
-import { CameraSubfolderInputs, SubfolderSuggestion, subfolderSuggestions } from "@/components/setup/CameraSubfolderInputs";
+import { CameraSubfolderInputs } from "@/components/setup/CameraSubfolderInputs";
+import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { ChangedSinceGenerate } from "@/components/setup/ChangedSinceGenerate";
 import {
   AlertTriangle,
@@ -36,6 +37,7 @@ interface StereoSteppedCalibrationProps {
   updateConfig: (path: string[], value: any) => void;
   cameraOptions: number[];
   sourcePaths: string[];
+  refetchConfig: () => Promise<void>;
 }
 
 type FiducialName = "origin" | "x_axis" | "y_axis";
@@ -68,8 +70,9 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   updateConfig,
   cameraOptions,
   sourcePaths,
+  refetchConfig,
 }) => {
-  const calibration = useStereoSteppedCalibration(cameraOptions, sourcePaths);
+  const calibration = useStereoSteppedCalibration(cameraOptions, sourcePaths, refetchConfig);
 
   const {
     // Source + pair selection
@@ -91,14 +94,12 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     setNumImages,
     zeroBasedIndexing,
     setZeroBasedIndexing,
-    suggestedZeroBased,
     calibrationSources,
     setCalibrationSources,
     useCameraSubfolders,
     setUseCameraSubfolders,
     cameraSubfolders,
     setSubfolderFor,
-    applySubfolderSuggestions,
     frameCount,
     autoViewCountText,
     sourceEpoch,
@@ -130,6 +131,8 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
     validation,
     viewerRefreshKey,
     validating,
+    diagnosis,
+    applySuggestion,
 
     // Sequence state
     sequenceId,
@@ -556,8 +559,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               </div>
             </div>
 
-            <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
-              suggestedZeroBased={suggestedZeroBased} />
+            <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
             {(imageType === "standard" || imageType === "lavision_im7") && (
               <div className="space-y-2">
@@ -604,28 +606,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
               />
             )}
 
-            {/* Suggested file pattern (Did you mean) */}
-            {validation && !validating && !validation.valid && (validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern) && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-gray-600">Suggestion:</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setImageFormat(validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern || '')}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Use &quot;{validation.cam1?.suggested_pattern || validation.cam2?.suggested_pattern}&quot;
-                </Button>
-              </div>
-            )}
-
-            {/* Suggested camera subfolder (Did you mean): each camera's own suggestion */}
-            {validation && !validating && !validation.valid && (
-              <SubfolderSuggestion
-                suggestions={subfolderSuggestions({ [cam1]: validation.cam1, [cam2]: validation.cam2 })}
-                onApply={applySubfolderSuggestions}
-              />
-            )}
+            <SourceDiagnosis entries={diagnosis} onApply={applySuggestion} busy={validating} />
           </div>
 
           {/* ============================================= */}

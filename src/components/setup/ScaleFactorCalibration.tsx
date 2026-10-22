@@ -676,8 +676,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
             </div>
           </div>
 
-          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing}
-            suggestedZeroBased={validating ? null : validation?.suggested_zero_based} />
+          <FirstFrameNumber imageType={imageType} zeroBased={zeroBasedIndexing} onChange={setZeroBasedIndexing} />
 
           {/* Camera subfolders toggle — for standard and IM7 formats; hidden for a one-camera rig, which
               always resolves at the source root (rig size, not the selected cameras) */}
