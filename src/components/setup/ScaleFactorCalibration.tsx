@@ -314,9 +314,16 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [imageFormat, imageType, zeroBasedIndexing, calibrationSources, useCameraSubfolders, cameraSubfolders,
       pxPerMm, useImages, dt, sourcePathIdx]);
   const persistRef = useRef(persist);
-  persistRef.current = persist;
+  useEffect(() => {
+    persistRef.current = persist;
+  }, [persist]);
+  // True from the end of the apply's flush until the apply settles: no save may post then.
+  const applyingRef = useRef(false);
+  // Bumped when an apply settles, so the timer effect re-arms one save for edits typed meanwhile.
+  const [persistTick, setPersistTick] = useState(0);
+  // Saves are chained, so awaiting `persistInFlightRef` awaits every earlier save too.
   const runPersist = useCallback(() => {
-    const p = persistRef.current();
+    const p = persistInFlightRef.current.then(() => (applyingRef.current ? undefined : persistRef.current()));
     persistInFlightRef.current = p;
     return p;
   }, []);
@@ -327,7 +334,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     const t = setTimeout(() => { persistTimerRef.current = null; void runPersist(); }, 500);
     persistTimerRef.current = t;
     return () => clearTimeout(t);
-  }, [persist, runPersist, settingsEpoch, configLoaded]);
+  }, [persist, runPersist, settingsEpoch, configLoaded, persistTick]);
 
   // --- Validate the camera's source path/pattern (same route the other tabs use) ----
   const validate = useCallback(async () => {
@@ -455,15 +462,17 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [validation, camera]);
 
   // Flush rather than drop the pending save: cancel the timer, wait for a save already in flight,
-  // then run one now. Nothing is left that could write the old form over the apply. The guard is
-  // not closed here, since a failed apply that wrote nothing never reloads to re-open it.
+  // then run one now. `applyingRef` then blocks every later save until the apply settles, so a
+  // timer re-armed by the flush's own state changes or by typing cannot write the old form over
+  // the apply. The guard is not closed here, since a failed apply that wrote nothing never
+  // reloads to re-open it.
   const beforeWrite = useCallback(async () => {
     if (persistTimerRef.current) {
       clearTimeout(persistTimerRef.current);
       persistTimerRef.current = null;
     }
-    await persistInFlightRef.current;
     await runPersist();
+    applyingRef.current = true;
   }, [runPersist]);
 
   const reload = useCallback(async (sources: string[]) => {
@@ -474,9 +483,16 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
     setSourceReloadTick(n => n + 1);
   }, [sourcePathIdx]);
 
-  const applySuggestion = useCallback((apply: SuggestionApply) => applyCalibrationSuggestion(apply, {
-    sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload,
-  }), [sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload]);
+  const applySuggestion = useCallback(async (apply: SuggestionApply) => {
+    try {
+      await applyCalibrationSuggestion(apply, {
+        sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload,
+      });
+    } finally {
+      applyingRef.current = false;
+      setPersistTick(n => n + 1);
+    }
+  }, [sourcePathIdx, calibrationSources, refetchConfig, beforeWrite, reload]);
 
   // --- Click routing ------------------------------------------------------------
   // Receives the camera/frame the viewer attributed the click to (it may be driven to
