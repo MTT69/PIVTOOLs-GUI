@@ -13,6 +13,7 @@ import { useConfigUpdate, PatternValidation, ValidationState } from "@/hooks/use
 import { ValidationAlert } from "./ValidationAlert";
 import { cn } from "@/lib/utils";
 import { fetchJson } from "@/lib/api";
+import { PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
 
 // Helper to detect image type from format pattern
 const detectImageType = (pattern: string | undefined): string => {
@@ -53,13 +54,6 @@ const deriveABPatterns = (pattern: string): [string, string] => {
 // Preset → stride mapping
 /** A whole image count of at least 1, as typed (no blanks, signs, decimals or exponents). */
 const isPositiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) >= 1;
-
-const PRESET_STRIDES: Record<string, { fs: number; ps: number }> = {
-  ab_format:     { fs: 0, ps: 1 },
-  pre_paired:    { fs: 0, ps: 1 },
-  time_resolved: { fs: 1, ps: 1 },
-  skip_frames:   { fs: 1, ps: 2 },
-};
 
 // Compute number of frame pairs from strides
 const computeNumPairs = (numImages: number, fs: number, ps: number): number => {
@@ -424,37 +418,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     value={imageType}
                     onValueChange={(value) => {
                       setImageType(value);
-                      let defaultFormat = "";
-                      let defaultPreset = pairingPreset;
-                      let defaultFs = frameStride;
-                      let defaultPs = pairStride;
-                      let defaultSi = startIndex;
-
-                      switch(value) {
-                        case "cine":
-                          defaultFormat = "Camera%d.cine";
-                          defaultPreset = "time_resolved";
-                          defaultFs = 1; defaultPs = 1; defaultSi = 1;
-                          break;
-                        case "lavision_set":
-                          defaultFormat = "data.set";
-                          defaultPreset = "pre_paired";
-                          defaultFs = 0; defaultPs = 1;
-                          break;
-                        case "lavision_im7":
-                          defaultFormat = "B%05d.im7";
-                          defaultPreset = "pre_paired";
-                          defaultFs = 0; defaultPs = 1;
-                          break;
-                        default:
-                          defaultFormat = "B%05d_A.tif";
-                          defaultPreset = "ab_format";
-                          defaultFs = 0; defaultPs = 1;
-                      }
-
-                      const newPatterns = value === "standard" && defaultPreset === "ab_format"
-                        ? ["B%05d_A.tif", "B%05d_B.tif"]
-                        : [defaultFormat];
+                      const d = imageTypeDefaults(value, startIndex);
+                      const defaultPreset = d.pairing_preset;
+                      const defaultFs = d.frame_stride;
+                      const defaultPs = d.pair_stride;
+                      const defaultSi = d.start_index;
+                      const newPatterns = d.image_format;
 
                       setRawPatterns(newPatterns);
                       setPairingPreset(defaultPreset);
