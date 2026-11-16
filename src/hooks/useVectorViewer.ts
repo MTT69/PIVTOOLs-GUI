@@ -1263,10 +1263,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
       const json = await fetchJson(url);
       if (json.error) throw new Error(json.error);
-      // json.x/json.y are always raw mm (get_vector_at_position works in mm); note that
-      // in the alert so a y+ view doesn't make the value look wrong.
-      const unit = wallUnitsActive ? " mm" : "";
-      alert(`New datum set at physical position: x=${json.x?.toFixed(4)}${unit}, y=${json.y?.toFixed(4)}${unit}`);
+      // json.x/json.y are always raw mm (get_vector_at_position works in mm).
       await sendDatumToBackend(json.x, json.y);
       void fetchCurrentView();
     } catch (e) {
