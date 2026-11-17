@@ -9,11 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Minus, Image as ImageIcon, Info, CheckCircle, XCircle } from "lucide-react";
-import { useConfigUpdate, ValidationState, applySetupSuggestion } from "@/hooks/useConfigUpdate";
+import { mergeUpdatedSections, useConfigUpdate, ValidationState, applySetupSuggestion } from "@/hooks/useConfigUpdate";
 import { ValidationAlert } from "./ValidationAlert";
 import { InlineSuggestion } from "./SourceDiagnosis";
 import { cn } from "@/lib/utils";
-import { fetchJson } from "@/lib/api";
+import { errorMessage, fetchJson } from "@/lib/api";
+import { parsePairCount } from "@/lib/pairCount";
 import { PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
 
 // Helper to detect image type from format pattern
@@ -21,6 +22,7 @@ const detectImageType = (pattern: string | undefined): string => {
   if (!pattern) return "standard";
   const lower = pattern.toLowerCase();
   if (lower.includes('.cine')) return "cine";
+  if (lower.includes('.pivraw')) return "pivraw";
   if (lower.includes('.set') || lower.includes('.ims')) return "lavision_set";
   if (lower.includes('.im7')) return "lavision_im7";
   return "standard";
@@ -98,6 +100,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [imageType, setImageType] = useState<string>("standard");
   const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
   const [framePairPreview, setFramePairPreview] = useState<any>(null);
+  // The preview request's own failure (its 400 text, e.g. a .pivraw run that cannot be paired).
+  const [framePairPreviewError, setFramePairPreviewError] = useState<string | null>(null);
   const [numLoops, setNumLoops] = useState<string>("1");
   // Guard: prevent saves before config has loaded into state (avoids shipping empty rawPatterns)
   const configLoadedRef = useRef(false);
@@ -170,8 +174,8 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       const val = String(validation.detectedCount);
       setNumImages(val);
       updateConfigBackend({ images: { num_images: validation.detectedCount } }).then(result => {
-        if (result.success && result.data?.updated?.images) {
-          updateConfig(['images'], { ...config.images, ...result.data.updated.images });
+        if (result.success && result.data?.updated) {
+          mergeUpdatedSections(result.data.updated, config, updateConfig);
         }
       });
     }
@@ -183,14 +187,16 @@ export default function ImageConfig({ config, updateConfig, validation, sections
       try {
         const data = await fetchJson('/backend/preview_frame_pairs?count=5');
         setFramePairPreview(data);
-      } catch {
-        // Ignore errors
+        setFramePairPreviewError(null);
+      } catch (e) {
+        setFramePairPreview(null);
+        setFramePairPreviewError(errorMessage(e));
       }
     }, 300);
     return () => clearTimeout(timer);
   }, [config.images?.num_images, config.images?.start_index, config.images?.frame_stride,
       config.images?.pair_stride, config.images?.pairing_preset, config.images?.image_format,
-      config.images?.num_loops]);
+      config.images?.num_loops, config.paths?.source_paths, config.paths?.camera_numbers]);
 
   const saveConfig = async (overrides: SaveOverrides = {}) => {
     if (!configLoadedRef.current) return;
@@ -256,12 +262,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
     const result = await updateConfigBackend(payload);
 
     if (result.success && result.data?.updated) {
-      if (result.data.updated.images) {
-        updateConfig(['images'], { ...config.images, ...result.data.updated.images });
-      }
-      if (result.data.updated.paths) {
-        updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
-      }
+      mergeUpdatedSections(result.data.updated, config, updateConfig);
       setSavingMeta("Saved successfully!");
     } else {
       setSavingMeta(`Error: ${result.error || 'Unknown error'}`);
@@ -340,6 +341,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
           { value: "skip_frames", label: "Consecutive Pairs (1+2, 3+4, 5+6)" },
           { value: "custom", label: "Custom..." },
         ];
+      case "pivraw":
+        return [
+          { value: "skip_frames", label: "A+B of each trigger (double-frame run)" },
+          { value: "time_resolved", label: "Overlapping pairs (time-resolved run)" },
+          { value: "custom", label: "Custom..." },
+        ];
       case "lavision_set":
       case "lavision_im7":
         return [
@@ -361,7 +368,24 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   // Pairs description for helper text
   const loops = Number(numLoops) || 1;
   const totalPairs = numPairs * loops;
+  // A .pivraw run is paired by trigger, so its count is the backend's aligned pairs, not
+  // the stride formula over num_images (which is only a cap for it).
+  let pivrawPairs: { pairs: number | null; error: string | null } = { pairs: null, error: null };
+  if (imageType === "pivraw") {
+    try {
+      const pc = parsePairCount(config.images);
+      pivrawPairs = pc.state === "refused" ? { pairs: null, error: pc.error }
+        : { pairs: pc.state === "counted" ? pc.pairs : null, error: null };
+    } catch (e) {
+      pivrawPairs = { pairs: null, error: `The pair count from the backend is unreadable: ${errorMessage(e)}` };
+    }
+  }
   const getPairsDescription = (): string => {
+    if (imageType === "pivraw") {
+      if (pivrawPairs.error !== null) return "No pairs: the run cannot be paired (see the preview below)";
+      return pivrawPairs.pairs === null ? "Pairs are counted by trigger once the run is read"
+        : `${pivrawPairs.pairs} pairs aligned by trigger on every camera (at most ${numImages} frames read per camera)`;
+    }
     const fileWord = imageType === "cine" ? "frames" : imageType.startsWith("lavision") ? "entries" : "files";
     const loopSuffix = loops > 1
       ? ` per loop (\u00d7${loops} loops = ${totalPairs} total)`
@@ -425,19 +449,21 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     <SelectContent>
                       <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
                       <SelectItem value="cine">Phantom CINE</SelectItem>
+                      <SelectItem value="pivraw">PIVTOOLs acquisition run (.pivraw)</SelectItem>
                       <SelectItem value="lavision_set">LaVision recording (.set + .ims folder)</SelectItem>
                       <SelectItem value="lavision_im7">LaVision images (.im7)</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
                     {imageType === "cine" && "High-speed camera video files"}
+                    {imageType === "pivraw" && "A run folder recorded by the PIVTOOLs acquisition app: one Camera<k>.pivraw per camera, paired by trigger"}
                     {imageType === "lavision_set" && "A .set file plus a folder of the same name holding its .ims streams; all cameras in one recording"}
                     {imageType === "lavision_im7" && "LaVision image sequence"}
                     {imageType === "standard" && "Standard image sequences"}
                   </p>
                 </div>
                 <div>
-                  <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : imageType === "cine" ? "Number of frames" : "Number of Image Files"}</Label>
+                  <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : imageType === "cine" || imageType === "pivraw" ? "Number of frames" : "Number of Image Files"}</Label>
                   <Input
                     id="num_images"
                     type="text" inputMode="numeric"
@@ -469,7 +495,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                           saveConfig({ numImages: val });
                         }}
                       >
-                        Detected: {validation.detectedCount} {imageType === "cine" ? "frames" : "files"} — click to apply
+                        Detected: {validation.detectedCount} {imageType === "cine" || imageType === "pivraw" ? "frames" : "files"} — click to apply
                       </button>
                     ) : (
                       <p className="text-xs text-green-600 mt-1">
@@ -814,6 +840,12 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                 </div>
 
                 {/* Frame Pair Preview */}
+                {framePairPreviewError !== null && (
+                  <div className="p-3 rounded-md border border-red-300 bg-red-50">
+                    <p className="text-xs font-medium text-red-800 mb-1">No frame pairs: the preview was refused</p>
+                    <p className="text-xs text-red-700 whitespace-pre-wrap">{framePairPreviewError}</p>
+                  </div>
+                )}
                 {framePairPreview && framePairPreview.pairs?.length > 0 && (
                   <div className="p-3 bg-muted/50 rounded-md border">
                     <p className="text-xs font-medium text-muted-foreground mb-2">

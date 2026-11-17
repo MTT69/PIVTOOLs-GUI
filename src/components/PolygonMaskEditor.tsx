@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { fetchJson, errorMessage, ApiError } from "@/lib/api";
+import { CameraName } from "@/components/shared/CameraName";
 
 type DType = "uint8" | "uint16";
 type RawImage = {
@@ -811,7 +812,7 @@ function PolygonMaskEditor({
 							◀
 						</Button>
 						<span className="text-xs font-medium px-2 py-1 bg-gray-100 rounded min-w-[4rem] text-center">
-							Cam {camera}
+							<CameraName camera={camera} compact />
 						</span>
 						<Button
 							size="sm"

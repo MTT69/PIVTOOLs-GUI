@@ -21,7 +21,8 @@ import { FirstFrameNumber } from "@/components/setup/FirstFrameNumber";
 import { SourceDiagnosis } from "@/components/setup/SourceDiagnosis";
 import { isApplyJobActive } from "@/lib/applyJob";
 import { DiagnosisEntry, SuggestionApply, parseDiagnosis } from "@/lib/sourceDiagnosis";
-import { CameraValidationResult, emptyValidation } from "@/hooks/calibration/shared";
+import { CameraValidationResult, calibrationIdentities, emptyValidation } from "@/hooks/calibration/shared";
+import { NO_IDENTITIES } from "@/lib/cameraIdentity";
 import { applyCalibrationSuggestion } from "@/hooks/calibration/useCalibrationCore";
 import { CalibrationJobFamily, useCalibrationJobs } from "@/contexts/CalibrationJobContext";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
@@ -34,6 +35,8 @@ import {
   getGlobalCoordViewerTarget,
   handleGlobalCoordPointSelect,
 } from "@/components/setup/GlobalCoordinateSetup";
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { CameraIdentityProvider } from "@/contexts/CameraIdentityContext";
 
 interface ScaleFactorCalibrationProps {
   config: any;
@@ -457,6 +460,12 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   }, [sourcePathIdx, camera, sourceReloadTick]);
 
   // --- Applied suggestion: land pending saves, write, then rehydrate -------------
+  // Cameras named by this calibration recording's own labels (none without labels).
+  const scaleFactorIds = useMemo(
+    () => (validation ? calibrationIdentities([validation]) : { identities: NO_IDENTITIES }),
+    [validation],
+  );
+
   const diagnosis = useMemo((): DiagnosisEntry[] => {
     if (!validation) return [];
     const { found, suggestions, streams } = validation;
@@ -629,6 +638,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
   const handleFrameChange = useCallback((idx: number) => setFrameIdx(idx), []);
 
   return (
+    <CameraIdentityProvider identities={scaleFactorIds.identities}>
     <div className="space-y-6">
       <Card>
         <CardHeader>
@@ -703,7 +713,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {cameraOptions.map(c => (
-                    <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                    <CameraSelectItem key={c} camera={c} />
                   ))}
                 </SelectContent>
               </Select>
@@ -771,6 +781,7 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
           )}
 
           <SourceDiagnosis entries={diagnosis} onApply={applySuggestion} busy={validating} />
+          {scaleFactorIds.error && <p className="text-xs text-red-600">{scaleFactorIds.error}</p>}
 
           {/* Image viewer with origin/measure picking (shared component — same as other tabs).
               Gated on a valid source (Dotboard pattern) whose settings have loaded, so a 404 never
@@ -989,5 +1000,6 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
         </Card>
       )}
     </div>
+    </CameraIdentityProvider>
   );
 };

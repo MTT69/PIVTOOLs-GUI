@@ -4,6 +4,8 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Camera, FolderTree, Merge } from "lucide-react";
+import { useCameraIdentities } from "@/contexts/CameraIdentityContext";
+import { cameraDetail, cameraShortName, cameraTitle } from "@/lib/cameraIdentity";
 
 interface PathInfo {
   source: string;
@@ -52,6 +54,7 @@ const CameraSelector = memo(function CameraSelector({
   showMerged = false,
   showCameras = true,
 }: CameraSelectorProps) {
+  const identities = useCameraIdentities();
 
   // Toggle camera selection
   const toggleCamera = (cameraNum: number) => {
@@ -204,17 +207,22 @@ const CameraSelector = memo(function CameraSelector({
           </div>
           <div className="flex flex-wrap gap-2">
             {/* Individual Camera Buttons */}
-            {Array.from({ length: cameraCount }, (_, i) => i + 1).map(camNum => (
-              <Button
-                key={camNum}
-                variant={selectedCameras.includes(camNum) ? "default" : "outline"}
-                size="sm"
-                onClick={() => toggleCamera(camNum)}
-                className="min-w-[80px]"
-              >
-                Camera {camNum}
-              </Button>
-            ))}
+            {Array.from({ length: cameraCount }, (_, i) => i + 1).map(camNum => {
+              const detail = cameraDetail(camNum, identities);
+              return (
+                <Button
+                  key={camNum}
+                  variant={selectedCameras.includes(camNum) ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => toggleCamera(camNum)}
+                  className={detail === null ? "min-w-[80px]" : "min-w-[80px] h-auto py-1 flex-col items-start"}
+                  title={cameraTitle(camNum, identities)}
+                >
+                  <span>{cameraShortName(camNum, identities)}</span>
+                  {detail !== null && <span className="text-[10px] font-normal opacity-80">{detail}</span>}
+                </Button>
+              );
+            })}
 
             {/* Merged Button (only show if showMerged and multiple cameras) */}
             {showMerged && cameraCount > 1 && (

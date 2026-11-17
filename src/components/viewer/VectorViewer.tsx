@@ -12,6 +12,7 @@ import { unitsForVar, wallScaleDivisor } from "@/lib/plotUnits";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { isNanReasonVar, nanReasonEntries, nanReasonLabel, NanReasonPipeline } from "@/lib/nanReasonCodes";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
+import { CameraName, CameraSelectItem } from "@/components/shared/CameraName";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -380,6 +381,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     magVisible,
     magPos,
     maxFrameCount,
+    pairingError,
     handlePlayToggle,
     handleRender,
     handleImageClick,
@@ -754,7 +756,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <SelectItem value="none" disabled>No cameras available</SelectItem>
                       ) : (
                         cameraOptions.map((c: number, i: number) => (
-                          <SelectItem key={i} value={String(c)}>Camera {c}</SelectItem>
+                          <CameraSelectItem key={i} camera={c} />
                         ))
                       )}
                     </SelectContent>
@@ -1397,6 +1399,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   )}
                 </div>
 
+                {pairingError && hasFrameNavigation && (
+                  <p className="text-xs text-red-600 w-full">
+                    The frame count is unknown because the run cannot be paired: {pairingError}
+                  </p>
+                )}
                 {/* Frame slider + numeric input - Hidden for ensemble, statistics, and mean variables */}
                 {maxFrameCount > 0 && hasFrameNavigation && (
                   <>
@@ -1965,7 +1972,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               }
                             }}
                           />
-                          Cam {cam}
+                          <CameraName camera={cam} compact />
                         </label>
                       ))}
                     </div>
@@ -2064,7 +2071,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </SelectTrigger>
                           <SelectContent>
                             {cameraOptions.map((cam: number) => (
-                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                              <CameraSelectItem key={cam} camera={cam} />
                             ))}
                           </SelectContent>
                         </Select>
@@ -2087,7 +2094,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                             {cameraOptions.filter((cam: number) =>
                               cam >= (selectedMergeCameras.length > 0 ? selectedMergeCameras[0] : cameraOptions[0])
                             ).map((cam: number) => (
-                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                              <CameraSelectItem key={cam} camera={cam} />
                             ))}
                           </SelectContent>
                         </Select>

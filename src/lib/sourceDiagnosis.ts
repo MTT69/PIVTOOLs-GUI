@@ -37,13 +37,26 @@ export interface Suggestion {
   label: string;
 }
 
+/** A/B frame of a double-frame camera, or "" for a single-frame camera's one stream. */
+export type StreamRole = 'A' | 'B' | '';
+
+/**
+ * One stream of a LaVision `.set` recording (backend `StreamInfo`). `width`/`height`
+ * are the output size, null when a transformer PIVTOOLs does not know leaves it
+ * unknown. `label`, `camera_id`, `model` and `role` come from the recording's own
+ * camera labels: all four are null when it has none, all four are set otherwise.
+ */
 export interface StreamInfo {
   index: number;
   prefix: string;
-  width: number;
-  height: number;
+  width: number | null;
+  height: number | null;
   decoder: string;
   camera: number | null;
+  label: string | null;
+  camera_id: string | null;
+  model: string | null;
+  role: StreamRole | null;
 }
 
 export interface Diagnosis {
@@ -112,9 +125,15 @@ export function parseApply(raw: unknown): SuggestionApply {
   return { ...obj } as SuggestionApply;
 }
 
-const STREAM_FIELDS = ['index', 'prefix', 'width', 'height', 'decoder', 'camera'];
+const STREAM_FIELDS = [
+  'index', 'prefix', 'width', 'height', 'decoder', 'camera', 'label', 'camera_id', 'model', 'role',
+];
+const IDENTITY_FIELDS = ['label', 'camera_id', 'model', 'role'] as const;
+const STREAM_ROLES: readonly string[] = ['A', 'B', ''];
+const isIntOrNull = (v: unknown): v is number | null => v === null || isInt(v);
 
-function parseStream(raw: unknown): StreamInfo {
+/** Validate one stream. Every field is required: a backend without one is older than this GUI. */
+export function parseStream(raw: unknown): StreamInfo {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new Error('Stream must be an object');
   }
@@ -122,11 +141,29 @@ function parseStream(raw: unknown): StreamInfo {
   for (const key of Object.keys(s)) {
     if (!STREAM_FIELDS.includes(key)) throw new Error(`Unknown stream field "${key}"`);
   }
+  const missing = STREAM_FIELDS.filter((k) => !(k in s));
+  if (missing.length > 0) {
+    throw new Error(`Stream has no ${missing.map((k) => `"${k}"`).join(', ')}; the backend is older than this GUI`);
+  }
   if (
-    !isInt(s.index) || !isString(s.prefix) || !isInt(s.width) || !isInt(s.height) ||
-    !isString(s.decoder) || !(s.camera === null || isInt(s.camera))
+    !isInt(s.index) || !isString(s.prefix) || !isIntOrNull(s.width) || !isIntOrNull(s.height) ||
+    !isString(s.decoder) || !isIntOrNull(s.camera)
   ) {
-    throw new Error('Stream needs int "index"/"width"/"height", string "prefix"/"decoder" and int-or-null "camera"');
+    throw new Error(
+      'Stream needs int "index", int-or-null "width"/"height"/"camera" and string "prefix"/"decoder"',
+    );
+  }
+  if ((s.width === null) !== (s.height === null)) {
+    throw new Error(`Stream ${s.index}: "width" and "height" must both be known or both null`);
+  }
+  const unlabelled = IDENTITY_FIELDS.every((k) => s[k] === null);
+  const labelled = isString(s.label) && isString(s.camera_id) && isString(s.model) &&
+    isString(s.role) && STREAM_ROLES.includes(s.role);
+  if (!unlabelled && !labelled) {
+    throw new Error(
+      `Stream ${s.index}: "label", "camera_id", "model" and "role" must all be null, or all set ` +
+      '(role "A", "B" or "")',
+    );
   }
   return s as unknown as StreamInfo;
 }
@@ -199,8 +236,9 @@ export function foundLines(entries: DiagnosisEntry[]): string[] {
   return present.map((e) => `${e.label}: ${e.found}`);
 }
 
+/** `W×H`, or "unknown" when a transformer PIVTOOLs does not know hides the output size. */
 export function formatSize(s: StreamInfo): string {
-  return `${s.width}×${s.height}`;
+  return s.width === null || s.height === null ? 'unknown' : `${s.width}×${s.height}`;
 }
 
 export interface ImageTypeDefaults {
@@ -219,6 +257,14 @@ export function imageTypeDefaults(imageType: string, currentStartIndex: number):
       return {
         image_type: imageType, image_format: ['Camera%d.cine'], pairing_preset: 'time_resolved',
         frame_stride: 1, pair_stride: 1, start_index: 1,
+      };
+    case 'pivraw':
+      // A run of the acquisition app: one Camera<k>.pivraw per camera, paired by trigger
+      // from file entry 1. A double-frame run (A, B per trigger) pairs with strides 1, 2,
+      // the only pairing the reader accepts for it; a time-resolved run takes time_resolved.
+      return {
+        image_type: imageType, image_format: ['Camera%d.pivraw'], pairing_preset: 'skip_frames',
+        frame_stride: 1, pair_stride: 2, start_index: 1,
       };
     case 'lavision_set':
       return {

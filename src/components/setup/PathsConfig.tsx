@@ -6,19 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Folder, Plus, X, CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { useConfigUpdate, ValidationState, applySetupSuggestion, entryLabel } from "@/hooks/useConfigUpdate";
+import { mergeUpdatedSections, useConfigUpdate, ValidationState, applySetupSuggestion, entryLabel } from "@/hooks/useConfigUpdate";
 import { DiagnosisEntry } from "@/lib/sourceDiagnosis";
 import { sanitizePath } from "@/lib/sourcePath";
 import { ValidationAlert } from "./ValidationAlert";
 import { SourceDiagnosis } from "./SourceDiagnosis";
+import { ValidationDetails } from "./ValidationDetails";
+import { RunImport } from "./RunImport";
 
 interface PathsConfigProps {
   config: any;
   updateConfig: (path: string[], value: any) => void;
   validation: ValidationState;
+  /** Re-read the whole config from the backend (after a run import rewrites it). */
+  reloadConfig: () => Promise<void>;
 }
 
-export default function PathsConfig({ config, updateConfig, validation }: PathsConfigProps) {
+export default function PathsConfig({ config, updateConfig, validation, reloadConfig }: PathsConfigProps) {
   const [baseDirs, setBaseDirs] = useState<string[]>([]);
   const [sourceDirs, setSourceDirs] = useState<string[]>([]);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -58,7 +62,8 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
     const result = await updateConfigBackend(payload);
 
     if (result.success && result.data?.updated?.paths) {
-      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
+      // A source change re-pairs the run: the response's images carry the new pair status.
+      mergeUpdatedSections(result.data.updated, config, updateConfig);
       setSaveStatus('success');
     } else {
       setSaveStatus('error');
@@ -86,6 +91,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
 
       {/* Validation Status */}
       <ValidationAlert validation={validation} />
+      <ValidationDetails validation={validation} />
       <div className="space-y-6">
         <Card>
           <CardHeader>
@@ -95,6 +101,9 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
                 <>Point at the .set file (not its folder). Its data lives in the folder of the same name next to it.</>
               ) : (
                 <>Locations where your raw image sequences are stored. These directories will be searched for image files matching your patterns.</>
+              )}
+              {config.images?.image_type === "pivraw" && (
+                <> For a PIVTOOLs acquisition run, the source is the run folder (it holds Camera1.pivraw and run.yaml).</>
               )}
             </CardDescription>
           </CardHeader>
@@ -180,6 +189,7 @@ export default function PathsConfig({ config, updateConfig, validation }: PathsC
               >
                 <Plus className="h-4 w-4" /> Add Source {config.images?.image_type === "lavision_set" ? "File" : "Directory"}
               </Button>
+              <RunImport reloadConfig={reloadConfig} />
             </div>
           </CardContent>
         </Card>

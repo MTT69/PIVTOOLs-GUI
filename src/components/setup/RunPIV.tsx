@@ -8,7 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, XCircle } from "lucide-react";
+import { parsePairCount } from '@/lib/pairCount';
+
+/** Image types whose images are frames inside a container file, not one file each. */
+const CONTAINER_FRAME_TYPES = new Set(["cine", "pivraw"]);
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ColormapSelect from "@/components/shared/ColormapSelect";
 import {
@@ -113,6 +117,17 @@ const RunPIV: React.FC<RunPIVProps> = ({
   }, [memoryCheckKey]);
 
   // --- Derived State (memoized for performance) ---
+  // The backend's pair count, or why there is none. A refused .pivraw run (or a count
+  // that breaks the contract) blocks Run: the job start would refuse it anyway.
+  const pairStatus = useMemo((): { pairs: number | null; error: string | null } => {
+    try {
+      const pc = parsePairCount(config?.images);
+      if (pc.state === 'refused') return { pairs: null, error: pc.error };
+      return { pairs: pc.state === 'counted' ? pc.pairs : null, error: null };
+    } catch (e) {
+      return { pairs: null, error: `The pair count from the backend is unreadable: ${errorMessage(e)}` };
+    }
+  }, [config?.images]);
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const basePaths = useMemo(() => config?.paths?.base_paths || [], [config]);
   const activePaths = settings.activePaths;
@@ -279,7 +294,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
           const sourceName = basename(paths.source_paths?.[0] || "");
           const numLoops = images.num_loops || 1;
           const numImages = images.num_images || 0;
-          const numPairs = images.num_frame_pairs || 0;
+          const numPairs = pairStatus.pairs ?? 0;
           const preset = images.pairing_preset || "";
           const format = Array.isArray(images.image_format) ? images.image_format[0] : images.image_format || "";
 
@@ -308,11 +323,15 @@ const RunPIV: React.FC<RunPIVProps> = ({
                 <span>{sourceName}{numLoops > 1 ? ` + ${numLoops - 1} more loop${numLoops > 2 ? "s" : ""}` : ""}</span>
 
                 <span className="text-muted-foreground font-medium">Images</span>
-                <span>
-                  {numImages > 0 ? `${numImages} ${images.image_type === "cine" ? "frames" : "files"}` : "not set"}
-                  {numLoops > 1 ? ` x ${numLoops} loops = ${numPairs} pairs` : numPairs > 0 ? ` = ${numPairs} pairs` : ""}
-                  {preset ? ` (${preset.replace(/_/g, " ")})` : ""}
-                </span>
+                {pairStatus.error !== null ? (
+                  <span className="text-red-700">No pairs: the run cannot be paired (see below)</span>
+                ) : (
+                  <span>
+                    {numImages > 0 ? `${numImages} ${CONTAINER_FRAME_TYPES.has(images.image_type) ? "frames" : "files"}` : "not set"}
+                    {numLoops > 1 ? ` x ${numLoops} loops = ${numPairs} pairs` : numPairs > 0 ? ` = ${numPairs} pairs` : ""}
+                    {preset ? ` (${preset.replace(/_/g, " ")})` : ""}
+                  </span>
+                )}
 
                 <span className="text-muted-foreground font-medium">Format</span>
                 <span className="font-mono">{format}</span>
@@ -339,6 +358,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
             </div>
           );
         })()}
+
+        {pairStatus.error !== null && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertTitle>This run cannot be paired, so PIV cannot start</AlertTitle>
+            <AlertDescription className="text-sm whitespace-pre-wrap">{pairStatus.error}</AlertDescription>
+          </Alert>
+        )}
 
         {memoryWarning && (
           <Alert className="border-yellow-500 bg-yellow-50">
@@ -528,9 +555,10 @@ const RunPIV: React.FC<RunPIVProps> = ({
           <Button
             className="bg-green-600 hover:bg-green-700"
             onClick={handleRunClick}
-            disabled={isLoading || isPolling || isCheckingOutput || activePaths.length === 0}
+            disabled={isLoading || isPolling || isCheckingOutput || activePaths.length === 0 || pairStatus.error !== null}
           >
-            {isPolling ? "Running..." : isCheckingOutput ? "Checking..." : activePaths.length === 0 ? "Select Paths" : "Run PIV"}
+            {isPolling ? "Running..." : isCheckingOutput ? "Checking..." : activePaths.length === 0 ? "Select Paths"
+              : pairStatus.error !== null ? "Cannot pair run" : "Run PIV"}
           </Button>
           <Button className="bg-red-600 hover:bg-red-700" onClick={handleCancel} disabled={!isPolling && !isLoading}>
             Cancel Run

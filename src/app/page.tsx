@@ -26,6 +26,7 @@ import Masking from '@/components/setup/Masking';
 import { Calibration } from '@/components/setup/Calibration';
 import { useAutoValidation, useConfigUpdate } from '@/hooks/useConfigUpdate';
 import { PivJobProvider } from '@/contexts/PivJobContext';
+import { CameraIdentityProvider } from '@/contexts/CameraIdentityContext';
 import { CalibrationJobProvider } from '@/contexts/CalibrationJobContext';
 import { fetchJson } from '@/lib/api';
 
@@ -194,6 +195,7 @@ export default function Home() {
               
               <PivJobProvider config={config} activeTab={activeTab} onJobComplete={fetchConfig}>
               <CalibrationJobProvider>
+              <CameraIdentityProvider identities={pathValidation.cameraIdentities}>
               <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
                 <TabsList className="grid grid-cols-7 mb-6">
                   <TabsTrigger value="setup" className="data-[state=active]:bg-soton-blue data-[state=active]:text-white">
@@ -236,6 +238,7 @@ export default function Home() {
                       config={config}
                       updateConfig={updateConfig}
                       validation={pathValidation}
+                      reloadConfig={fetchConfig}
                     />
 
                     {/* Filename Patterns */}
@@ -289,6 +292,7 @@ export default function Home() {
                 </TabsContent>
 
               </Tabs>
+              </CameraIdentityProvider>
               </CalibrationJobProvider>
               </PivJobProvider>
             </div>

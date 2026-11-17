@@ -32,6 +32,8 @@ import { CalibrationFigureGallery } from "@/components/setup/CalibrationFigureGa
 import { SelfCalibrationSection } from "@/components/setup/SelfCalibrationSection";
 import CalibrationImageViewer from "@/components/viewer/CalibrationImageViewer";
 import { MarkerPoint } from "@/components/viewer/zoomableCanvas";
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { CameraIdentityProvider } from "@/contexts/CameraIdentityContext";
 
 interface StereoSteppedCalibrationProps {
   config: any;
@@ -452,6 +454,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
   const viewerCamera = activeCam;
 
   return (
+    <CameraIdentityProvider identities={calibration.cameraIdentities}>
     <div className="space-y-6">
       <Card>
         <CardHeader>
@@ -503,7 +506,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {cameraOptions.map(c => (
-                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                      <CameraSelectItem key={c} camera={c} />
                     ))}
                   </SelectContent>
                 </Select>
@@ -515,7 +518,7 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {cameraOptions.filter(c => c !== cam1).map(c => (
-                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                      <CameraSelectItem key={c} camera={c} />
                     ))}
                   </SelectContent>
                 </Select>
@@ -1321,5 +1324,6 @@ export const StereoSteppedCalibration: React.FC<StereoSteppedCalibrationProps> =
         </Card>
       )}
     </div>
+    </CameraIdentityProvider>
   );
 };

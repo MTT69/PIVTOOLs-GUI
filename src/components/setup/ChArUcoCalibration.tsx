@@ -24,6 +24,8 @@ import {
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
 import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { CameraIdentityProvider } from "@/contexts/CameraIdentityContext";
 
 interface ChArUcoCalibrationProps {
   config: any;
@@ -214,6 +216,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
 
 
   return (
+    <CameraIdentityProvider identities={calibration.cameraIdentities}>
     <div className="space-y-6">
       {/* Main Configuration Card */}
       <Card>
@@ -499,7 +502,7 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
                   </SelectTrigger>
                   <SelectContent>
                     {cameraOptions.map((c) => (
-                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                      <CameraSelectItem key={c} camera={c} />
                     ))}
                   </SelectContent>
                 </Select>
@@ -861,5 +864,6 @@ export const ChArUcoCalibration: React.FC<ChArUcoCalibrationProps> = ({
         </Card>
       )}
     </div>
+    </CameraIdentityProvider>
   );
 };

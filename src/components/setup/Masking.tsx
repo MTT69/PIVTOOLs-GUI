@@ -11,6 +11,7 @@ import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { basename } from "@/lib/utils";
 import * as Slider from '@radix-ui/react-slider';
+import { CameraSelectItem } from "@/components/shared/CameraName";
 
 type RawImage = {
 	data: Uint8Array | Uint16Array;
@@ -400,8 +401,8 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							<Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
 								<SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
 								<SelectContent>
-									{cameraOptions.map((c, i) => (
-										<SelectItem key={i} value={String(c)}>{c}</SelectItem>
+									{cameraOptions.map((c) => (
+										<CameraSelectItem key={c} camera={c} />
 									))}
 								</SelectContent>
 							</Select>

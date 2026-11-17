@@ -25,6 +25,7 @@ import * as Slider from '@radix-ui/react-slider';
 import { basename, cn } from "@/lib/utils";
 import { postJson, errorMessage } from "@/lib/api";
 import { useNumericInput } from '@/hooks/useNumericInput';
+import { CameraName } from "@/components/shared/CameraName";
 
 interface ImagePairViewerProps {
   backendUrl?: string;
@@ -546,7 +547,7 @@ export default function ImagePairViewer({ backendUrl = "/backend", config, onFil
               ◀
             </Button>
             <span className="text-xs font-medium px-2 py-1 bg-gray-100 rounded min-w-[3.5rem] text-center">
-              {cameraOptions.length === 0 ? "No cameras" : `Cam ${camera}`}
+              {cameraOptions.length === 0 || camera === undefined ? "No cameras" : <CameraName camera={camera} compact />}
             </span>
             <Button
               type="button"
