@@ -18,6 +18,7 @@ import {
   recordingIdentities,
 } from '@/lib/cameraIdentity';
 import { assertNoServerOnlyKeys, isCount, mergeImagesUpdate } from '@/lib/pairCount';
+import { PivrawAlignmentReport, parsePivrawAlignment } from '@/lib/pivrawAlignment';
 
 /** Validation result for a single pattern (A or B) of one camera */
 export interface PatternValidation {
@@ -29,20 +30,6 @@ export interface PatternValidation {
   error: string | null;
   suggestions: Suggestion[];
   sample_files?: string[];
-}
-
-/**
- * A `.pivraw` run's trigger alignment (backend `PivrawAlignment.report`). Camera keys
- * of `skipped_by_camera` are strings (JSON object keys).
- */
-export interface PivrawAlignmentReport {
-  pairs: number;
-  skipped_incomplete: number;
-  skipped_by_camera: Record<string, number>;
-  triggers_requested: number;
-  triggers_unaccounted: number;
-  summary: string;
-  notes: string[];
 }
 
 /** One camera's `/validate_files` detail, with the source diagnosis. */
@@ -122,35 +109,6 @@ export function parseImageSize(raw: unknown, where: string): [number, number] | 
     return [raw[0], raw[1]];
   }
   throw new Error(`${where}: "image_size" must be [width, height] or null`);
-}
-
-/** Validate a `pivraw_alignment` report, or null. */
-export function parsePivrawAlignment(raw: unknown, where: string): PivrawAlignmentReport | null {
-  if (raw === null) return null;
-  const fail = (what: string): never => {
-    throw new Error(`${where}: pivraw_alignment ${what}`);
-  };
-  if (typeof raw !== 'object' || Array.isArray(raw)) fail('must be an object or null');
-  const r = raw as Record<string, unknown>;
-  for (const k of ['pairs', 'skipped_incomplete', 'triggers_requested', 'triggers_unaccounted'] as const) {
-    if (!isCount(r[k])) fail(`needs a whole-number "${k}"`);
-  }
-  if (typeof r.summary !== 'string') fail('needs a string "summary"');
-  if (!isStringList(r.notes)) fail('needs a list of strings "notes"');
-  const skipped = r.skipped_by_camera;
-  if (typeof skipped !== 'object' || skipped === null || Array.isArray(skipped) ||
-      !Object.entries(skipped).every(([cam, n]) => /^\d+$/.test(cam) && isCount(n))) {
-    fail('needs "skipped_by_camera" mapping camera numbers to whole numbers');
-  }
-  return {
-    pairs: r.pairs as number,
-    skipped_incomplete: r.skipped_incomplete as number,
-    skipped_by_camera: skipped as Record<string, number>,
-    triggers_requested: r.triggers_requested as number,
-    triggers_unaccounted: r.triggers_unaccounted as number,
-    summary: r.summary as string,
-    notes: r.notes as string[],
-  };
 }
 
 function parsePatternValidation(raw: unknown): PatternValidation {

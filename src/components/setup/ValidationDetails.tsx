@@ -27,7 +27,6 @@ export function ValidationDetails({ validation }: { validation: ValidationState 
     <div className="space-y-2 rounded-md border p-3 text-xs">
       {rows.map(({ key, label, camera }) => {
         const a = camera.pivraw_alignment;
-        const skipped = a ? Object.entries(a.skipped_by_camera).filter(([, n]) => n > 0) : [];
         return (
           <div key={key} className="space-y-0.5">
             <p className="font-medium">
@@ -45,10 +44,8 @@ export function ValidationDetails({ validation }: { validation: ValidationState 
             ))}
             {a && (
               <div className="text-muted-foreground">
+                <p>Pairs: {a.pairs}</p>
                 <p>{a.summary}</p>
-                {skipped.length > 0 && (
-                  <p>Pairs skipped, by camera: {skipped.map(([cam, n]) => `Camera ${cam}: ${n}`).join(", ")}</p>
-                )}
                 {a.notes.map((n, i) => (
                   <p key={i} className="flex items-start gap-1 text-amber-800">
                     <Info className="h-3 w-3 mt-0.5 shrink-0" />{n}
