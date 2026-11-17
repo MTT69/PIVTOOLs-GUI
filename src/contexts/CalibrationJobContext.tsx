@@ -22,9 +22,16 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { ApiError, errorMessage, fetchJson, postJson } from "@/lib/api";
-import { ApplyJobStatus, JobStart, isApplyJobActive, parseJobStart, readApplyJobStatus } from "@/lib/applyJob";
+import {
+  ApplyJobStatus,
+  JobStart,
+  POLL_INTERVAL_MS,
+  isApplyJobActive,
+  isStartRefusal,
+  parseJobStart,
+  readApplyJobStatus,
+} from "@/lib/applyJob";
 
-const POLL_INTERVAL_MS = 1000;
 const STALE_JOB_HOURS = 24;
 const STORAGE_KEY = "pivtools_calibration_jobs";
 
@@ -248,8 +255,7 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       // A 400 is a refusal (a .pivraw run the reader refuses, a calibration frame mismatch):
       // its text names the camera, the image and the field. Anything else failed outright.
-      const refused = e instanceof ApiError && e.status === 400;
-      setSlot(key, { status: refused ? refusedStatus(errorMessage(e)) : failedStatus(errorMessage(e)) });
+      setSlot(key, { status: isStartRefusal(e) ? refusedStatus(errorMessage(e)) : failedStatus(errorMessage(e)) });
       return;
     }
     if (start.kind === "refused") {

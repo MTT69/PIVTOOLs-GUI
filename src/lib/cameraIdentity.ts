@@ -60,6 +60,18 @@ export function identitiesFromStreams(streams: readonly StreamInfo[]): CameraIde
 }
 
 /**
+ * The identities of one recording from per-camera results that may carry its stream
+ * table: the first table found is the recording's (every camera of one recording shares
+ * it). No table (not a labelled `.set`) names no camera. Throws as `identitiesFromStreams`.
+ */
+export function recordingIdentities(
+  results: readonly { streams: readonly StreamInfo[] | null }[],
+): CameraIdentities {
+  const streams = results.find((r) => r.streams !== null)?.streams;
+  return streams ? identitiesFromStreams(streams) : NO_IDENTITIES;
+}
+
+/**
  * The identities several recordings agree on. Setup can hold several sources, and
  * camera N of one recording need not be camera N of another: a camera number whose
  * identity differs between recordings (or is labelled in one and not another) gets

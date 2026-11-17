@@ -8,6 +8,8 @@
  * The three keys are computed by the backend and are never posted back.
  */
 
+import { errorMessage } from './api';
+
 export const SERVER_ONLY_IMAGE_KEYS = ['num_frame_pairs', 'per_loop_frame_pairs', 'pairing_error'] as const;
 
 export type PairCount =
@@ -17,7 +19,8 @@ export type PairCount =
   /** The reader refused the run; `error` is its message, to show in place of a count. */
   | { state: 'refused'; error: string };
 
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+/** A whole number >= 0. */
+export const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
 /**
  * Read the pair count from a config's `images` section. Throws when the keys break
@@ -43,6 +46,27 @@ export function parsePairCount(images: Record<string, unknown> | null | undefine
     );
   }
   return { state: 'counted', pairs: img.num_frame_pairs, perLoop: img.per_loop_frame_pairs };
+}
+
+/** The pair count to show, or the reason there is none, for a Run or Setup panel. */
+export interface PairStatus {
+  pairs: number | null;
+  error: string | null;
+}
+
+/**
+ * `parsePairCount` for display: a refusal's message, or a contract fault worded as an
+ * unreadable count, becomes `error`, which blocks Run; `pairs` is null until counted.
+ */
+export function pairStatus(images: Record<string, unknown> | null | undefined): PairStatus {
+  let pc: PairCount;
+  try {
+    pc = parsePairCount(images);
+  } catch (e) {
+    return { pairs: null, error: `The pair count from the backend is unreadable: ${errorMessage(e)}` };
+  }
+  if (pc.state === 'refused') return { pairs: null, error: pc.error };
+  return { pairs: pc.state === 'counted' ? pc.pairs : null, error: null };
 }
 
 /**

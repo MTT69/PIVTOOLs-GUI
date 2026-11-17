@@ -25,6 +25,22 @@
  * account of what was written where.
  */
 
+import { ApiError } from './api';
+
+/** Status poll interval of a calibration job (apply, self-calibration), ms. */
+export const POLL_INTERVAL_MS = 1000;
+
+/**
+ * HTTP status of a job start the backend refused (a `.pivraw` run the reader refuses, a
+ * calibration frame mismatch): no job exists, and the body names the camera, image and field.
+ */
+export const START_REFUSED_STATUS = 400;
+
+/** True when a thrown job-start failure is the backend's refusal, not a failed request. */
+export function isStartRefusal(e: unknown): boolean {
+  return e instanceof ApiError && e.status === START_REFUSED_STATUS;
+}
+
 export interface ApplyJobStatus {
   status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
@@ -85,11 +101,18 @@ export type JobStart =
 /**
  * Read a 2xx start response (`/calibration/apply`, `/calibration/self_cal/run`). Some
  * refusals still answer 200 with `success: false`; a 400 refusal is thrown by `postJson`
- * and the caller treats it the same way. Throws on a malformed success.
+ * and the caller treats it the same way. Throws on a malformed response: no boolean
+ * `success`, a refusal without an `error` message, or a success without a job id.
  */
 export function parseJobStart(data: any, where: string): JobStart {
-  if (data?.success !== true) {
-    return { kind: 'refused', error: typeof data?.error === 'string' && data.error ? data.error : `${where} did not start` };
+  if (typeof data?.success !== 'boolean') {
+    throw new Error(`${where} answered without a "success" flag`);
+  }
+  if (!data.success) {
+    if (typeof data.error !== 'string' || data.error === '') {
+      throw new Error(`${where} refused the job without saying why`);
+    }
+    return { kind: 'refused', error: data.error };
   }
   if (typeof data.job_id !== 'string' || data.job_id === '') {
     throw new Error(`${where} answered success without a job id`);

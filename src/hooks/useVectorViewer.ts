@@ -3,6 +3,13 @@ import { normalizeVarName } from "@/lib/plotUnits";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
 import { parsePairCount } from "@/lib/pairCount";
 
+/**
+ * The frame count while the config has none (the run cannot be paired, or the count is
+ * unreadable). Zero hides the frame slider and stops the next-frame button, so no frame
+ * or frame-count job is asked for by a number nobody computed.
+ */
+const NO_FRAME_COUNT = 0;
+
 interface UseVectorViewerProps {
   backendUrl: string;
   config?: any;
@@ -1701,6 +1708,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         if (pc.state === 'refused') {
           // The vectors on disk may still be viewed; say why the frame count is unknown.
           setPairingError(pc.error);
+          setMaxFrameCount(NO_FRAME_COUNT);
           return;
         }
         setPairingError(null);
@@ -1712,6 +1720,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       } catch (err) {
         console.error("Error fetching config for frame count:", errorMessage(err));
         setPairingError(`The frame count could not be read: ${errorMessage(err)}`);
+        setMaxFrameCount(NO_FRAME_COUNT);
       }
     }
     fetchConfig();

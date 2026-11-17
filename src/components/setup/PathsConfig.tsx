@@ -13,6 +13,7 @@ import { ValidationAlert } from "./ValidationAlert";
 import { SourceDiagnosis } from "./SourceDiagnosis";
 import { ValidationDetails } from "./ValidationDetails";
 import { RunImport } from "./RunImport";
+import type { DoubleFrameAutoSelect } from "@/hooks/useDoubleFrameAutoSelect";
 
 interface PathsConfigProps {
   config: any;
@@ -20,9 +21,11 @@ interface PathsConfigProps {
   validation: ValidationState;
   /** Re-read the whole config from the backend (after a run import rewrites it). */
   reloadConfig: () => Promise<void>;
+  /** The camera selection Setup made from the recording's labels, or why it failed. */
+  cameraAutoSelect: DoubleFrameAutoSelect;
 }
 
-export default function PathsConfig({ config, updateConfig, validation, reloadConfig }: PathsConfigProps) {
+export default function PathsConfig({ config, updateConfig, validation, reloadConfig, cameraAutoSelect }: PathsConfigProps) {
   const [baseDirs, setBaseDirs] = useState<string[]>([]);
   const [sourceDirs, setSourceDirs] = useState<string[]>([]);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -179,6 +182,12 @@ export default function PathsConfig({ config, updateConfig, validation, reloadCo
                     </Button>
                   </div>
                 ))
+              )}
+              {cameraAutoSelect.notice && (
+                <p className="text-sm text-blue-700">{cameraAutoSelect.notice}</p>
+              )}
+              {cameraAutoSelect.error && (
+                <p className="text-sm text-red-600">{cameraAutoSelect.error}</p>
               )}
               <Button
                 variant="outline"

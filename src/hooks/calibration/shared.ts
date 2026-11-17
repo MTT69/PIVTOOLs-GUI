@@ -3,7 +3,8 @@
  */
 
 import { Diagnosis } from '@/lib/sourceDiagnosis';
-import { CameraIdentities, NO_IDENTITIES, identitiesFromStreams } from '@/lib/cameraIdentity';
+import { errorMessage } from '@/lib/api';
+import { CameraIdentities, NO_IDENTITIES, recordingIdentities } from '@/lib/cameraIdentity';
 
 /** Parse a numeric form field; null when empty/invalid (the field is unset). */
 export const numOrNull = (s: string): number | null => {
@@ -65,12 +66,10 @@ export const emptyValidation = (error: string): CameraValidationResult => ({
 export function calibrationIdentities(
   results: readonly CameraValidationResult[],
 ): { identities: CameraIdentities; error?: string } {
-  const streams = results.find((r) => r.streams !== null)?.streams;
-  if (!streams) return { identities: NO_IDENTITIES };
   try {
-    return { identities: identitiesFromStreams(streams) };
+    return { identities: recordingIdentities(results) };
   } catch (e) {
-    return { identities: NO_IDENTITIES, error: `Camera labels unreadable: ${e instanceof Error ? e.message : String(e)}` };
+    return { identities: NO_IDENTITIES, error: `Camera labels unreadable: ${errorMessage(e)}` };
   }
 }
 

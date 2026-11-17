@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiError, fetchJson, postJson, errorMessage } from '@/lib/api';
-import { parseJobStart, parseWarnings } from '@/lib/applyJob';
+import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { POLL_INTERVAL_MS, isStartRefusal, parseJobStart, parseWarnings } from '@/lib/applyJob';
 
 /** One iteration of the self-calibration convergence history. */
 export interface SC2IterationRecord {
@@ -223,11 +223,11 @@ export function useSelfCalibration(
       }
       setWarnings(start.warnings);
       setJobId(start.jobId);
-      pollRef.current = setInterval(() => pollJob(start.jobId), 1000);
+      pollRef.current = setInterval(() => pollJob(start.jobId), POLL_INTERVAL_MS);
     } catch (e) {
       // A 400 is a refusal (a .pivraw run the reader refuses, particle images in another
       // frame than the model's); its text names the camera, the image and the field.
-      setError(e instanceof ApiError && e.status === 400
+      setError(isStartRefusal(e)
         ? `Self-calibration refused; no job started. ${errorMessage(e)}`
         : `Failed to start self-calibration: ${errorMessage(e)}`);
       setIsRunning(false);

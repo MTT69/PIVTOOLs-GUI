@@ -240,7 +240,6 @@ export function foundLines(entries: DiagnosisEntry[]): string[] {
   return present.map((e) => `${e.label}: ${e.found}`);
 }
 
-/** `W×H`, or "unknown" when a transformer PIVTOOLs does not know hides the output size. */
 /**
  * The warnings to show, each once. A warning only some entries carry is prefixed by
  * their labels, as `foundLines` does for differing facts.
@@ -258,6 +257,7 @@ export function warningLines(entries: DiagnosisEntry[]): string[] {
     labels.length === entries.length ? w : `${labels.join(', ')}: ${w}`);
 }
 
+/** `W×H`, or "unknown" when a transformer PIVTOOLs does not know hides the output size. */
 export function formatSize(s: StreamInfo): string {
   return s.width === null || s.height === null ? 'unknown' : `${s.width}×${s.height}`;
 }
@@ -270,6 +270,9 @@ export interface ImageTypeDefaults {
   pair_stride: number;
   start_index: number;
 }
+
+/** Image types whose images are frames inside a container file, not one file each. */
+export const CONTAINER_FRAME_TYPES: ReadonlySet<string> = new Set(['cine', 'pivraw']);
 
 /** The Setup Image Type dropdown rule. The only image-type→preset rule in the GUI. */
 export function imageTypeDefaults(imageType: string, currentStartIndex: number): ImageTypeDefaults {

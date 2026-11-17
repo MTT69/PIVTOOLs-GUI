@@ -9,10 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, XCircle } from "lucide-react";
-import { parsePairCount } from '@/lib/pairCount';
-
-/** Image types whose images are frames inside a container file, not one file each. */
-const CONTAINER_FRAME_TYPES = new Set(["cine", "pivraw"]);
+import { PairStatus, pairStatus as readPairStatus } from '@/lib/pairCount';
+import { CONTAINER_FRAME_TYPES } from '@/lib/sourceDiagnosis';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ColormapSelect from "@/components/shared/ColormapSelect";
 import {
@@ -119,15 +117,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // --- Derived State (memoized for performance) ---
   // The backend's pair count, or why there is none. A refused .pivraw run (or a count
   // that breaks the contract) blocks Run: the job start would refuse it anyway.
-  const pairStatus = useMemo((): { pairs: number | null; error: string | null } => {
-    try {
-      const pc = parsePairCount(config?.images);
-      if (pc.state === 'refused') return { pairs: null, error: pc.error };
-      return { pairs: pc.state === 'counted' ? pc.pairs : null, error: null };
-    } catch (e) {
-      return { pairs: null, error: `The pair count from the backend is unreadable: ${errorMessage(e)}` };
-    }
-  }, [config?.images]);
+  const pairStatus = useMemo((): PairStatus => readPairStatus(config?.images), [config?.images]);
   const sourcePaths = useMemo(() => config?.paths?.source_paths || [], [config]);
   const basePaths = useMemo(() => config?.paths?.base_paths || [], [config]);
   const activePaths = settings.activePaths;

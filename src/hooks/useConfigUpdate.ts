@@ -15,9 +15,9 @@ import {
   CameraIdentities,
   NO_IDENTITIES,
   agreedIdentities,
-  identitiesFromStreams,
+  recordingIdentities,
 } from '@/lib/cameraIdentity';
-import { assertNoServerOnlyKeys, mergeImagesUpdate } from '@/lib/pairCount';
+import { assertNoServerOnlyKeys, isCount, mergeImagesUpdate } from '@/lib/pairCount';
 
 /** Validation result for a single pattern (A or B) of one camera */
 export interface PatternValidation {
@@ -114,7 +114,6 @@ const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams',
 
 const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
-const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
 /** `[W, H]` or null. */
 export function parseImageSize(raw: unknown, where: string): [number, number] | null {
@@ -260,10 +259,7 @@ const IDLE_FIELDS = {
  * names no camera, and then no camera number is named for Setup as a whole.
  */
 export function sourceIdentities(sources: SourceValidation[]): CameraIdentities {
-  return agreedIdentities(sources.map((s) => {
-    const streams = s.cameras.find((c) => c.streams !== null)?.streams;
-    return streams ? identitiesFromStreams(streams) : NO_IDENTITIES;
-  }));
+  return agreedIdentities(sources.map((s) => recordingIdentities(s.cameras)));
 }
 
 /** Gather pattern index `i` over every (source, camera). */

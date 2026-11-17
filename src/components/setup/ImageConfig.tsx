@@ -14,8 +14,8 @@ import { ValidationAlert } from "./ValidationAlert";
 import { InlineSuggestion } from "./SourceDiagnosis";
 import { cn } from "@/lib/utils";
 import { errorMessage, fetchJson } from "@/lib/api";
-import { parsePairCount } from "@/lib/pairCount";
-import { PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
+import { pairStatus } from "@/lib/pairCount";
+import { CONTAINER_FRAME_TYPES, PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
 
 // Helper to detect image type from format pattern
 const detectImageType = (pattern: string | undefined): string => {
@@ -370,16 +370,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const totalPairs = numPairs * loops;
   // A .pivraw run is paired by trigger, so its count is the backend's aligned pairs, not
   // the stride formula over num_images (which is only a cap for it).
-  let pivrawPairs: { pairs: number | null; error: string | null } = { pairs: null, error: null };
-  if (imageType === "pivraw") {
-    try {
-      const pc = parsePairCount(config.images);
-      pivrawPairs = pc.state === "refused" ? { pairs: null, error: pc.error }
-        : { pairs: pc.state === "counted" ? pc.pairs : null, error: null };
-    } catch (e) {
-      pivrawPairs = { pairs: null, error: `The pair count from the backend is unreadable: ${errorMessage(e)}` };
-    }
-  }
+  const pivrawPairs = imageType === "pivraw" ? pairStatus(config.images) : { pairs: null, error: null };
   const getPairsDescription = (): string => {
     if (imageType === "pivraw") {
       if (pivrawPairs.error !== null) return "No pairs: the run cannot be paired (see the preview below)";
@@ -463,7 +454,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                   </p>
                 </div>
                 <div>
-                  <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : imageType === "cine" || imageType === "pivraw" ? "Number of frames" : "Number of Image Files"}</Label>
+                  <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : CONTAINER_FRAME_TYPES.has(imageType) ? "Number of frames" : "Number of Image Files"}</Label>
                   <Input
                     id="num_images"
                     type="text" inputMode="numeric"
@@ -495,7 +486,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                           saveConfig({ numImages: val });
                         }}
                       >
-                        Detected: {validation.detectedCount} {imageType === "cine" || imageType === "pivraw" ? "frames" : "files"} — click to apply
+                        Detected: {validation.detectedCount} {CONTAINER_FRAME_TYPES.has(imageType) ? "frames" : "files"} — click to apply
                       </button>
                     ) : (
                       <p className="text-xs text-green-600 mt-1">
