@@ -70,6 +70,8 @@ export function useSelfCalibration(
   const [applyFilters, setApplyFilters] = useState(true);
   const [basePathIdx, setBasePathIdx] = useState(0);
   const [basePaths, setBasePaths] = useState<string[]>([]);
+  // Why the PIV dataset list could not be loaded, or null.
+  const [basePathsError, setBasePathsError] = useState<string | null>(null);
 
   // Job
   const [jobId, setJobId] = useState<string | null>(null);
@@ -101,14 +103,20 @@ export function useSelfCalibration(
     [board, cam1, cam2, sourcePathIdx],
   );
 
-  // Load base_paths (PIV datasets) once so the user can pick the source frames.
+  // Load the PIV datasets (config paths.base_paths) once so the user can pick the source
+  // frames. A failure is shown in the panel: without the list the picker cannot be trusted.
   useEffect(() => {
     (async () => {
       try {
         const cfg = await fetchJson('/backend/config');
-        if (Array.isArray(cfg.base_paths)) setBasePaths(cfg.base_paths);
-      } catch {
-        /* base paths are best-effort; default to index 0 */
+        const paths = cfg?.paths?.base_paths;
+        if (!Array.isArray(paths) || !paths.every((p: unknown) => typeof p === 'string')) {
+          throw new Error('the config has no paths.base_paths list');
+        }
+        setBasePaths(paths);
+        setBasePathsError(null);
+      } catch (e) {
+        setBasePathsError(`Could not load the PIV datasets: ${errorMessage(e)}`);
       }
     })();
   }, []);
@@ -239,7 +247,7 @@ export function useSelfCalibration(
     windowSize, setWindowSize,
     overlap, setOverlap,
     applyFilters, setApplyFilters,
-    basePathIdx, setBasePathIdx, basePaths,
+    basePathIdx, setBasePathIdx, basePaths, basePathsError,
 
     // Job
     jobId, jobStatus, jobProgress, isRunning, runSelfCalibration,
