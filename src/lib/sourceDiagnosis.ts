@@ -291,9 +291,11 @@ export function imageTypeDefaults(imageType: string, currentStartIndex: number):
         frame_stride: 1, pair_stride: 2, start_index: 1,
       };
     case 'lavision_set':
+      // A .set numbers its entries from 1, and the backend refuses start_index 0 for it,
+      // so a 0 left over from a file-based setup is not carried over.
       return {
         image_type: imageType, image_format: ['data.set'], pairing_preset: 'pre_paired',
-        frame_stride: 0, pair_stride: 1, start_index: currentStartIndex,
+        frame_stride: 0, pair_stride: 1, start_index: 1,
       };
     case 'lavision_im7':
       return {

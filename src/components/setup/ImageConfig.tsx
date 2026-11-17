@@ -14,7 +14,7 @@ import { ValidationAlert } from "./ValidationAlert";
 import { InlineSuggestion } from "./SourceDiagnosis";
 import { cn } from "@/lib/utils";
 import { errorMessage, fetchJson } from "@/lib/api";
-import { pairStatus } from "@/lib/pairCount";
+import { pairStatus, strideFramePairs } from "@/lib/pairCount";
 import { CONTAINER_FRAME_TYPES, PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
 
 // Helper to detect image type from format pattern
@@ -56,13 +56,6 @@ const deriveABPatterns = (pattern: string): [string, string] => {
 
 /** A whole image count of at least 1, as typed (no blanks, signs, decimals or exponents). */
 const isPositiveInt = (s: string): boolean => /^\d+$/.test(s.trim()) && Number(s) >= 1;
-
-// Compute number of frame pairs from strides
-const computeNumPairs = (numImages: number, fs: number, ps: number): number => {
-  if (fs === 0) return numImages;
-  if (ps <= 0) return 0;
-  return Math.max(0, Math.floor((numImages - 1 - fs) / ps) + 1);
-};
 
 interface SaveOverrides {
   numImages?: string;
@@ -330,7 +323,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
 
   // Compute pairs for display
   const n = parseInt(numImages || '0');
-  const numPairs = computeNumPairs(n, frameStride, pairStride);
+  const numPairs = strideFramePairs(n, frameStride, pairStride);
 
   // Get preset options for current image type
   const getPresetOptions = () => {

@@ -19,6 +19,20 @@ export type PairCount =
   /** The reader refused the run; `error` is its message, to show in place of a count. */
   | { state: 'refused'; error: string };
 
+/**
+ * Pairs `numImages` frames give under the pairing strides, for the Setup page to show
+ * as the user types. The backend's `Config._stride_pair_count` is the same formula:
+ * pair n's frame B is `start_index + (n - 1) * pairStride + frameStride`, so n runs to
+ * `(numImages - 1 - frameStride) // pairStride + 1`. `frameStride` 0 (pre-paired) is
+ * the same formula, every `pairStride`-th entry. Strides the backend refuses by name
+ * (a negative frame stride, a pair stride below 1) give 0; the refusal itself arrives
+ * as `images.pairing_error`.
+ */
+export function strideFramePairs(numImages: number, frameStride: number, pairStride: number): number {
+  if (frameStride < 0 || pairStride < 1) return 0;
+  return Math.max(0, Math.floor((numImages - 1 - frameStride) / pairStride) + 1);
+}
+
 /** A whole number >= 0. */
 export const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
