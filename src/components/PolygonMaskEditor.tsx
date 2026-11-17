@@ -5,6 +5,9 @@ import { usePanZoom } from "@/hooks/usePanZoom";
 import { fetchJson, errorMessage, ApiError } from "@/lib/api";
 import { CameraName } from "@/components/shared/CameraName";
 
+// /backend/load_mask answers 404 when the camera has no saved mask: the editor starts fresh.
+const NO_MASK_STATUS = 404;
+
 type DType = "uint8" | "uint16";
 type RawImage = {
 	data: Uint8Array | Uint16Array;
@@ -81,6 +84,9 @@ function PolygonMaskEditor({
 	const [active, setActive] = useState<number>(0);
 	const [isLoadingMask, setIsLoadingMask] = useState<boolean>(true); // Start true until load completes
 	const [maskLoadStatus, setMaskLoadStatus] = useState<'loading' | 'loaded' | 'none' | 'error'>('loading');
+	// The backend's reason when an existing mask cannot be loaded (e.g. 409: the saved mask
+	// does not fit this camera's images). Shown above the canvas, never swallowed.
+	const [maskLoadError, setMaskLoadError] = useState<string>('');
 
 	// Load existing mask on mount or when meta changes
 	useEffect(() => {
@@ -95,6 +101,7 @@ function PolygonMaskEditor({
 			// empty "Polygon 1" ready to draw into); repopulated below only if a mask is found.
 			setPolys([{ points: [], closed: false, name: "Polygon 1" }]);
 			setActive(0);
+			setMaskLoadError('');
 
 			if (meta?.basePathIdx === undefined || !meta?.camera) {
 				setIsLoadingMask(false);
@@ -131,15 +138,15 @@ function PolygonMaskEditor({
 				}
 			} catch (error) {
 				if (cancelled) return;
-				if (error instanceof ApiError) {
-					// No existing mask found - that's fine, start with empty
-					console.log('No existing mask found, starting fresh');
+				if (error instanceof ApiError && error.status === NO_MASK_STATUS) {
+					// No saved mask for this camera: the editor's normal start.
 					setMaskLoadStatus('none');
 					return;
 				}
-				console.error('Error loading existing mask:', errorMessage(error));
+				// Any other failure (409: the saved mask does not fit this camera) is shown, and the
+				// user draws a new mask on an empty canvas.
+				setMaskLoadError(errorMessage(error));
 				setMaskLoadStatus('error');
-				// Continue with empty polygons on error
 			} finally {
 				if (!cancelled) setIsLoadingMask(false);
 			}
@@ -780,6 +787,13 @@ function PolygonMaskEditor({
 			{!isLoadingMask && maskLoadStatus === 'none' && (
 				<div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-xs text-gray-600">
 					<strong>No existing mask found</strong> - Click on the image to start creating a polygon mask.
+				</div>
+			)}
+
+			{/* Saved mask refused (e.g. wrong size for this camera): the backend's reason */}
+			{!isLoadingMask && maskLoadStatus === 'error' && (
+				<div role="alert" className="mb-2 px-3 py-2 bg-amber-50 border border-amber-300 rounded-md text-xs text-amber-800">
+					<strong>The saved mask could not be loaded.</strong> {maskLoadError}
 				</div>
 			)}
 
