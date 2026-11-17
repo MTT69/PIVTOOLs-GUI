@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { usePanZoom } from "@/hooks/usePanZoom";
-import { fetchJson, errorMessage, ApiError } from "@/lib/api";
+import { fetchJson, postJson, errorMessage, ApiError } from "@/lib/api";
 import { CameraName } from "@/components/shared/CameraName";
 
 // /backend/load_mask answers 404 when the camera has no saved mask: the editor starts fresh.
@@ -26,6 +26,7 @@ function PolygonMaskEditor({
 	camera,
 	onCameraChange,
 	imageLoading,
+	onMaskSaved,
 }: {
 	raw?: RawImage | null;
 	src?: string | null;
@@ -37,6 +38,8 @@ function PolygonMaskEditor({
 	camera?: number;
 	onCameraChange?: (cam: number) => void;
 	imageLoading?: boolean;
+	/** Called after the backend accepted a save, so the page can re-check the mask status. */
+	onMaskSaved?: () => void;
 }) {
 	// containerRef is the fixed viewport (overflow-hidden) that box zoom / pan
 	// operate within.
@@ -87,6 +90,8 @@ function PolygonMaskEditor({
 	// The backend's reason when an existing mask cannot be loaded (e.g. 409: the saved mask
 	// does not fit this camera's images). Shown above the canvas, never swallowed.
 	const [maskLoadError, setMaskLoadError] = useState<string>('');
+	// The backend's reason when a save is refused (400: the mask is not the camera's size).
+	const [maskSaveError, setMaskSaveError] = useState<string>('');
 
 	// Load existing mask on mount or when meta changes
 	useEffect(() => {
@@ -102,6 +107,7 @@ function PolygonMaskEditor({
 			setPolys([{ points: [], closed: false, name: "Polygon 1" }]);
 			setActive(0);
 			setMaskLoadError('');
+			setMaskSaveError('');
 
 			if (meta?.basePathIdx === undefined || !meta?.camera) {
 				setIsLoadingMask(false);
@@ -561,14 +567,12 @@ function PolygonMaskEditor({
 		};
 
 		try {
-			await fetch(arrayPostUrl, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload)
-			});
-			console.log(`Auto-saved mask with ${polygons.length} polygon(s)`);
+			await postJson(arrayPostUrl, payload);
+			setMaskSaveError('');
+			onMaskSaved?.();
 		} catch (error) {
-			console.error('Failed to auto-save mask:', error);
+			// e.g. 400: the mask is not this camera's image size. Shown, never swallowed.
+			setMaskSaveError(errorMessage(error));
 		}
 	};
 
@@ -794,6 +798,13 @@ function PolygonMaskEditor({
 			{!isLoadingMask && maskLoadStatus === 'error' && (
 				<div role="alert" className="mb-2 px-3 py-2 bg-amber-50 border border-amber-300 rounded-md text-xs text-amber-800">
 					<strong>The saved mask could not be loaded.</strong> {maskLoadError}
+				</div>
+			)}
+
+			{/* Save refused by the backend: the mask was not written */}
+			{maskSaveError && (
+				<div role="alert" className="mb-2 px-3 py-2 bg-red-50 border border-red-300 rounded-md text-xs text-red-800">
+					<strong>The mask was not saved.</strong> {maskSaveError}
 				</div>
 			)}
 
