@@ -10,7 +10,9 @@ import {
   foundLines,
   formatSize,
   mergeSuggestions,
+  warningLines,
 } from "@/lib/sourceDiagnosis";
+import { AlertTriangle } from "lucide-react";
 
 type OnApply = (apply: SuggestionApply) => Promise<void>;
 
@@ -136,9 +138,11 @@ export function SourceDiagnosis({
   const { applying, error, run } = useApply(onApply, entries);
   const [expanded, setExpanded] = useState(false);
 
-  if (busy || entries.length === 0 || entries.every((e) => e.found === null)) return null;
+  if (busy || entries.length === 0 ||
+      entries.every((e) => e.found === null && e.warnings.length === 0)) return null;
 
   const lines = foundLines(entries);
+  const warnings = warningLines(entries);
   const streams = entries.find((e) => e.streams !== null)?.streams ?? null;
   const [top, ...rest] = mergeSuggestions(entries);
 
@@ -146,6 +150,16 @@ export function SourceDiagnosis({
     <div className="space-y-1">
       {lines.map((line, i) => (
         <p key={i} className="text-xs text-muted-foreground">{line}</p>
+      ))}
+      {warnings.map((w, i) => (
+        <p
+          key={`w${i}`}
+          role="alert"
+          className="flex items-start gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
+          <span>{w}</span>
+        </p>
       ))}
       {streams && <StreamTable streams={streams} />}
       {top && <SuggestionRow suggestion={top} applying={applying} run={run} />}

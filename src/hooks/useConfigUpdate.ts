@@ -110,7 +110,7 @@ export function entryLabel(sourceCount: number, sourceIdx: number, camera: numbe
  * Keys of a camera detail on the backend's short branches (blank source, per-camera
  * exception): the list fields and flags of the full detail are absent there.
  */
-const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams'];
+const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams', 'warnings'];
 
 const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -174,7 +174,7 @@ function parsePatternValidation(raw: unknown): PatternValidation {
     found_count: pv.found_count as PatternValidation['found_count'],
     error: pv.error,
     // Pattern suggestions share the diagnosis suggestion shape; validate them with its guard.
-    suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null }).suggestions,
+    suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null, warnings: [] }).suggestions,
     sample_files: pv.sample_files,
   };
 }
@@ -276,7 +276,7 @@ function summarisePatterns(sources: SourceValidation[]): PatternSummary[] {
     }));
     const failed = entries.filter((e) => !e.pv.valid);
     const failedEntries: DiagnosisEntry[] = failed.map((e) => ({
-      label: e.label, found: null, suggestions: e.pv.suggestions, streams: null,
+      label: e.label, found: null, suggestions: e.pv.suggestions, streams: null, warnings: [],
     }));
     return {
       index: i,

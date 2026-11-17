@@ -54,7 +54,7 @@ export interface CameraValidationResult extends Diagnosis {
 
 /** A camera whose validation failed before the backend answered: no diagnosis. */
 export const emptyValidation = (error: string): CameraValidationResult => ({
-  valid: false, found_count: 0, error, found: null, suggestions: [], streams: null,
+  valid: false, found_count: 0, error, found: null, suggestions: [], streams: null, warnings: [],
 });
 
 /**

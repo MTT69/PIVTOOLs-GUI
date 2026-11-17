@@ -779,8 +779,8 @@ export function useCalibrationCore({
   const diagnosis = useMemo((): DiagnosisEntry[] => {
     if (!validation) return [];
     return cameras.filter(cam => validation.cameras[cam]).map(cam => {
-      const { found, suggestions, streams } = validation.cameras[cam];
-      return { label: `Camera ${cam}`, found, suggestions, streams };
+      const { found, suggestions, streams, warnings } = validation.cameras[cam];
+      return { label: `Camera ${cam}`, found, suggestions, streams, warnings };
     });
   }, [validation, cameras]);
 

@@ -468,8 +468,8 @@ export const ScaleFactorCalibration: React.FC<ScaleFactorCalibrationProps> = ({
 
   const diagnosis = useMemo((): DiagnosisEntry[] => {
     if (!validation) return [];
-    const { found, suggestions, streams } = validation;
-    return [{ label: `Camera ${camera}`, found, suggestions, streams }];
+    const { found, suggestions, streams, warnings } = validation;
+    return [{ label: `Camera ${camera}`, found, suggestions, streams, warnings }];
   }, [validation, camera]);
 
   // Flush rather than drop the pending save: cancel the timer, wait for a save already in flight,

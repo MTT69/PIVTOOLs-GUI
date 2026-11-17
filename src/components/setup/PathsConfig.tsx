@@ -45,6 +45,7 @@ export default function PathsConfig({ config, updateConfig, validation, reloadCo
         found: c.found,
         suggestions: c.suggestions,
         streams: c.streams,
+        warnings: c.warnings,
       })),
     })),
     [validation.sources],

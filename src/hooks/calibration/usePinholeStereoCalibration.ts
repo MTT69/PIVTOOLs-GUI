@@ -170,7 +170,7 @@ export function usePinholeStereoCalibration(
   const validation: StereoValidationResult | null = useMemo(() => {
     const v = core.validation;
     if (!v) return null;
-    const missing: CameraValidationResult = { valid: false, found_count: 0, found: null, suggestions: [], streams: null };
+    const missing: CameraValidationResult = { valid: false, found_count: 0, found: null, suggestions: [], streams: null, warnings: [] };
     return {
       valid: v.valid,
       cam1: v.cameras[cam1] ?? missing,

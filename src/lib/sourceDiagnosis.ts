@@ -63,6 +63,8 @@ export interface Diagnosis {
   found: string | null;
   suggestions: Suggestion[];
   streams: StreamInfo[] | null;
+  /** What should look like a warning, not a fact (e.g. DaVis's SetIsSuspicious flag). */
+  warnings: string[];
 }
 
 export interface DiagnosisEntry extends Diagnosis {
@@ -182,18 +184,20 @@ function parseSuggestion(raw: unknown): Suggestion {
 /** Validate a /validate response. Missing keys mean the backend is older than this GUI. */
 export function parseDiagnosis(raw: unknown): Diagnosis {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
-  if (!('found' in r) || !('suggestions' in r) || !('streams' in r)) {
+  if (!('found' in r) || !('suggestions' in r) || !('streams' in r) || !('warnings' in r)) {
     throw new Error(
-      'validate response has no "found"/"suggestions"/"streams"; the backend is older than this GUI',
+      'validate response has no "found"/"suggestions"/"streams"/"warnings"; the backend is older than this GUI',
     );
   }
   if (r.found !== null && !isString(r.found)) throw new Error('"found" must be a string or null');
   if (!Array.isArray(r.suggestions)) throw new Error('"suggestions" must be a list');
   if (r.streams !== null && !Array.isArray(r.streams)) throw new Error('"streams" must be a list or null');
+  if (!isArrayOf(r.warnings, isString)) throw new Error('"warnings" must be a list of strings');
   return {
     found: r.found,
     suggestions: r.suggestions.map(parseSuggestion),
     streams: r.streams === null ? null : (r.streams as unknown[]).map(parseStream),
+    warnings: r.warnings,
   };
 }
 
@@ -237,6 +241,23 @@ export function foundLines(entries: DiagnosisEntry[]): string[] {
 }
 
 /** `W×H`, or "unknown" when a transformer PIVTOOLs does not know hides the output size. */
+/**
+ * The warnings to show, each once. A warning only some entries carry is prefixed by
+ * their labels, as `foundLines` does for differing facts.
+ */
+export function warningLines(entries: DiagnosisEntry[]): string[] {
+  const holders = new Map<string, string[]>();
+  for (const e of entries) {
+    for (const w of e.warnings) {
+      const labels = holders.get(w) ?? [];
+      if (!labels.includes(e.label)) labels.push(e.label);
+      holders.set(w, labels);
+    }
+  }
+  return [...holders].map(([w, labels]) =>
+    labels.length === entries.length ? w : `${labels.join(', ')}: ${w}`);
+}
+
 export function formatSize(s: StreamInfo): string {
   return s.width === null || s.height === null ? 'unknown' : `${s.width}×${s.height}`;
 }
