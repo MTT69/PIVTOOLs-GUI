@@ -12,7 +12,7 @@ import {
   mergeSuggestions,
   warningLines,
 } from "@/lib/sourceDiagnosis";
-import { AlertTriangle } from "lucide-react";
+import { WarningLines } from "@/components/shared/WarningLines";
 
 type OnApply = (apply: SuggestionApply) => Promise<void>;
 
@@ -151,16 +151,7 @@ export function SourceDiagnosis({
       {lines.map((line, i) => (
         <p key={i} className="text-xs text-muted-foreground">{line}</p>
       ))}
-      {warnings.map((w, i) => (
-        <p
-          key={`w${i}`}
-          role="alert"
-          className="flex items-start gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
-        >
-          <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
-          <span>{w}</span>
-        </p>
-      ))}
+      <WarningLines lines={warnings} />
       {streams && <StreamTable streams={streams} />}
       {top && <SuggestionRow suggestion={top} applying={applying} run={run} />}
       {rest.length > 0 && (

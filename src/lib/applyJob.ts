@@ -15,8 +15,9 @@
  *   out_dirs            output directory of each dataset unit.
  *   dt_used / dt_source per unit, aligned with out_dirs: the dt (s) that unit is calibrated with
  *                       and whether it came from the request or the model-stamped dt.
- *   warnings            problems that did not stop the run (e.g. a run config that could not be
- *                       stamped); the vectors were still written.
+ *   warnings            problems that did not stop the run: pairings applied without a frame
+ *                       comparison (from the start), a run config that could not be stamped;
+ *                       the vectors were still written. Always a list; required.
  *   n_cameras / cameras the cameras the job calibrates (every camera of a mono rig).
  *
  * A `cancelled` job stopped at the user's request; frames already written stay on disk,
@@ -43,8 +44,13 @@ export interface ApplyJobStatus {
   dt_used?: number[];
   /** Per-unit dt origin, aligned with `out_dirs`. */
   dt_source?: ('request' | 'model')[];
-  /** Non-fatal problems the run reported; undefined when the backend sent none. */
+  /** Non-fatal problems the run reported; undefined only on the client's placeholder statuses. */
   warnings?: string[];
+  /**
+   * Set on the client's own status for a start the backend refused (HTTP 400, or
+   * `success: false`): no job exists and nothing was written. `error` is the reason.
+   */
+  refused?: boolean;
   /**
    * Stereo frame pairs skipped because the reconstructed pass is absent in one or both
    * cameras. Written by the backend on completion; `readApplyJobStatus` reads 0 until then
@@ -59,6 +65,37 @@ export interface ApplyJobStatus {
 }
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === 'string');
+
+/**
+ * The `warnings` list of a calibration job response. Required: a response without one
+ * comes from a backend older than this GUI, so it fails loudly instead of hiding them.
+ */
+export function parseWarnings(data: any, where: string): string[] {
+  if (!isStringArray(data?.warnings)) {
+    throw new Error(`${where} has no "warnings" list; the backend is older than this GUI`);
+  }
+  return data.warnings;
+}
+
+/** A calibration job start: the job and its warnings, or why the backend refused it. */
+export type JobStart =
+  | { kind: 'started'; jobId: string; warnings: string[] }
+  | { kind: 'refused'; error: string };
+
+/**
+ * Read a 2xx start response (`/calibration/apply`, `/calibration/self_cal/run`). Some
+ * refusals still answer 200 with `success: false`; a 400 refusal is thrown by `postJson`
+ * and the caller treats it the same way. Throws on a malformed success.
+ */
+export function parseJobStart(data: any, where: string): JobStart {
+  if (data?.success !== true) {
+    return { kind: 'refused', error: typeof data?.error === 'string' && data.error ? data.error : `${where} did not start` };
+  }
+  if (typeof data.job_id !== 'string' || data.job_id === '') {
+    throw new Error(`${where} answered success without a job id`);
+  }
+  return { kind: 'started', jobId: data.job_id, warnings: parseWarnings(data, where) };
+}
 const isNumberArray = (v: unknown): v is number[] => Array.isArray(v) && v.every(x => typeof x === 'number');
 
 /**
@@ -81,7 +118,7 @@ export function readApplyJobStatus(data: any): ApplyJobStatus {
     out_dirs: data.out_dirs,
     dt_used: data.dt_used,
     dt_source: data.dt_source,
-    warnings: isStringArray(data.warnings) ? data.warnings : undefined,
+    warnings: parseWarnings(data, 'apply status'),
     n_frames_skipped: typeof data.n_frames_skipped === 'number' ? data.n_frames_skipped : 0,
     n_cameras: typeof data.n_cameras === 'number' ? data.n_cameras : undefined,
     cameras: isNumberArray(data.cameras) ? data.cameras : undefined,

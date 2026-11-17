@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { ApiError, fetchJson, postJson, errorMessage } from '@/lib/api';
+import { parseJobStart, parseWarnings } from '@/lib/applyJob';
 
 /** One iteration of the self-calibration convergence history. */
 export interface SC2IterationRecord {
@@ -81,6 +82,9 @@ export function useSelfCalibration(
   const [status, setStatus] = useState<SC2Status | null>(null);
   const [figures, setFigures] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The run's non-fatal warnings (particle frames not compared with the model's frame),
+  // from the start response, then from each status poll; kept after the run settles.
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -144,6 +148,7 @@ export function useSelfCalibration(
     async (id: string) => {
       try {
         const data = await fetchJson(`/backend/calibration/self_cal/status/${id}`);
+        setWarnings(parseWarnings(data, 'self-calibration status'));
         setJobStatus(data.status);
         setJobProgress(data.progress ?? 0);
         if (data.status === 'completed') {
@@ -188,6 +193,7 @@ export function useSelfCalibration(
 
   const runSelfCalibration = useCallback(async () => {
     setError(null);
+    setWarnings([]);
     setResult(null);
     setIsRunning(true);
     setJobProgress(0);
@@ -201,15 +207,21 @@ export function useSelfCalibration(
         overlap,
         apply_filters: applyFilters,
       });
-      if (!data.success) {
-        setError(data.error || 'Failed to start self-calibration');
+      const start = parseJobStart(data, 'self-calibration');
+      if (start.kind === 'refused') {
+        setError(`Self-calibration refused; no job started. ${start.error}`);
         setIsRunning(false);
         return;
       }
-      setJobId(data.job_id);
-      pollRef.current = setInterval(() => pollJob(data.job_id), 1000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to start self-calibration');
+      setWarnings(start.warnings);
+      setJobId(start.jobId);
+      pollRef.current = setInterval(() => pollJob(start.jobId), 1000);
+    } catch (e) {
+      // A 400 is a refusal (a .pivraw run the reader refuses, particle images in another
+      // frame than the model's); its text names the camera, the image and the field.
+      setError(e instanceof ApiError && e.status === 400
+        ? `Self-calibration refused; no job started. ${errorMessage(e)}`
+        : `Failed to start self-calibration: ${errorMessage(e)}`);
       setIsRunning(false);
     }
   }, [locator, basePathIdx, nImages, windowSize, overlap, applyFilters, pollJob]);
@@ -236,7 +248,7 @@ export function useSelfCalibration(
     result, status, figures, figureUrl,
     hasSelfCal: status?.has_self_calibration ?? false,
 
-    // Error + actions
-    error, checkStatus,
+    // Error, warnings + actions
+    error, warnings, checkStatus,
   };
 }

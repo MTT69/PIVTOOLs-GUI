@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { WarningLines } from "@/components/shared/WarningLines";
 import { useSelfCalibration } from "@/hooks/useSelfCalibration";
 
 interface SelfCalibrationSectionProps {
@@ -139,11 +140,13 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
         )}
 
         {sc.error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" role="alert">
             <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>{sc.error}</AlertDescription>
+            <AlertDescription className="whitespace-pre-wrap break-words">{sc.error}</AlertDescription>
           </Alert>
         )}
+
+        <WarningLines lines={sc.warnings} />
 
         {/* Results */}
         {sc.result && (
