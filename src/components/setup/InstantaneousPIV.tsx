@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { X, Plus, ChevronUp, ChevronDown, Save, Settings, ChevronRight, Cpu, HardDrive, Filter, CheckCircle, Sliders } from "lucide-react";
 import { useInstantaneousPivConfig } from "@/hooks/useInstantaneousPivConfig";
-import { useConfigUpdate } from "@/hooks/useConfigUpdate";
+import { mergeUpdatedSections, useConfigUpdate } from "@/hooks/useConfigUpdate";
 import { useFftSizes } from "@/hooks/useFftSizes";
 import { WindowSizeSelect } from "./WindowSizeSelect";
 import ImagePairViewer from "@/components/viewer/ImagePairViewer";
@@ -57,12 +57,13 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
 
     const result = await updateConfigBackend(payload);
 
-    if (result.success && result.data?.updated?.paths) {
-      updateConfig(['paths'], { ...config.paths, ...result.data.updated.paths });
+    if (result.success && result.data?.updated) {
+      // The response carries the pair status too: a camera change can re-pair the run.
+      mergeUpdatedSections(result.data.updated, config, updateConfig);
     } else if (result.error) {
       console.error('Failed to save camera selection:', result.error);
     }
-  }, [updateConfigBackend, updateConfig, config.paths]);
+  }, [updateConfigBackend, updateConfig, config]);
 
   useEffect(() => {
     // Sync selected cameras state with config

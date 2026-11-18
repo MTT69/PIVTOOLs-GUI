@@ -3,6 +3,8 @@
  */
 
 import { Diagnosis } from '@/lib/sourceDiagnosis';
+import { errorMessage } from '@/lib/api';
+import { CameraIdentities, NO_IDENTITIES, recordingIdentities } from '@/lib/cameraIdentity';
 
 /** Parse a numeric form field; null when empty/invalid (the field is unset). */
 export const numOrNull = (s: string): number | null => {
@@ -53,8 +55,23 @@ export interface CameraValidationResult extends Diagnosis {
 
 /** A camera whose validation failed before the backend answered: no diagnosis. */
 export const emptyValidation = (error: string): CameraValidationResult => ({
-  valid: false, found_count: 0, error, found: null, suggestions: [], streams: null,
+  valid: false, found_count: 0, error, found: null, suggestions: [], streams: null, warnings: [],
 });
+
+/**
+ * The camera identities of one calibration recording, from the first camera whose
+ * result carries the `.set` stream table (every camera of one recording shares it).
+ * `error` is set, and the identities empty, when the table breaks the contract.
+ */
+export function calibrationIdentities(
+  results: readonly CameraValidationResult[],
+): { identities: CameraIdentities; error?: string } {
+  try {
+    return { identities: recordingIdentities(results) };
+  } catch (e) {
+    return { identities: NO_IDENTITIES, error: `Camera labels unreadable: ${errorMessage(e)}` };
+  }
+}
 
 /** Validation of every camera the tab works on, keyed by camera number. */
 export interface CalibrationValidation {
@@ -64,6 +81,8 @@ export interface CalibrationValidation {
   matching_count: number;
   /** First camera error, for the summary alert. */
   error?: string;
+  /** Cameras named by this calibration recording's own labels (empty without labels). */
+  cameraIdentities: CameraIdentities;
 }
 
 /**

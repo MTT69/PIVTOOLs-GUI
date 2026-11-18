@@ -4,11 +4,15 @@ import { errorMessage } from "@/lib/api";
 import {
   DiagnosisEntry,
   MergedSuggestion,
+  StreamInfo,
+  StreamRole,
   SuggestionApply,
   foundLines,
   formatSize,
   mergeSuggestions,
+  warningLines,
 } from "@/lib/sourceDiagnosis";
+import { WarningLines } from "@/components/shared/WarningLines";
 
 type OnApply = (apply: SuggestionApply) => Promise<void>;
 
@@ -79,6 +83,49 @@ function SuggestionRow({
   );
 }
 
+const ROLE_TEXT: Record<StreamRole, string> = { A: "A", B: "B", "": "single" };
+
+/**
+ * A `.set` recording's streams. With the recording's own camera labels, each row also
+ * names DaVis's camera, its model and its id (which carries the serial), and whether
+ * the stream is frame A, frame B or a single-frame camera's one stream.
+ */
+function StreamTable({ streams }: { streams: StreamInfo[] }) {
+  const labelled = streams.some((s) => s.label !== null);
+  const headers = ["Stream", "Prefix", "Size", "Encoding", "Camera",
+    ...(labelled ? ["DaVis label", "Model", "Camera id (serial)", "Frame"] : [])];
+  return (
+    <table className="text-xs text-muted-foreground">
+      <thead>
+        <tr className="text-left">
+          {headers.map((h) => (
+            <th key={h} className="pr-4 font-medium">{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {streams.map((s) => (
+          <tr key={s.index}>
+            <td className="pr-4">{s.index}</td>
+            <td className="pr-4">{s.prefix}</td>
+            <td className="pr-4">{formatSize(s)}</td>
+            <td className="pr-4">{s.decoder}</td>
+            <td className="pr-4">{s.camera === null ? "—" : s.camera}</td>
+            {labelled && (
+              <>
+                <td className="pr-4">{s.label ?? "—"}</td>
+                <td className="pr-4">{s.model ?? "—"}</td>
+                <td className="pr-4">{s.camera_id ?? "—"}</td>
+                <td className="pr-4">{s.role === null ? "—" : ROLE_TEXT[s.role]}</td>
+              </>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export function SourceDiagnosis({
   entries,
   onApply,
@@ -91,9 +138,11 @@ export function SourceDiagnosis({
   const { applying, error, run } = useApply(onApply, entries);
   const [expanded, setExpanded] = useState(false);
 
-  if (busy || entries.length === 0 || entries.every((e) => e.found === null)) return null;
+  if (busy || entries.length === 0 ||
+      entries.every((e) => e.found === null && e.warnings.length === 0)) return null;
 
   const lines = foundLines(entries);
+  const warnings = warningLines(entries);
   const streams = entries.find((e) => e.streams !== null)?.streams ?? null;
   const [top, ...rest] = mergeSuggestions(entries);
 
@@ -102,28 +151,8 @@ export function SourceDiagnosis({
       {lines.map((line, i) => (
         <p key={i} className="text-xs text-muted-foreground">{line}</p>
       ))}
-      {streams && (
-        <table className="text-xs text-muted-foreground">
-          <thead>
-            <tr className="text-left">
-              {["Stream", "Prefix", "Size", "Encoding", "Camera"].map((h) => (
-                <th key={h} className="pr-4 font-medium">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {streams.map((s) => (
-              <tr key={s.index}>
-                <td className="pr-4">{s.index}</td>
-                <td className="pr-4">{s.prefix}</td>
-                <td className="pr-4">{formatSize(s)}</td>
-                <td className="pr-4">{s.decoder}</td>
-                <td className="pr-4">{s.camera === null ? "—" : s.camera}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <WarningLines lines={warnings} />
+      {streams && <StreamTable streams={streams} />}
       {top && <SuggestionRow suggestion={top} applying={applying} run={run} />}
       {rest.length > 0 && (
         <>

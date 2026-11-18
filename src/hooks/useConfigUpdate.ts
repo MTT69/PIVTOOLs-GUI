@@ -11,6 +11,14 @@ import {
   mergeSuggestions,
   parseDiagnosis,
 } from '@/lib/sourceDiagnosis';
+import {
+  CameraIdentities,
+  NO_IDENTITIES,
+  agreedIdentities,
+  recordingIdentities,
+} from '@/lib/cameraIdentity';
+import { assertNoServerOnlyKeys, isCount, mergeImagesUpdate } from '@/lib/pairCount';
+import { PivrawAlignmentReport, parsePivrawAlignment } from '@/lib/pivrawAlignment';
 
 /** Validation result for a single pattern (A or B) of one camera */
 export interface PatternValidation {
@@ -34,6 +42,12 @@ export interface SetupCameraResult extends Diagnosis {
   color_detected: boolean;
   indexing_warning: string | null;
   ab_count_warning: string | null;
+  /** [width, height] of this camera's images; cameras may differ. Null when unread. */
+  image_size: [number, number] | null;
+  /** Plain-words facts about how the images are read (e.g. no dark was subtracted). */
+  notes: string[];
+  /** `.pivraw` only: how the run was paired by trigger. */
+  pivraw_alignment: PivrawAlignmentReport | null;
 }
 
 /** The validation of one configured source path. */
@@ -70,6 +84,8 @@ export interface ValidationState {
   abCountWarning: string | null;
   /** Files found in the folder of each failing camera (shown on validation error for context) */
   sampleFiles: { label: string; files: string[] }[];
+  /** Cameras named by the recordings' own labels, where every source agrees. */
+  cameraIdentities: CameraIdentities;
 }
 
 /** `Camera N` with one source, `Source S, camera N` otherwise. */
@@ -81,10 +97,19 @@ export function entryLabel(sourceCount: number, sourceIdx: number, camera: numbe
  * Keys of a camera detail on the backend's short branches (blank source, per-camera
  * exception): the list fields and flags of the full detail are absent there.
  */
-const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams'];
+const SHORT_DETAIL_KEYS = ['status', 'error', 'found', 'suggestions', 'streams', 'warnings'];
 
 const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/** `[W, H]` or null. */
+export function parseImageSize(raw: unknown, where: string): [number, number] | null {
+  if (raw === null) return null;
+  if (Array.isArray(raw) && raw.length === 2 && raw.every((v) => isCount(v) && v > 0)) {
+    return [raw[0], raw[1]];
+  }
+  throw new Error(`${where}: "image_size" must be [width, height] or null`);
+}
 
 function parsePatternValidation(raw: unknown): PatternValidation {
   if (typeof raw !== 'object' || raw === null) throw new Error('Pattern validation must be an object');
@@ -106,7 +131,7 @@ function parsePatternValidation(raw: unknown): PatternValidation {
     found_count: pv.found_count as PatternValidation['found_count'],
     error: pv.error,
     // Pattern suggestions share the diagnosis suggestion shape; validate them with its guard.
-    suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null }).suggestions,
+    suggestions: parseDiagnosis({ found: null, suggestions: pv.suggestions, streams: null, warnings: [] }).suggestions,
     sample_files: pv.sample_files,
   };
 }
@@ -123,17 +148,23 @@ function parseCameraResult(camera: number, raw: unknown): SetupCameraResult {
     return {
       ...diagnosis, camera, status: d.status, error: d.error,
       sample_files: [], pattern_validations: [], color_detected: false, indexing_warning: null, ab_count_warning: null,
+      image_size: null, notes: [], pivraw_alignment: null,
     };
   }
   if (
     !isStringList(d.sample_files) || !Array.isArray(d.pattern_validations) || typeof d.color_detected !== 'boolean' ||
-    !isStringOrNull(d.indexing_warning) || !isStringOrNull(d.ab_count_warning)
+    !isStringOrNull(d.indexing_warning) || !isStringOrNull(d.ab_count_warning) || !isStringList(d.notes) ||
+    !('image_size' in d) || !('pivraw_alignment' in d)
   ) {
     throw new Error(
-      `camera_${camera}: needs "sample_files", "pattern_validations", "color_detected", "indexing_warning" and "ab_count_warning"`,
+      `camera_${camera}: needs "sample_files", "pattern_validations", "color_detected", "indexing_warning", ` +
+      '"ab_count_warning", "notes", "image_size" and "pivraw_alignment"; the backend may be older than this GUI',
     );
   }
   return {
+    image_size: parseImageSize(d.image_size, `camera_${camera}`),
+    notes: d.notes,
+    pivraw_alignment: parsePivrawAlignment(d.pivraw_alignment, `camera_${camera}`),
     ...diagnosis,
     camera,
     status: d.status,
@@ -177,7 +208,17 @@ async function validateSource(sourceIdx: number, sourcePath: string): Promise<So
 
 const IDLE_FIELDS = {
   sources: [], patterns: [], detectedCount: null, abCountWarning: null, sampleFiles: [],
+  cameraIdentities: NO_IDENTITIES,
 } satisfies Partial<ValidationState>;
+
+/**
+ * The camera identities every source agrees on. Each source is one recording, so its
+ * cameras share one stream table; a source with no table (not a labelled `.set`)
+ * names no camera, and then no camera number is named for Setup as a whole.
+ */
+export function sourceIdentities(sources: SourceValidation[]): CameraIdentities {
+  return agreedIdentities(sources.map((s) => recordingIdentities(s.cameras)));
+}
 
 /** Gather pattern index `i` over every (source, camera). */
 function summarisePatterns(sources: SourceValidation[]): PatternSummary[] {
@@ -189,7 +230,7 @@ function summarisePatterns(sources: SourceValidation[]): PatternSummary[] {
     }));
     const failed = entries.filter((e) => !e.pv.valid);
     const failedEntries: DiagnosisEntry[] = failed.map((e) => ({
-      label: e.label, found: null, suggestions: e.pv.suggestions, streams: null,
+      label: e.label, found: null, suggestions: e.pv.suggestions, streams: null, warnings: [],
     }));
     return {
       index: i,
@@ -249,7 +290,24 @@ function aggregate(sources: SourceValidation[]): ValidationState {
     detectedCount: sources[0].detectedCount,
     abCountWarning: cameras.find((c) => c.ab_count_warning !== null)?.ab_count_warning ?? null,
     sampleFiles,
+    cameraIdentities: sourceIdentities(sources),
   };
+}
+
+type UpdateConfig = (path: string[], value: unknown) => void;
+
+/**
+ * Merge an update_config response's `updated` sections into the local config. Images
+ * go through `mergeImagesUpdate`, so a stale `pairing_error` never outlives a fresh
+ * pair count. Every Setup save that posts `paths` or `images` merges through here.
+ */
+export function mergeUpdatedSections(
+  updated: { images?: Record<string, unknown>; paths?: Record<string, unknown> },
+  config: { images?: Record<string, unknown>; paths?: Record<string, unknown> },
+  updateConfig: UpdateConfig,
+): void {
+  if (updated.images) updateConfig(['images'], mergeImagesUpdate(config.images ?? {}, updated.images));
+  if (updated.paths) updateConfig(['paths'], { ...config.paths, ...updated.paths });
 }
 
 /**
@@ -266,13 +324,14 @@ export async function applySetupSuggestion(
   },
 ): Promise<void> {
   const { config, sourcePathIdx, updateConfig } = target;
-  const json = await postJson('/backend/update_config', buildSetupPayload(apply, config, sourcePathIdx));
+  const payload = buildSetupPayload(apply, config, sourcePathIdx);
+  assertNoServerOnlyKeys(payload as Record<string, unknown>);
+  const json = await postJson('/backend/update_config', payload);
   const updated = json?.updated;
   if (typeof updated !== 'object' || updated === null) {
     throw new Error('update_config response has no "updated"');
   }
-  if (updated.images) updateConfig(['images'], { ...config.images, ...updated.images });
-  if (updated.paths) updateConfig(['paths'], { ...config.paths, ...updated.paths });
+  mergeUpdatedSections(updated, config, updateConfig);
 }
 
 export function useConfigUpdate() {
@@ -287,6 +346,7 @@ export function useConfigUpdate() {
     setUpdateError(null);
 
     try {
+      assertNoServerOnlyKeys(payload);
       const json = await postJson('/backend/update_config', payload);
       return { success: true, data: json };
     } catch (e) {

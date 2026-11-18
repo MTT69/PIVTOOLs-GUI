@@ -1,5 +1,6 @@
 import React from "react";
 import { Loader2, XCircle } from "lucide-react";
+import { WarningLines } from "@/components/shared/WarningLines";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ApplyJobStatus, formatDtUsed, formatDuration, isApplyJobActive } from "@/lib/applyJob";
@@ -93,12 +94,7 @@ export const CalibrationJobProgress: React.FC<CalibrationJobProgressProps> = ({
   );
 };
 
-/** The job's non-fatal warnings, one per line; nothing when the backend sent none. */
-export const ApplyJobWarnings: React.FC<{ job: ApplyJobStatus }> = ({ job }) => {
-  if (!job.warnings || job.warnings.length === 0) return null;
-  return (
-    <ul className="text-xs text-amber-700 mt-1 list-disc pl-5">
-      {job.warnings.map((w, i) => <li key={i}>{w}</li>)}
-    </ul>
-  );
-};
+/** The job's non-fatal warnings, amber like the source-diagnosis warnings; nothing when none. */
+export const ApplyJobWarnings: React.FC<{ job: ApplyJobStatus }> = ({ job }) => (
+  <WarningLines lines={job.warnings ?? []} />
+);

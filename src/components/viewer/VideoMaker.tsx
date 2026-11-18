@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVideoMaker } from "@/hooks/useVideoMaker";
 import ColormapSelect from "@/components/shared/ColormapSelect";
+import { CameraSelectItem } from "@/components/shared/CameraName";
 
 // Variable label formatting helper (matches VectorViewer formatting)
 const formatVarLabel = (varName: string, group: 'piv' | 'stats'): string => {
@@ -192,7 +193,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                           {cameraOptions.map((c, i) => {
                             const camNum = c.replace('Cam', '');
                             return (
-                              <SelectItem key={i} value={camNum}>{c}</SelectItem>
+                              <CameraSelectItem key={i} camera={Number(camNum)} value={camNum} />
                             );
                           })}
                         </SelectContent>

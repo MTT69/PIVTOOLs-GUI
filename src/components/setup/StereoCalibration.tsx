@@ -26,6 +26,8 @@ import {
   WorldFrameControls,
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { CameraIdentityProvider } from "@/contexts/CameraIdentityContext";
 
 interface StereoCalibrationProps {
   config: any;
@@ -243,6 +245,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
   }, [detectionsCam1, detectionsCam2, activeCam, cam1]);
 
   return (
+    <CameraIdentityProvider identities={calibration.cameraIdentities}>
     <div className="space-y-6">
       {/* Main Configuration Card */}
       <Card>
@@ -288,9 +291,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <SelectTrigger><SelectValue placeholder="Select camera 1" /></SelectTrigger>
                 <SelectContent>
                   {cameraOptions.map((c) => (
-                    <SelectItem key={c} value={String(c)} disabled={c === cam2}>
-                      {`Camera ${c}`}
-                    </SelectItem>
+                    <CameraSelectItem key={c} camera={c} disabled={c === cam2} />
                   ))}
                 </SelectContent>
               </Select>
@@ -301,9 +302,7 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
                 <SelectTrigger><SelectValue placeholder="Select camera 2" /></SelectTrigger>
                 <SelectContent>
                   {cameraOptions.map((c) => (
-                    <SelectItem key={c} value={String(c)} disabled={c === cam1}>
-                      {`Camera ${c}`}
-                    </SelectItem>
+                    <CameraSelectItem key={c} camera={c} disabled={c === cam1} />
                   ))}
                 </SelectContent>
               </Select>
@@ -808,5 +807,6 @@ export const StereoCalibration: React.FC<StereoCalibrationProps> = ({
         cam1={cam1} cam2={cam2} board="dotboard"
         hasModel={hasModel} sourcePathIdx={sourcePathIdx} />
     </div>
+    </CameraIdentityProvider>
   );
 };

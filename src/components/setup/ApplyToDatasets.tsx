@@ -160,11 +160,25 @@ export const ApplyJobsStatus: React.FC<ApplyJobsStatusProps> = ({ jobs, basePath
           </div>
         );
       }
+      if (job.status.status === "failed" && job.status.refused) {
+        // Stays until the next apply of these targets: the reason names the camera, the
+        // image and the field with both values, so it must not vanish like a toast.
+        return (
+          <div key={key} role="alert" className="mt-4 p-3 border-2 rounded border-red-400 bg-red-50 text-red-800 text-sm">
+            <div className="font-semibold">
+              <AlertTriangle className="h-4 w-4 inline mr-2" />
+              {title} refused for {targets}. No job started and nothing was written.
+            </div>
+            <div className="mt-1 whitespace-pre-wrap break-words">{job.status.error}</div>
+          </div>
+        );
+      }
       if (job.status.status === "failed") {
         return (
           <div key={key} className="mt-4 p-3 border rounded bg-red-50 text-red-700 text-sm">
             <AlertTriangle className="h-4 w-4 inline mr-2" />
-            {title} failed for {targets}: {job.status.error || "unknown error"}
+            {title} failed for {targets}: <span className="whitespace-pre-wrap">{job.status.error || "unknown error"}</span>
+            <ApplyJobWarnings job={job.status} />
           </div>
         );
       }

@@ -111,10 +111,14 @@ const SelectLabel = React.forwardRef<
 ));
 SelectLabel.displayName = SelectPrimitive.Label.displayName;
 
+/**
+ * `detail` is a second, smaller line shown in the open list only: it sits outside
+ * `ItemText`, which is the part the trigger repeats once the item is chosen.
+ */
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & { detail?: React.ReactNode }
+>(({ className, children, detail, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
@@ -129,7 +133,14 @@ const SelectItem = React.forwardRef<
       </SelectPrimitive.ItemIndicator>
     </span>
 
-    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    {detail === undefined ? (
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    ) : (
+      <span className="flex flex-col">
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+        <span className="text-xs text-muted-foreground">{detail}</span>
+      </span>
+    )}
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;

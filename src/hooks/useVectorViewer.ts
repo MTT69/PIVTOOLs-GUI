@@ -1,6 +1,14 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { normalizeVarName } from "@/lib/plotUnits";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
+import { parsePairCount } from "@/lib/pairCount";
+
+/**
+ * The frame count while the config has none (the run cannot be paired, or the count is
+ * unreadable). Zero hides the frame slider and stops the next-frame button, so no frame
+ * or frame-count job is asked for by a number nobody computed.
+ */
+const NO_FRAME_COUNT = 0;
 
 interface UseVectorViewerProps {
   backendUrl: string;
@@ -349,6 +357,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const isSelectingRef = useRef(false);
   const selectionStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [maxFrameCount, setMaxFrameCount] = useState<number>(9999);
+  // Why the config has no frame-pair count (a refused .pivraw run), or null.
+  const [pairingError, setPairingError] = useState<string | null>(null);
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
   // Track available runs for validation
   const [availableRuns, setAvailableRuns] = useState<number[]>([]);
@@ -1694,14 +1704,23 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     async function fetchConfig() {
       try {
         const json = await fetchJson(`${backendUrl}/config`);
-        const backendNumFramePairs = json.images?.num_frame_pairs;
-        if (Number.isFinite(backendNumFramePairs) && backendNumFramePairs > 0) {
-          setMaxFrameCount(backendNumFramePairs);
+        const pc = parsePairCount(json.images);
+        if (pc.state === 'refused') {
+          // The vectors on disk may still be viewed; say why the frame count is unknown.
+          setPairingError(pc.error);
+          setMaxFrameCount(NO_FRAME_COUNT);
+          return;
+        }
+        setPairingError(null);
+        if (pc.state === 'counted' && pc.pairs > 0) {
+          setMaxFrameCount(pc.pairs);
           // Clamp index if it exceeds the new maxFrameCount
-          setIndex(prev => Math.min(prev, backendNumFramePairs));
+          setIndex(prev => Math.min(prev, pc.pairs));
         }
       } catch (err) {
         console.error("Error fetching config for frame count:", errorMessage(err));
+        setPairingError(`The frame count could not be read: ${errorMessage(err)}`);
+        setMaxFrameCount(NO_FRAME_COUNT);
       }
     }
     fetchConfig();
@@ -2201,6 +2220,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     magVisible,
     magPos,
     maxFrameCount,
+    pairingError,
     MAG_SIZE,
     dpr,
     handlePlayToggle,

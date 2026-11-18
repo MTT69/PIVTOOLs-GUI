@@ -24,6 +24,8 @@ import {
   getWorldFrameMarkers,
 } from "@/components/setup/WorldFrameSetup";
 import { JointMultiCamera } from "@/components/setup/JointMultiCamera";
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { CameraIdentityProvider } from "@/contexts/CameraIdentityContext";
 
 interface DotboardCalibrationProps {
   config: any;
@@ -216,6 +218,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
 
 
   return (
+    <CameraIdentityProvider identities={calibration.cameraIdentities}>
     <div className="space-y-6">
       {/* Main Configuration Card */}
       <Card>
@@ -454,7 +457,7 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
                   </SelectTrigger>
                   <SelectContent>
                     {cameraOptions.map((c) => (
-                      <SelectItem key={c} value={String(c)}>Camera {c}</SelectItem>
+                      <CameraSelectItem key={c} camera={c} />
                     ))}
                   </SelectContent>
                 </Select>
@@ -842,5 +845,6 @@ export const DotboardCalibration: React.FC<DotboardCalibrationProps> = ({
         </Card>
       )}
     </div>
+    </CameraIdentityProvider>
   );
 };

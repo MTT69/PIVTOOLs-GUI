@@ -22,9 +22,16 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { ApiError, errorMessage, fetchJson, postJson } from "@/lib/api";
-import { ApplyJobStatus, isApplyJobActive, readApplyJobStatus } from "@/lib/applyJob";
+import {
+  ApplyJobStatus,
+  JobStart,
+  POLL_INTERVAL_MS,
+  isApplyJobActive,
+  isStartRefusal,
+  parseJobStart,
+  readApplyJobStatus,
+} from "@/lib/applyJob";
 
-const POLL_INTERVAL_MS = 1000;
 const STALE_JOB_HOURS = 24;
 const STORAGE_KEY = "pivtools_calibration_jobs";
 
@@ -89,6 +96,11 @@ export function slotKey(slot: CalibrationJobSlot): string {
 
 function failedStatus(error: string): ApplyJobStatus {
   return { status: "failed", progress: 0, processed_units: 0, total_units: null, error };
+}
+
+/** The backend refused to start: no job exists and nothing was written. */
+function refusedStatus(error: string): ApplyJobStatus {
+  return { ...failedStatus(error), refused: true };
 }
 
 /*
@@ -237,17 +249,25 @@ export function CalibrationJobProvider({ children }: { children: ReactNode }) {
       cancelRequested: false,
       cancelError: null,
     });
+    let start: JobStart;
     try {
-      const data = await postJson("/backend/calibration/apply", payload);
-      if (!data.job_id) {
-        setSlot(key, { status: failedStatus(data.error || "Apply did not start (no job id returned)") });
-        return;
-      }
-      storeJob(key, data.job_id);
-      setSlot(key, { jobId: data.job_id });
+      start = parseJobStart(await postJson("/backend/calibration/apply", payload), "calibration apply");
     } catch (e) {
-      setSlot(key, { status: failedStatus(errorMessage(e)) });
+      // A 400 is a refusal (a .pivraw run the reader refuses, a calibration frame mismatch):
+      // its text names the camera, the image and the field. Anything else failed outright.
+      setSlot(key, { status: isStartRefusal(e) ? refusedStatus(errorMessage(e)) : failedStatus(errorMessage(e)) });
+      return;
     }
+    if (start.kind === "refused") {
+      setSlot(key, { status: refusedStatus(start.error) });
+      return;
+    }
+    storeJob(key, start.jobId);
+    // The start response's warnings (frames not compared) show at once; polls replace them.
+    setSlot(key, {
+      jobId: start.jobId,
+      status: { status: "starting", progress: 0, processed_units: 0, total_units: null, warnings: start.warnings },
+    });
   }, [setSlot]);
 
   const cancelApply = useCallback(async (slot: CalibrationJobSlot) => {

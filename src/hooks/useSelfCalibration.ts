@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { POLL_INTERVAL_MS, isStartRefusal, parseJobStart, parseWarnings } from '@/lib/applyJob';
 
 /** One iteration of the self-calibration convergence history. */
 export interface SC2IterationRecord {
@@ -69,6 +70,8 @@ export function useSelfCalibration(
   const [applyFilters, setApplyFilters] = useState(true);
   const [basePathIdx, setBasePathIdx] = useState(0);
   const [basePaths, setBasePaths] = useState<string[]>([]);
+  // Why the PIV dataset list could not be loaded, or null.
+  const [basePathsError, setBasePathsError] = useState<string | null>(null);
 
   // Job
   const [jobId, setJobId] = useState<string | null>(null);
@@ -81,6 +84,9 @@ export function useSelfCalibration(
   const [status, setStatus] = useState<SC2Status | null>(null);
   const [figures, setFigures] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The run's non-fatal warnings (particle frames not compared with the model's frame),
+  // from the start response, then from each status poll; kept after the run settles.
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -97,14 +103,20 @@ export function useSelfCalibration(
     [board, cam1, cam2, sourcePathIdx],
   );
 
-  // Load base_paths (PIV datasets) once so the user can pick the source frames.
+  // Load the PIV datasets (config paths.base_paths) once so the user can pick the source
+  // frames. A failure is shown in the panel: without the list the picker cannot be trusted.
   useEffect(() => {
     (async () => {
       try {
         const cfg = await fetchJson('/backend/config');
-        if (Array.isArray(cfg.base_paths)) setBasePaths(cfg.base_paths);
-      } catch {
-        /* base paths are best-effort; default to index 0 */
+        const paths = cfg?.paths?.base_paths;
+        if (!Array.isArray(paths) || !paths.every((p: unknown) => typeof p === 'string')) {
+          throw new Error('the config has no paths.base_paths list');
+        }
+        setBasePaths(paths);
+        setBasePathsError(null);
+      } catch (e) {
+        setBasePathsError(`Could not load the PIV datasets: ${errorMessage(e)}`);
       }
     })();
   }, []);
@@ -144,6 +156,7 @@ export function useSelfCalibration(
     async (id: string) => {
       try {
         const data = await fetchJson(`/backend/calibration/self_cal/status/${id}`);
+        setWarnings(parseWarnings(data, 'self-calibration status'));
         setJobStatus(data.status);
         setJobProgress(data.progress ?? 0);
         if (data.status === 'completed') {
@@ -188,6 +201,7 @@ export function useSelfCalibration(
 
   const runSelfCalibration = useCallback(async () => {
     setError(null);
+    setWarnings([]);
     setResult(null);
     setIsRunning(true);
     setJobProgress(0);
@@ -201,15 +215,21 @@ export function useSelfCalibration(
         overlap,
         apply_filters: applyFilters,
       });
-      if (!data.success) {
-        setError(data.error || 'Failed to start self-calibration');
+      const start = parseJobStart(data, 'self-calibration');
+      if (start.kind === 'refused') {
+        setError(`Self-calibration refused; no job started. ${start.error}`);
         setIsRunning(false);
         return;
       }
-      setJobId(data.job_id);
-      pollRef.current = setInterval(() => pollJob(data.job_id), 1000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to start self-calibration');
+      setWarnings(start.warnings);
+      setJobId(start.jobId);
+      pollRef.current = setInterval(() => pollJob(start.jobId), POLL_INTERVAL_MS);
+    } catch (e) {
+      // A 400 is a refusal (a .pivraw run the reader refuses, particle images in another
+      // frame than the model's); its text names the camera, the image and the field.
+      setError(isStartRefusal(e)
+        ? `Self-calibration refused; no job started. ${errorMessage(e)}`
+        : `Failed to start self-calibration: ${errorMessage(e)}`);
       setIsRunning(false);
     }
   }, [locator, basePathIdx, nImages, windowSize, overlap, applyFilters, pollJob]);
@@ -227,7 +247,7 @@ export function useSelfCalibration(
     windowSize, setWindowSize,
     overlap, setOverlap,
     applyFilters, setApplyFilters,
-    basePathIdx, setBasePathIdx, basePaths,
+    basePathIdx, setBasePathIdx, basePaths, basePathsError,
 
     // Job
     jobId, jobStatus, jobProgress, isRunning, runSelfCalibration,
@@ -236,7 +256,7 @@ export function useSelfCalibration(
     result, status, figures, figureUrl,
     hasSelfCal: status?.has_self_calibration ?? false,
 
-    // Error + actions
-    error, checkStatus,
+    // Error, warnings + actions
+    error, warnings, checkStatus,
   };
 }

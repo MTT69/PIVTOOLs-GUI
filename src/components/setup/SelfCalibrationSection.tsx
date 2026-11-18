@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { WarningLines } from "@/components/shared/WarningLines";
 import { useSelfCalibration } from "@/hooks/useSelfCalibration";
 
 interface SelfCalibrationSectionProps {
@@ -64,16 +65,24 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
               onValueChange={(v) => sc.setBasePathIdx(parseInt(v))}
             >
               <SelectTrigger className="h-8">
-                <SelectValue placeholder="base path 0" />
+                <SelectValue placeholder={sc.basePaths.length ? "Select a dataset" : "No PIV dataset"} />
               </SelectTrigger>
               <SelectContent>
-                {(sc.basePaths.length ? sc.basePaths : ["base path 0"]).map((p, i) => (
-                  <SelectItem key={i} value={String(i)}>
-                    {p.split("/").slice(-2).join("/") || `base path ${i}`}
+                {sc.basePaths.map((p, i) => (
+                  <SelectItem key={i} value={String(i)} title={p}>
+                    {p.split(/[\\/]/).filter(Boolean).slice(-2).join("/") || p}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {sc.basePathsError && (
+              <p role="alert" className="mt-1 text-xs text-red-600 whitespace-pre-wrap">{sc.basePathsError}</p>
+            )}
+            {!sc.basePathsError && sc.basePaths.length === 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                No PIV dataset (base path) is configured; add one in Setup.
+              </p>
+            )}
           </div>
           <div className="flex items-end gap-2 pb-1">
             <Switch id="sc-filters" checked={sc.applyFilters} onCheckedChange={sc.setApplyFilters} />
@@ -139,11 +148,13 @@ export const SelfCalibrationSection: React.FC<SelfCalibrationSectionProps> = ({
         )}
 
         {sc.error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" role="alert">
             <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>{sc.error}</AlertDescription>
+            <AlertDescription className="whitespace-pre-wrap break-words">{sc.error}</AlertDescription>
           </Alert>
         )}
+
+        <WarningLines lines={sc.warnings} />
 
         {/* Results */}
         {sc.result && (

@@ -3,6 +3,7 @@ import { errorMessage, fetchJson, postJson } from '@/lib/api';
 import { isApplyJobActive } from '@/lib/applyJob';
 import { DiagnosisEntry, SuggestionApply, calibrationWrites, parseDiagnosis } from '@/lib/sourceDiagnosis';
 import { withSourceAt } from '@/lib/sourcePath';
+import { NO_IDENTITIES } from '@/lib/cameraIdentity';
 import { CalibrationJobFamily, useCalibrationJobs } from '@/contexts/CalibrationJobContext';
 import {
   calibrationViewerRefreshKey,
@@ -21,6 +22,7 @@ import {
   SidecarSettings,
   ViewCount,
   autoViewCountText,
+  calibrationIdentities,
   emptyValidation,
   numOrNull,
   positiveIntOrNull,
@@ -339,14 +341,16 @@ export function useCalibrationCore({
       const counts = results.map(r => r.found_count);
       const countMismatch = mode === 'pair' && effNViews == null && results.every(r => r.valid)
         && counts.some(n => n !== counts[0]);
+      const ids = calibrationIdentities(results);
       const result: CalibrationValidation = {
-        valid: results.every(r => r.valid) && !countMismatch,
+        valid: results.every(r => r.valid) && !countMismatch && ids.error === undefined,
         cameras: byCam,
         matching_count: countMismatch ? 0 : Math.min(...counts),
         error: countMismatch
           ? `Camera ${cams[0]} has ${counts[0]} views, camera ${cams[1]} has ${counts[1]} -- `
             + 'calibration pairs views by index, so the counts must match'
-          : results.find(r => r.error)?.error,
+          : results.find(r => r.error)?.error ?? ids.error,
+        cameraIdentities: ids.identities,
       };
       setValidation(result);
       // One construction site for the viewer's cache namespace, shared by the warmup.
@@ -775,8 +779,8 @@ export function useCalibrationCore({
   const diagnosis = useMemo((): DiagnosisEntry[] => {
     if (!validation) return [];
     return cameras.filter(cam => validation.cameras[cam]).map(cam => {
-      const { found, suggestions, streams } = validation.cameras[cam];
-      return { label: `Camera ${cam}`, found, suggestions, streams };
+      const { found, suggestions, streams, warnings } = validation.cameras[cam];
+      return { label: `Camera ${cam}`, found, suggestions, streams, warnings };
     });
   }, [validation, cameras]);
 
@@ -865,6 +869,7 @@ export function useCalibrationCore({
     configLoaded, sourceEpoch,
     loadError: sourcesError ?? settingsError ?? modelLoadError,
     validation, validating, validateImages, viewerRefreshKey, diagnosis, applySuggestion,
+    cameraIdentities: validation?.cameraIdentities ?? NO_IDENTITIES,
     modelData, beginGenerate, setGeneratedModel, isGenerateCurrent, loadedWorldFrame, loadedWorldFrame2, modelLoading, loadModel, changedSinceGenerate,
     detections, detectionsStale, detectError, setDetectError, detecting, showOverlay, setShowOverlay,
     restoreDetections, detectFrame, detectAllViews,

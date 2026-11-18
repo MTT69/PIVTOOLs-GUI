@@ -11,6 +11,11 @@ import PolygonMaskEditor from "@/components/PolygonMaskEditor";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { basename } from "@/lib/utils";
 import * as Slider from '@radix-ui/react-slider';
+import { CameraSelectItem } from "@/components/shared/CameraName";
+import { fetchJson, errorMessage } from "@/lib/api";
+
+/** GET /backend/mask_status: the same mask check Run PIV and the PIV job make, for one camera. */
+type MaskStatus = { masking_enabled: boolean; mode: string; ok: boolean; message: string | null };
 
 type RawImage = {
 	data: Uint8Array | Uint16Array;
@@ -309,6 +314,20 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 		updatePredictorFill
 	} = useMaskingConfig(config?.masking, updateConfig!);
 
+	// Mask status for the selected dataset and camera. Re-checked when the camera, the dataset
+	// or the saved masking settings change, and after the editor saves a mask (maskSaves).
+	const [maskStatus, setMaskStatus] = useState<MaskStatus | null>(null);
+	const [maskStatusError, setMaskStatusError] = useState<string>('');
+	const [maskSaves, setMaskSaves] = useState(0);
+	useEffect(() => {
+		let cancelled = false;
+		const params = new URLSearchParams({ basepath_idx: String(basePathIdx), camera: String(camera) });
+		fetchJson(`/backend/mask_status?${params}`)
+			.then((s: MaskStatus) => { if (!cancelled) { setMaskStatus(s); setMaskStatusError(''); } })
+			.catch((e) => { if (!cancelled) { setMaskStatus(null); setMaskStatusError(errorMessage(e)); } });
+		return () => { cancelled = true; };
+	}, [basePathIdx, camera, config?.masking, maskSaves]);
+
 	// Local string state for inputs to allow empty values during editing
 	const [topInputValue, setTopInputValue] = useState(String(rectangularTop));
 	const [bottomInputValue, setBottomInputValue] = useState(String(rectangularBottom));
@@ -400,8 +419,8 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							<Select value={String(camera)} onValueChange={v => setCamera(Number(v))}>
 								<SelectTrigger id="camera"><SelectValue placeholder="Select camera" /></SelectTrigger>
 								<SelectContent>
-									{cameraOptions.map((c, i) => (
-										<SelectItem key={i} value={String(c)}>{c}</SelectItem>
+									{cameraOptions.map((c) => (
+										<CameraSelectItem key={c} camera={c} />
 									))}
 								</SelectContent>
 							</Select>
@@ -586,6 +605,18 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 				</CardContent>
 			</Card>
 
+			{/* Masking on and this camera's mask cannot be used: Run PIV will refuse it */}
+			{maskStatus && !maskStatus.ok && (
+				<div role="alert" className="px-3 py-2 bg-red-50 border border-red-300 rounded-md text-sm text-red-800">
+					<strong>Run PIV will refuse camera {camera}:</strong> {maskStatus.message}
+				</div>
+			)}
+			{maskStatusError && (
+				<div role="alert" className="px-3 py-2 bg-amber-50 border border-amber-300 rounded-md text-sm text-amber-800">
+					<strong>The mask status could not be checked.</strong> {maskStatusError}
+				</div>
+			)}
+
 			<div className="flex flex-col items-center mt-6">
 				{displayImg && maskingMode === 'polygon' && (
 					<div className="w-full space-y-4">
@@ -664,6 +695,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 							camera={camera}
 							onCameraChange={setCamera}
 							imageLoading={loading}
+							onMaskSaved={() => setMaskSaves(n => n + 1)}
 						/>
 					</div>
 				)}

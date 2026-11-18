@@ -12,6 +12,7 @@ import { unitsForVar, wallScaleDivisor } from "@/lib/plotUnits";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { isNanReasonVar, nanReasonEntries, nanReasonLabel, NanReasonPipeline } from "@/lib/nanReasonCodes";
 import { fetchJson, postJson, errorMessage } from "@/lib/api";
+import { CameraName, CameraSelectItem } from "@/components/shared/CameraName";
 
 // Available statistics options matching backend VectorStatisticsProcessor.VALID_STATISTICS
 const AVAILABLE_STATISTICS = {
@@ -380,6 +381,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     magVisible,
     magPos,
     maxFrameCount,
+    pairingError,
     handlePlayToggle,
     handleRender,
     handleImageClick,
@@ -438,6 +440,13 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     canCalculateStatistics,
     hasFrameNavigation,
   } = useVectorViewer({ backendUrl, config });
+
+  // Merging, statistics and apply-to-all-frames post the frame count; without one
+  // (the run cannot be paired) they stay off, and this says why.
+  const frameJobBlock = pairingError === null ? null : `Needs the frame count, which is unknown: ${pairingError}`;
+  const frameJobBlockLine = frameJobBlock === null ? null : (
+    <p className="text-xs text-red-600">{frameJobBlock}</p>
+  );
 
   // Which checkbox groups the Statistics/Diagnostics panel offers. Uncalibrated
   // runs compute correlation quality only — the quality channels exist in no
@@ -754,7 +763,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <SelectItem value="none" disabled>No cameras available</SelectItem>
                       ) : (
                         cameraOptions.map((c: number, i: number) => (
-                          <SelectItem key={i} value={String(c)}>Camera {c}</SelectItem>
+                          <CameraSelectItem key={i} camera={c} />
                         ))
                       )}
                     </SelectContent>
@@ -1397,6 +1406,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   )}
                 </div>
 
+                {pairingError && hasFrameNavigation && (
+                  <p className="text-xs text-red-600 w-full">
+                    The frame count is unknown because the run cannot be paired: {pairingError}
+                  </p>
+                )}
                 {/* Frame slider + numeric input - Hidden for ensemble, statistics, and mean variables */}
                 {maxFrameCount > 0 && hasFrameNavigation && (
                   <>
@@ -1718,9 +1732,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     />
                     )}
 
+                    {frameJobBlockLine}
                     <Button
                       onClick={calculateStatistics}
-                      disabled={calculating}
+                      disabled={calculating || frameJobBlock !== null}
+                      title={frameJobBlock ?? undefined}
                       className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                       size="sm"
                     >
@@ -1965,18 +1981,20 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                               }
                             }}
                           />
-                          Cam {cam}
+                          <CameraName camera={cam} compact />
                         </label>
                       ))}
                     </div>
                   )}
 
                   {/* Apply to all frames buttons */}
+                  {frameJobBlockLine}
                   <div className="flex items-center gap-3 pt-2 border-t border-purple-200">
                     <Button
                       size="default"
                       onClick={() => applyTransformationToAllFrames(appliedTransforms)}
-                      disabled={loading || appliedTransforms.length === 0 || transformCameras.length === 0}
+                      disabled={loading || appliedTransforms.length === 0 || transformCameras.length === 0 || frameJobBlock !== null}
+                      title={frameJobBlock ?? undefined}
                       className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -2064,7 +2082,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </SelectTrigger>
                           <SelectContent>
                             {cameraOptions.map((cam: number) => (
-                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                              <CameraSelectItem key={cam} camera={cam} />
                             ))}
                           </SelectContent>
                         </Select>
@@ -2087,7 +2105,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                             {cameraOptions.filter((cam: number) =>
                               cam >= (selectedMergeCameras.length > 0 ? selectedMergeCameras[0] : cameraOptions[0])
                             ).map((cam: number) => (
-                              <SelectItem key={cam} value={String(cam)}>Camera {cam}</SelectItem>
+                              <CameraSelectItem key={cam} camera={cam} />
                             ))}
                           </SelectContent>
                         </Select>
@@ -2097,12 +2115,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       </div>
                     </div>
 
+                    {frameJobBlockLine}
                     <div className="flex gap-2">
                       {/* Single-frame merge: only for instantaneous (ensemble has just 1 file) */}
                       {!isEnsemble && (
                         <Button
                           onClick={() => mergeVectors(index)}
-                          disabled={merging || selectedMergeCameras.length < 2}
+                          disabled={merging || selectedMergeCameras.length < 2 || frameJobBlock !== null}
+                          title={frameJobBlock ?? undefined}
                           className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2"
                           size="sm"
                         >
@@ -2111,7 +2131,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       )}
                       <Button
                         onClick={() => mergeVectors()}
-                        disabled={merging || selectedMergeCameras.length < 2}
+                        disabled={merging || selectedMergeCameras.length < 2 || frameJobBlock !== null}
+                        title={frameJobBlock ?? undefined}
                         className="flex-1 bg-green-700 hover:bg-green-800 text-white text-xs py-2"
                         size="sm"
                       >
