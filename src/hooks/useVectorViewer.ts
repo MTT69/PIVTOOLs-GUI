@@ -966,7 +966,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setAllVarsLoading(true);
     try {
       const basePath = effectiveDir;
-      if (!basePath) return;
+      if (!basePath) {
+        // No dataset selected: nothing to list, and an earlier dataset's error
+        // or variables no longer apply.
+        setAllVars(defaultGroupedVars);
+        setAllVarsError(null);
+        return;
+      }
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", "1"); // Just check frame 1 - vars are same across all frames
@@ -981,13 +987,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
       const json = await fetchJson(url);
-      const grouped: GroupedVariables = {
-        instantaneous: Array.isArray(json.instantaneous) ? json.instantaneous : [],
-        instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
-        mean_stats: Array.isArray(json.mean_stats) ? json.mean_stats : [],
-        ensemble: Array.isArray(json.ensemble) ? json.ensemble : [],
-        corr_quality: Array.isArray(json.corr_quality) ? json.corr_quality : [],
-      };
+      // check_all_vars answers every source's list, empty when the source is
+      // absent. A 200 missing one is a broken response, not "no variables".
+      const sources = Object.keys(defaultGroupedVars) as (keyof GroupedVariables)[];
+      const missing = sources.filter(source => !Array.isArray(json[source]));
+      if (missing.length > 0) {
+        throw new Error(`check_all_vars answered without ${missing.join(", ")}`);
+      }
+      const grouped = Object.fromEntries(
+        sources.map(source => [source, json[source] as string[]])
+      ) as unknown as GroupedVariables;
       setAllVars(grouped);
       setAllVarsError(null);
     } catch (e) {
@@ -1027,18 +1036,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const json = await fetchJson(url);
       // A superseded limits request must not overwrite the newer variable's range.
       if (limitsRequestIdRef.current !== requestId) return;
-      // Prefer robust percentile limits (p5/p95) so a single outlier vector
-      // can't stretch the colour range and wash out the field. Fall back to
-      // raw min/max only for older payloads that lack the percentiles.
-      if (typeof json.p5 === "number" && typeof json.p95 === "number") {
-        setLower(String(json.p5));
-        setUpper(String(json.p95));
-      } else if (typeof json.min === "number" && typeof json.max === "number") {
-        setLower(String(json.min));
-        setUpper(String(json.max));
-      } else {
-        throw new Error("check_limits answered without p5/p95 or min/max");
+      // Robust percentile limits (p5/p95), so a single outlier vector cannot
+      // stretch the colour range and wash out the field. check_limits always
+      // sends them; a response without them is an error, shown under the limits.
+      if (typeof json.p5 !== "number" || typeof json.p95 !== "number") {
+        throw new Error("check_limits answered without p5/p95");
       }
+      setLower(String(json.p5));
+      setUpper(String(json.p95));
       setLimitsError(null);
     } catch (err) {
       // Kept apart from the image `error`: a colour-range failure must not hide
@@ -1219,9 +1224,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // sensible global range on load and on variable switch, but does NOT re-fire on
   // manual lower/upper edits within the same variable — those are preserved.
   // Correlation-quality figures are rendered server-side and take no colour range.
+  // When no range is computed for this view, an earlier view's limits error no
+  // longer applies: it is cleared, and a request still in flight is superseded so
+  // it cannot write its result (or its error) into this view.
   useEffect(() => {
     if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
+    } else {
+      limitsRequestIdRef.current++;
+      setLimitsLoading(false);
+      setLimitsError(null);
     }
   }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
 

@@ -428,6 +428,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     allVarsError,
     fetchAllVars,
     limitsError,
+    parseVarType,
     // Derived feature flags
     isEnsemble,
     isMerged,
@@ -897,6 +898,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </>
                         )}
                       </>
+                    ) : allVarsError ? (
+                      // The list failed: offer nothing this dataset may not hold.
+                      <SelectItem value="unavailable" disabled>No variables (see error below)</SelectItem>
                     ) : (
                       // Fallback if no grouped vars loaded yet
                       <>
@@ -973,7 +977,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 size="sm"
                 variant="outline"
                 onClick={() => { void fetchLimits(); }}
-                disabled={limitsLoading}
+                // Correlation-quality figures are rendered server-side with no colour range.
+                disabled={limitsLoading || parseVarType(type).varSource === "corrq"}
               >
                 {limitsLoading ? "Getting..." : "Auto-Calculate"}
               </Button>
