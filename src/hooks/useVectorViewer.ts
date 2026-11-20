@@ -988,7 +988,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       };
       setAllVars(grouped);
     } catch (e) {
-      console.error("Error fetching all vars:", errorMessage(e));
+      // The backend names the result file it could not read; show it rather than
+      // leave the variable dropdown blank with no reason.
+      setError(`Variable list: ${errorMessage(e)}`);
     } finally {
       setAllVarsLoading(false);
     }
