@@ -319,6 +319,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Grouped variables for unified dropdown
   const [allVars, setAllVars] = useState<GroupedVariables>(defaultGroupedVars);
   const [allVarsLoading, setAllVarsLoading] = useState(false);
+  const [allVarsError, setAllVarsError] = useState<string | null>(null);
   const [datumMode, setDatumMode] = useState<boolean>(false);
   const [xOffset, setXOffset] = useState<string>("0");
   const [yOffset, setYOffset] = useState<string>("0");
@@ -987,10 +988,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         corr_quality: Array.isArray(json.corr_quality) ? json.corr_quality : [],
       };
       setAllVars(grouped);
+      setAllVarsError(null);
     } catch (e) {
-      // The backend names the result file it could not read; show it rather than
-      // leave the variable dropdown blank with no reason.
-      setError(`Variable list: ${errorMessage(e)}`);
+      // The backend names the result file it could not read. Kept apart from the
+      // image `error` so it neither hides the rendered image nor stops playback,
+      // and an image fetch does not clear it. The previous dataset's variables
+      // are dropped so the dropdown never offers variables this one lacks.
+      setAllVars(defaultGroupedVars);
+      setAllVarsError(errorMessage(e));
     } finally {
       setAllVarsLoading(false);
     }
@@ -2206,6 +2211,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // Grouped variables for unified dropdown
     allVars,
     allVarsLoading,
+    allVarsError,
     fetchAllVars,
     datumMode,
     setDatumMode,

@@ -425,6 +425,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     // Grouped variables for unified dropdown
     allVars,
     allVarsLoading,
+    allVarsError,
     fetchAllVars,
     // Derived feature flags
     isEnsemble,
@@ -904,6 +905,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     )}
                   </SelectContent>
                 </Select>
+                {allVarsError && (
+                  <p className="text-sm text-red-700 mt-1">Variable list: {allVarsError}</p>
+                )}
               </div>
 
               {/* Colormap */}

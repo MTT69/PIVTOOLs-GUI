@@ -159,6 +159,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     instantaneous_stats: [],
   });
   const [variablesLoading, setVariablesLoading] = useState<boolean>(false);
+  const [variablesError, setVariablesError] = useState<string | null>(null);
 
   // Other selection state
   const [type, setType] = useState<string>('ux');
@@ -330,9 +331,13 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
           setType(data.variables[0]?.name || 'ux');
         }
       }
+      setVariablesError(null);
     } catch (error) {
-      console.error('Error checking available variables:', errorMessage(error));
-      // Keep default variables on error
+      // The backend names the result file it could not read. Show it and offer
+      // no variables, rather than a default list this dataset may not hold.
+      setAvailableVariables([]);
+      setGroupedVariables({ instantaneous: [], instantaneous_stats: [] });
+      setVariablesError(errorMessage(error));
     } finally {
       setVariablesLoading(false);
     }
@@ -779,6 +784,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     availableVariables,
     groupedVariables,
     variablesLoading,
+    variablesError,
     // Batch state (new)
     paths,
     activePaths,
