@@ -427,6 +427,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     allVarsLoading,
     allVarsError,
     fetchAllVars,
+    limitsError,
     // Derived feature flags
     isEnsemble,
     isMerged,
@@ -977,6 +978,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 {limitsLoading ? "Getting..." : "Auto-Calculate"}
               </Button>
             </div>
+            {limitsError && (
+              <p className="text-sm text-red-700">Colour range: {limitsError}</p>
+            )}
 
             {/* X/Y Axis Limits */}
             <div className="flex items-end gap-4 flex-wrap">

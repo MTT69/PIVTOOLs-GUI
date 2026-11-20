@@ -320,6 +320,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [allVars, setAllVars] = useState<GroupedVariables>(defaultGroupedVars);
   const [allVarsLoading, setAllVarsLoading] = useState(false);
   const [allVarsError, setAllVarsError] = useState<string | null>(null);
+  const [limitsError, setLimitsError] = useState<string | null>(null);
   const [datumMode, setDatumMode] = useState<boolean>(false);
   const [xOffset, setXOffset] = useState<string>("0");
   const [yOffset, setYOffset] = useState<string>("0");
@@ -1011,11 +1012,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("base_path", basePath);
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      params.set("type_name", getTypeNameFromDataSource(dataSource));
+      // The prefixed dropdown name: check_limits reads the source's own files from it.
       params.set("var", type);
-      // Add stereo params when viewing stereo data
+      // Same location as the image request for this view: ensemble views use the
+      // ensemble camera pair (fetchEnsembleImage), the rest the instantaneous one.
       if (isStereoData) {
         params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
+        const cameraPair = isEnsemble ? stereoEnsPair : stereoInstPair;
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_limits?${params.toString()}`;
@@ -1032,14 +1037,17 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         setLower(String(json.min));
         setUpper(String(json.max));
       } else {
-        console.warn("check_limits returned unexpected payload", json);
+        throw new Error("check_limits answered without p5/p95 or min/max");
       }
+      setLimitsError(null);
     } catch (err) {
-      console.error("Error fetching limits:", errorMessage(err));
+      // Kept apart from the image `error`: a colour-range failure must not hide
+      // the rendered image. The backend names the file it could not use.
+      if (limitsRequestIdRef.current === requestId) setLimitsError(errorMessage(err));
     } finally {
       if (limitsRequestIdRef.current === requestId) setLimitsLoading(false);
     }
-  }, [effectiveDir, camera, merged, type, backendUrl, setLower, setUpper, isStereoData, stereoInstPair]);
+  }, [effectiveDir, camera, merged, isUncalibrated, dataSource, getTypeNameFromDataSource, isEnsemble, type, backendUrl, setLower, setUpper, isStereoData, stereoInstPair, stereoEnsPair]);
 
   const fetchAvailableRuns = useCallback(async () => {
     try {
@@ -1210,11 +1218,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Keyed to source/variable/camera/merged (via fetchLimits), so it recomputes a
   // sensible global range on load and on variable switch, but does NOT re-fire on
   // manual lower/upper edits within the same variable — those are preserved.
+  // Correlation-quality figures are rendered server-side and take no colour range.
   useEffect(() => {
-    if (availabilityReady && effectiveDir) {
+    if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
     }
-  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits]);
+  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
 
   // Auto-render when we have a valid configuration
   // Only set hasRendered here for meanMode; non-mean modes wait for
@@ -2213,6 +2222,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     allVarsLoading,
     allVarsError,
     fetchAllVars,
+    limitsError,
     datumMode,
     setDatumMode,
     xOffset,
