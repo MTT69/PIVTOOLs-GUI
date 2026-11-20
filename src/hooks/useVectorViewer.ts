@@ -368,6 +368,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
   // Track available runs for validation
   const [availableRuns, setAvailableRuns] = useState<number[]>([]);
+  // The location whose runs (check_runs) have resolved. A data-source switch keeps
+  // the previous source's run until they do, so the colour-range request waits for
+  // runsKey to match: otherwise it asks for a pass the new source may not have.
+  const runsKey = `${effectiveDir}|${dataSource}|${camera}|${stereoInstPairKey}|${stereoEnsPairKey}`;
+  const [resolvedRunsKey, setResolvedRunsKey] = useState<string | null>(null);
+  const latestRunsKeyRef = useRef<string>("");
   // Separate state for run input to allow empty string while typing
   const [runInput, setRunInput] = useState<string>("1");
   // Error message for invalid run
@@ -421,23 +427,34 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // The type folder (instantaneous / ensemble) of the current view.
   const viewTypeName = useMemo(() => getTypeNameFromDataSource(dataSource), [dataSource, getTypeNameFromDataSource]);
 
-  // Append the location of a result tree: camera, merged, calibrated or
-  // uncalibrated, type folder and stereo pair. Every viewer request that reads a
-  // result tree goes through this, so no request can read a different tree from
-  // the one on screen (a mean view on uncalibrated data once read the calibrated
-  // statistics because its request carried no is_uncalibrated). An ensemble type
-  // folder takes the ensemble camera pair, the rest the instantaneous one.
+  // The location of a result tree: camera, merged, calibrated or uncalibrated,
+  // type folder and stereo pair. Every viewer request that reads or writes a
+  // result tree carries it (GETs through appendLocationParams, POSTs by spreading
+  // it into the JSON body), so no request can act on a tree other than the one on
+  // screen: a mean view on uncalibrated data once read the calibrated statistics,
+  // and a transform on a stereo view rewrote the mono tree. An ensemble type folder
+  // takes the ensemble camera pair, the rest the instantaneous one.
+  const locationOf = useCallback((typeName: string) => ({
+    camera,
+    merged,
+    is_uncalibrated: isUncalibrated,
+    type_name: typeName,
+    is_stereo: isStereoData,
+    camera_pair: isStereoData ? (typeName === "ensemble" ? stereoEnsPair : stereoInstPair) : null,
+  }), [camera, merged, isUncalibrated, isStereoData, stereoInstPair, stereoEnsPair]);
+
+  // locationOf as query params, for the GET routes (parse_plot_params).
   const appendLocationParams = useCallback((params: URLSearchParams, typeName: string) => {
-    params.set("camera", String(camera));
-    params.set("merged", merged ? "1" : "0");
-    params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-    params.set("type_name", typeName);
-    if (isStereoData) {
+    const loc = locationOf(typeName);
+    params.set("camera", String(loc.camera));
+    params.set("merged", loc.merged ? "1" : "0");
+    params.set("is_uncalibrated", loc.is_uncalibrated ? "1" : "0");
+    params.set("type_name", loc.type_name);
+    if (loc.camera_pair) {
       params.set("is_stereo", "1");
-      const cameraPair = typeName === "ensemble" ? stereoEnsPair : stereoInstPair;
-      params.set("camera_pair", cameraPair.join(","));
+      params.set("camera_pair", loc.camera_pair.join(","));
     }
-  }, [camera, merged, isUncalibrated, isStereoData, stereoInstPair, stereoEnsPair]);
+  }, [locationOf]);
 
   // Auto-select appropriate variable when data source changes
   // IMPORTANT: Only auto-correct type when dataSource actually changes, NOT when user manually selects a variable
@@ -963,8 +980,10 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("base_path", basePath);
       params.set("frame", "1"); // Just check frame 1 - vars are same across all frames
       // check_all_vars lists the instantaneous tree's sources (frames, per-frame
-      // and mean statistics) and resolves the ensemble tree itself.
+      // and mean statistics) on camera_pair and the ensemble on its own pair.
       appendLocationParams(params, "instantaneous");
+      const ensemblePair = locationOf("ensemble").camera_pair;
+      if (ensemblePair) params.set("ensemble_camera_pair", ensemblePair.join(","));
       const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
       const json = await fetchJson(url);
       // check_all_vars answers every source's list, empty when the source is
@@ -989,7 +1008,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setAllVarsLoading(false);
     }
-  }, [effectiveDir, backendUrl, appendLocationParams]); // Note: removed index - vars are same across frames
+  }, [effectiveDir, backendUrl, appendLocationParams, locationOf]); // Note: removed index - vars are same across frames
 
   const fetchLimits = useCallback(async () => {
     const requestId = ++limitsRequestIdRef.current;
@@ -1184,7 +1203,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // When no range is computed for this view, an earlier view's limits error no
   // longer applies: it is cleared, and a request still in flight is superseded so
   // it cannot write its result (or its error) into this view.
+  // It also waits for this location's runs (runsReady): until they resolve, `run`
+  // is the previous source's and the request could ask for a pass that is absent.
+  // Mean mode fetches no runs and keeps its pass.
+  const runsReady = meanMode || resolvedRunsKey === runsKey;
   useEffect(() => {
+    if (!runsReady) return;
     if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
     } else {
@@ -1192,7 +1216,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setLimitsLoading(false);
       setLimitsError(null);
     }
-  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
+  }, [runsReady, availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
 
   // Auto-render when we have a valid configuration
   // Only set hasRendered here for meanMode; non-mean modes wait for
@@ -1272,21 +1296,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   const updateOffsets = async () => {
     try {
-      const body: Record<string, any> = {
+      const body = {
         base_path: effectiveDir,
         base_path_idx: basePathIdx,
-        camera: camera,
         run: run,
-        type_name: getTypeNameFromDataSource(dataSource),
         x_offset: Number(xOffset) || 0,
         y_offset: Number(yOffset) || 0,
-        merged: merged ? 1 : 0,
+        ...locationOf(viewTypeName),
       };
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        body.use_stereo = true;
-        body.camera_pair = stereoInstPair;
-      }
       const url = `${backendUrl}/calibration/set_datum`;
       await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
@@ -1300,23 +1317,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   const sendDatumToBackend = async (x: number, y: number) => {
     try {
-      const body: Record<string, any> = {
+      const body = {
         base_path: effectiveDir,
         base_path_idx: basePathIdx,
-        camera: camera,
         run: run,
-        type_name: getTypeNameFromDataSource(dataSource),
         x: x,
         y: y,
         x_offset: Number(xOffset) || 0,
         y_offset: Number(yOffset) || 0,
-        merged: merged ? 1 : 0,
+        ...locationOf(viewTypeName),
       };
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        body.use_stereo = true;
-        body.camera_pair = stereoInstPair;
-      }
       const url = `${backendUrl}/calibration/set_datum`;
       await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
@@ -1707,18 +1717,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   useEffect(() => {
     if (!availabilityReady || !effectiveDir || meanMode) return;
+    const key = runsKey;
+    latestRunsKeyRef.current = key;
     fetchAvailableRuns().then(runs => {
+      // A newer location's runs were asked for since: this answer is not theirs.
+      if (latestRunsKeyRef.current !== key) return;
       setAvailableRuns(runs);
       if (runs.length > 0) {
         const maxRun = Math.max(...runs);
         setRun(maxRun);
         setRunInput(String(maxRun));
       }
+      setResolvedRunsKey(key);
       setHasRendered(true);
     }).catch(() => {
+      if (latestRunsKeyRef.current !== key) return;
+      setResolvedRunsKey(key);
       setHasRendered(true);
     });
-  }, [availabilityReady, effectiveDir, meanMode, fetchAvailableRuns]);
+  }, [availabilityReady, effectiveDir, meanMode, fetchAvailableRuns, runsKey]);
 
   // Sync runInput when run changes from other sources (e.g., API response)
   useEffect(() => {
@@ -1950,10 +1967,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setError(null);
       const result = await postJson(`${backendUrl}/plot/transform_frame`, {
         base_path: effectiveDir,
-        camera: camera,
         frame: index,
         transformation,
-        merged: merged,
+        ...locationOf(viewTypeName),
       });
       if (result.success) {
         // Use the backend's simplified transformation list
@@ -1971,7 +1987,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+  }, [backendUrl, effectiveDir, index, locationOf, viewTypeName, handleRender]);
 
   const clearTransforms = useCallback(async () => {
     try {
@@ -1979,9 +1995,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setError(null);
       const result = await postJson(`${backendUrl}/plot/clear_transform`, {
         base_path: effectiveDir,
-        camera: camera,
         frame: index,
-        merged: merged,
+        ...locationOf(viewTypeName),
       });
       if (result.success) {
         setAppliedTransforms([]);
@@ -2010,7 +2025,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+  }, [backendUrl, effectiveDir, index, locationOf, viewTypeName, handleRender]);
 
   // clearOperationsList removed — clearTransforms now handles both backend restore and UI list clearing
 
@@ -2034,11 +2049,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
       const result = await postJson(`${backendUrl}/plot/transform_all_frames`, {
         base_path: effectiveDir,
-        camera: camera,
+        // The source frame: the one whose pending transformations are applied.
+        frame: index,
         transformations,
-        merged: merged,
         image_count: maxFrameCount,
-        cameras: transformCameras.length < cameraOptions.length ? transformCameras : undefined,
+        // A stereo pair is one tree; a camera selection applies to mono data only.
+        cameras: !isStereoData && transformCameras.length < cameraOptions.length ? transformCameras : undefined,
+        ...locationOf(viewTypeName),
       });
       if (result.job_id) {
         setTransformationJob({
@@ -2058,7 +2075,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, merged, maxFrameCount, transformCameras, cameraOptions]);
+  }, [backendUrl, effectiveDir, index, isStereoData, locationOf, viewTypeName, maxFrameCount, transformCameras, cameraOptions]);
 
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
