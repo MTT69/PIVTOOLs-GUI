@@ -437,6 +437,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     isStereoData,  // Based on selected dataSource (not config)
     isMeanVar,
     canTransform,
+    transformUnavailableReason,
     canEditCoordinates,
     canMerge,
     canViewMerged,
@@ -1535,11 +1536,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - For calibrated data (including merged), not statistics/mean vars or stereo */}
-              {canTransform && !isStatistics && !isMeanVar && !isStereoData && (
+              {/* Transforms - For calibrated per-camera and merged data, not statistics/mean vars.
+                  On stereo and uncalibrated data the control is disabled with the reason. */}
+              {!isStatistics && !isMeanVar && (
                 <Button
-                  variant={showTransforms ? "default" : "outline"}
+                  variant={showTransforms && canTransform ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
+                  disabled={!canTransform}
+                  title={transformUnavailableReason ?? undefined}
                   className="flex items-center gap-2"
                 >
                   Transforms
@@ -1552,6 +1556,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </Button>
+              )}
+              {!isStatistics && !isMeanVar && transformUnavailableReason && (
+                <span className="text-xs text-gray-500">{transformUnavailableReason}</span>
               )}
 
               {/* Merging - Only for calibrated instantaneous with multiple cameras, not stereo */}
@@ -1843,7 +1850,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             )}
 
             {/* Transforms Panel - For calibrated data (including merged), not statistics/mean vars or stereo */}
-            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isMeanVar && !isStereoData && (
+            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isMeanVar && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
                 <p className="text-xs text-purple-700 mb-3">
@@ -1977,8 +1984,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </div>
                   </div>
 
-                  {/* Camera selection for batch transforms */}
-                  {cameraOptions.length > 1 && (
+                  {/* Camera selection for batch transforms; the Merged tree is one tree */}
+                  {cameraOptions.length > 1 && !isMerged && (
                     <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200">
                       <label className="text-sm font-semibold text-gray-700 mr-2">Cameras:</label>
                       {cameraOptions.map((cam: number) => (
@@ -2006,7 +2013,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <Button
                       size="default"
                       onClick={() => applyTransformationToAllFrames(appliedTransforms)}
-                      disabled={loading || appliedTransforms.length === 0 || transformCameras.length === 0 || frameJobBlock !== null}
+                      disabled={loading || appliedTransforms.length === 0 || (!isMerged && transformCameras.length === 0) || frameJobBlock !== null}
                       title={frameJobBlock ?? undefined}
                       className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold"
                     >
@@ -2014,7 +2021,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <path d="M21 14h-5a2 2 0 0 1-2-2V7" />
                         <path d="M14 2L7 9l7 7" />
                       </svg>
-                      Apply to All Frames{cameraOptions.length > 1 && transformCameras.length < cameraOptions.length ? ` (${transformCameras.length} cam${transformCameras.length !== 1 ? 's' : ''})` : ''}
+                      Apply to All Frames{!isMerged && cameraOptions.length > 1 && transformCameras.length < cameraOptions.length ? ` (${transformCameras.length} cam${transformCameras.length !== 1 ? 's' : ''})` : ''}
                     </Button>
                     <Button
                       size="default"

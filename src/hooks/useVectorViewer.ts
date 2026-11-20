@@ -271,7 +271,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   }, [config?.calibration?.active]);
 
   // Feature availability based on data source
-  const canTransform = useMemo(() => !isUncalibrated, [isUncalibrated]);
+  // Transforms act on calibrated per-camera and Merged trees only: the operations
+  // are written for 2C calibrated fields, and the backend refuses stereo and
+  // uncalibrated data. The reason is shown where the Transforms control would be.
+  const transformUnavailableReason = useMemo(() => {
+    if (isUncalibrated) return "Transforms are not supported on uncalibrated data yet";
+    if (isStereoData) return "Transforms are not supported on stereo data yet";
+    return null;
+  }, [isUncalibrated, isStereoData]);
+  const canTransform = transformUnavailableReason === null;
   const canEditCoordinates = useMemo(() => !isUncalibrated, [isUncalibrated]);
   // Merging is NOT allowed for stereo (already 3D combined data) or uncalibrated
   const canMerge = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
@@ -1208,7 +1216,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Mean mode fetches no runs and keeps its pass.
   const runsReady = meanMode || resolvedRunsKey === runsKey;
   useEffect(() => {
-    if (!runsReady) return;
+    if (!runsReady) {
+      // The location changed: a limits request still in flight is for the old
+      // one, so it is superseded and its error no longer applies.
+      limitsRequestIdRef.current++;
+      setLimitsLoading(false);
+      setLimitsError(null);
+      return;
+    }
     if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
     } else {
@@ -2053,8 +2068,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
         frame: index,
         transformations,
         image_count: maxFrameCount,
-        // A stereo pair is one tree; a camera selection applies to mono data only.
-        cameras: !isStereoData && transformCameras.length < cameraOptions.length ? transformCameras : undefined,
+        // The Merged tree is one tree; a camera selection applies to per-camera data only.
+        cameras: !merged && transformCameras.length < cameraOptions.length ? transformCameras : undefined,
         ...locationOf(viewTypeName),
       });
       if (result.job_id) {
@@ -2075,7 +2090,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, index, isStereoData, locationOf, viewTypeName, maxFrameCount, transformCameras, cameraOptions]);
+  }, [backendUrl, effectiveDir, index, merged, locationOf, viewTypeName, maxFrameCount, transformCameras, cameraOptions]);
 
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
@@ -2261,6 +2276,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     hasStereoData,
     isStereoData,
     canTransform,
+    transformUnavailableReason,
     canEditCoordinates,
     canMerge,
     canViewMerged,
