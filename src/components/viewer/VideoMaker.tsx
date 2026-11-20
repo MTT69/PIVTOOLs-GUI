@@ -98,6 +98,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     availableVariables,
     groupedVariables,
     variablesLoading,
+    variablesError,
     // Functions
     handleBrowse,
     onDirPicked,
@@ -275,6 +276,9 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                           )}
                         </SelectContent>
                       </Select>
+                    )}
+                    {variablesError && (
+                      <p className="text-sm text-red-700">Variable list: {variablesError}</p>
                     )}
                   </div>
 

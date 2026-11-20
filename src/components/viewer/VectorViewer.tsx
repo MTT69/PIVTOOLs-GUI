@@ -425,7 +425,10 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     // Grouped variables for unified dropdown
     allVars,
     allVarsLoading,
+    allVarsError,
     fetchAllVars,
+    limitsError,
+    parseVarType,
     // Derived feature flags
     isEnsemble,
     isMerged,
@@ -895,6 +898,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                           </>
                         )}
                       </>
+                    ) : allVarsError ? (
+                      // The list failed: offer nothing this dataset may not hold.
+                      <SelectItem value="unavailable" disabled>No variables (see error below)</SelectItem>
                     ) : (
                       // Fallback if no grouped vars loaded yet
                       <>
@@ -904,6 +910,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     )}
                   </SelectContent>
                 </Select>
+                {allVarsError && (
+                  <p className="text-sm text-red-700 mt-1">Variable list: {allVarsError}</p>
+                )}
               </div>
 
               {/* Colormap */}
@@ -968,11 +977,15 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 size="sm"
                 variant="outline"
                 onClick={() => { void fetchLimits(); }}
-                disabled={limitsLoading}
+                // Correlation-quality figures are rendered server-side with no colour range.
+                disabled={limitsLoading || parseVarType(type).varSource === "corrq"}
               >
                 {limitsLoading ? "Getting..." : "Auto-Calculate"}
               </Button>
             </div>
+            {limitsError && (
+              <p className="text-sm text-red-700">Colour range: {limitsError}</p>
+            )}
 
             {/* X/Y Axis Limits */}
             <div className="flex items-end gap-4 flex-wrap">

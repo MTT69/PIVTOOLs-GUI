@@ -319,6 +319,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Grouped variables for unified dropdown
   const [allVars, setAllVars] = useState<GroupedVariables>(defaultGroupedVars);
   const [allVarsLoading, setAllVarsLoading] = useState(false);
+  const [allVarsError, setAllVarsError] = useState<string | null>(null);
+  const [limitsError, setLimitsError] = useState<string | null>(null);
   const [datumMode, setDatumMode] = useState<boolean>(false);
   const [xOffset, setXOffset] = useState<string>("0");
   const [yOffset, setYOffset] = useState<string>("0");
@@ -964,7 +966,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     setAllVarsLoading(true);
     try {
       const basePath = effectiveDir;
-      if (!basePath) return;
+      if (!basePath) {
+        // No dataset selected: nothing to list, and an earlier dataset's error
+        // or variables no longer apply.
+        setAllVars(defaultGroupedVars);
+        setAllVarsError(null);
+        return;
+      }
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", "1"); // Just check frame 1 - vars are same across all frames
@@ -979,16 +987,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       }
       const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
       const json = await fetchJson(url);
-      const grouped: GroupedVariables = {
-        instantaneous: Array.isArray(json.instantaneous) ? json.instantaneous : [],
-        instantaneous_stats: Array.isArray(json.instantaneous_stats) ? json.instantaneous_stats : [],
-        mean_stats: Array.isArray(json.mean_stats) ? json.mean_stats : [],
-        ensemble: Array.isArray(json.ensemble) ? json.ensemble : [],
-        corr_quality: Array.isArray(json.corr_quality) ? json.corr_quality : [],
-      };
+      // check_all_vars answers every source's list, empty when the source is
+      // absent. A 200 missing one is a broken response, not "no variables".
+      const sources = Object.keys(defaultGroupedVars) as (keyof GroupedVariables)[];
+      const missing = sources.filter(source => !Array.isArray(json[source]));
+      if (missing.length > 0) {
+        throw new Error(`check_all_vars answered without ${missing.join(", ")}`);
+      }
+      const grouped = Object.fromEntries(
+        sources.map(source => [source, json[source] as string[]])
+      ) as unknown as GroupedVariables;
       setAllVars(grouped);
+      setAllVarsError(null);
     } catch (e) {
-      console.error("Error fetching all vars:", errorMessage(e));
+      // The backend names the result file it could not read. Kept apart from the
+      // image `error` so it neither hides the rendered image nor stops playback,
+      // and an image fetch does not clear it. The previous dataset's variables
+      // are dropped so the dropdown never offers variables this one lacks.
+      setAllVars(defaultGroupedVars);
+      setAllVarsError(errorMessage(e));
     } finally {
       setAllVarsLoading(false);
     }
@@ -1004,35 +1021,38 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("base_path", basePath);
       params.set("camera", String(camera));
       params.set("merged", merged ? "1" : "0");
+      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      params.set("type_name", getTypeNameFromDataSource(dataSource));
+      // The prefixed dropdown name: check_limits reads the source's own files from it.
       params.set("var", type);
-      // Add stereo params when viewing stereo data
+      // Same location as the image request for this view: ensemble views use the
+      // ensemble camera pair (fetchEnsembleImage), the rest the instantaneous one.
       if (isStereoData) {
         params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
+        const cameraPair = isEnsemble ? stereoEnsPair : stereoInstPair;
         params.set("camera_pair", cameraPair.join(","));
       }
       const url = `${backendUrl}/plot/check_limits?${params.toString()}`;
       const json = await fetchJson(url);
       // A superseded limits request must not overwrite the newer variable's range.
       if (limitsRequestIdRef.current !== requestId) return;
-      // Prefer robust percentile limits (p5/p95) so a single outlier vector
-      // can't stretch the colour range and wash out the field. Fall back to
-      // raw min/max only for older payloads that lack the percentiles.
-      if (typeof json.p5 === "number" && typeof json.p95 === "number") {
-        setLower(String(json.p5));
-        setUpper(String(json.p95));
-      } else if (typeof json.min === "number" && typeof json.max === "number") {
-        setLower(String(json.min));
-        setUpper(String(json.max));
-      } else {
-        console.warn("check_limits returned unexpected payload", json);
+      // Robust percentile limits (p5/p95), so a single outlier vector cannot
+      // stretch the colour range and wash out the field. check_limits always
+      // sends them; a response without them is an error, shown under the limits.
+      if (typeof json.p5 !== "number" || typeof json.p95 !== "number") {
+        throw new Error("check_limits answered without p5/p95");
       }
+      setLower(String(json.p5));
+      setUpper(String(json.p95));
+      setLimitsError(null);
     } catch (err) {
-      console.error("Error fetching limits:", errorMessage(err));
+      // Kept apart from the image `error`: a colour-range failure must not hide
+      // the rendered image. The backend names the file it could not use.
+      if (limitsRequestIdRef.current === requestId) setLimitsError(errorMessage(err));
     } finally {
       if (limitsRequestIdRef.current === requestId) setLimitsLoading(false);
     }
-  }, [effectiveDir, camera, merged, type, backendUrl, setLower, setUpper, isStereoData, stereoInstPair]);
+  }, [effectiveDir, camera, merged, isUncalibrated, dataSource, getTypeNameFromDataSource, isEnsemble, type, backendUrl, setLower, setUpper, isStereoData, stereoInstPair, stereoEnsPair]);
 
   const fetchAvailableRuns = useCallback(async () => {
     try {
@@ -1203,11 +1223,19 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // Keyed to source/variable/camera/merged (via fetchLimits), so it recomputes a
   // sensible global range on load and on variable switch, but does NOT re-fire on
   // manual lower/upper edits within the same variable — those are preserved.
+  // Correlation-quality figures are rendered server-side and take no colour range.
+  // When no range is computed for this view, an earlier view's limits error no
+  // longer applies: it is cleared, and a request still in flight is superseded so
+  // it cannot write its result (or its error) into this view.
   useEffect(() => {
-    if (availabilityReady && effectiveDir) {
+    if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
+    } else {
+      limitsRequestIdRef.current++;
+      setLimitsLoading(false);
+      setLimitsError(null);
     }
-  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits]);
+  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
 
   // Auto-render when we have a valid configuration
   // Only set hasRendered here for meanMode; non-mean modes wait for
@@ -2204,7 +2232,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // Grouped variables for unified dropdown
     allVars,
     allVarsLoading,
+    allVarsError,
     fetchAllVars,
+    limitsError,
     datumMode,
     setDatumMode,
     xOffset,

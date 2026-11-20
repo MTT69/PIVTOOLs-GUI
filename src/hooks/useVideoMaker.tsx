@@ -159,6 +159,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     instantaneous_stats: [],
   });
   const [variablesLoading, setVariablesLoading] = useState<boolean>(false);
+  const [variablesError, setVariablesError] = useState<string | null>(null);
 
   // Other selection state
   const [type, setType] = useState<string>('ux');
@@ -305,7 +306,14 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
 
   // Check available variables when data source changes
   const checkAvailableVariables = useCallback(async () => {
-    if (!effectiveDir) return;
+    if (!effectiveDir) {
+      // No dataset selected: nothing to list, and an earlier dataset's error or
+      // variables no longer apply.
+      setAvailableVariables([]);
+      setGroupedVariables({ instantaneous: [], instantaneous_stats: [] });
+      setVariablesError(null);
+      return;
+    }
 
     setVariablesLoading(true);
     try {
@@ -313,26 +321,34 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
         `${backendUrl}/video/available_variables?base_path=${encodeURIComponent(effectiveDir)}&camera=${camera}&data_source=${dataSource}`
       );
 
-      if (data.success && data.variables) {
-        setAvailableVariables(data.variables);
-
-        // Also set grouped variables if available (new API structure)
-        if (data.grouped_variables) {
-          setGroupedVariables({
-            instantaneous: data.grouped_variables.instantaneous || [],
-            instantaneous_stats: data.grouped_variables.instantaneous_stats || [],
-          });
-        }
-
-        // If current type is not in the available variables, reset to first available
-        const varNames = data.variables.map((v: VariableInfo) => v.name);
-        if (!varNames.includes(type)) {
-          setType(data.variables[0]?.name || 'ux');
-        }
+      // available_variables always sends both lists (empty when a source is
+      // absent). A 200 without them is a broken response, not "no variables".
+      const grouped = data.grouped_variables;
+      if (
+        !Array.isArray(data.variables)
+        || !Array.isArray(grouped?.instantaneous)
+        || !Array.isArray(grouped?.instantaneous_stats)
+      ) {
+        throw new Error("available_variables answered without variables and grouped_variables");
       }
+      setAvailableVariables(data.variables);
+      setGroupedVariables({
+        instantaneous: grouped.instantaneous,
+        instantaneous_stats: grouped.instantaneous_stats,
+      });
+
+      // If current type is not in the available variables, reset to first available
+      const varNames = data.variables.map((v: VariableInfo) => v.name);
+      if (!varNames.includes(type)) {
+        setType(data.variables[0]?.name || 'ux');
+      }
+      setVariablesError(null);
     } catch (error) {
-      console.error('Error checking available variables:', errorMessage(error));
-      // Keep default variables on error
+      // The backend names the result file it could not read. Show it and offer
+      // no variables, rather than a default list this dataset may not hold.
+      setAvailableVariables([]);
+      setGroupedVariables({ instantaneous: [], instantaneous_stats: [] });
+      setVariablesError(errorMessage(error));
     } finally {
       setVariablesLoading(false);
     }
@@ -779,6 +795,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     availableVariables,
     groupedVariables,
     variablesLoading,
+    variablesError,
     // Batch state (new)
     paths,
     activePaths,
