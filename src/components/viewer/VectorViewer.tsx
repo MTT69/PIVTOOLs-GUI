@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
-import { useVectorViewer, GroupedVariables, DataSourceType } from "@/hooks/useVectorViewer";
+import { useVectorViewer, GroupedVariables, DataSourceType, isEnsembleDataSource } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
 import ColormapSelect from "@/components/shared/ColormapSelect";
@@ -129,7 +129,7 @@ const getFilteredVars = (
   allVars: GroupedVariables,
   dataSource: DataSourceType
 ): GroupedVariables => {
-  const isEnsembleSource = dataSource.includes('ensemble');
+  const isEnsembleSource = isEnsembleDataSource(dataSource);
   const isStatisticsSource = dataSource.includes('statistics');
 
   if (isEnsembleSource) {
@@ -168,7 +168,7 @@ const getFilteredVars = (
 // the backend map that labels the rendered PNG \u2014 keep the two in sync.
 
 // Inline Vector Merging Hook
-const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: string) => {
+const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: DataSourceType) => {
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
   const [merging, setMerging] = useState(false);
   const [mergingJobId, setMergingJobId] = useState<string | null>(null);
@@ -184,7 +184,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
 
   // Derive effective type_name from dataSource (avoids async config race)
   const effectiveTypeName = useMemo(() => {
-    if (dataSource?.includes('ensemble')) return 'ensemble';
+    if (dataSource && isEnsembleDataSource(dataSource)) return 'ensemble';
     return configTypeName;
   }, [dataSource, configTypeName]);
 
@@ -478,7 +478,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     () => (type.includes(':') ? type.split(':').slice(1).join(':') : type),
     [type]
   );
-  const nanReasonPipeline: NanReasonPipeline = dataSource.includes('ensemble')
+  const nanReasonPipeline: NanReasonPipeline = isEnsembleDataSource(dataSource)
     ? 'ensemble'
     : 'instantaneous';
   const showNanReasonLegend = isNanReasonVar(selectedVarName);
@@ -612,7 +612,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   useEffect(() => {
     if (mergingStatus === "completed" && !hasRefreshedAfterMergeCompletion.current) {
       hasRefreshedAfterMergeCompletion.current = true;
-      const target: DataSourceType = dataSource.includes('ensemble')
+      const target: DataSourceType = isEnsembleDataSource(dataSource)
         ? 'merged_ensemble' : 'merged_instantaneous';
       setPendingMergeSwitch(target);
       fetchAvailableDataSources(true);

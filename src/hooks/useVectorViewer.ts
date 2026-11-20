@@ -48,6 +48,13 @@ export type DataSourceType =
   | "merged_statistics"
   | "stereo_statistics";
 
+// The one rule for "this data source is an ensemble result": every ensemble
+// source (calibrated, uncalibrated, merged, stereo) has "ensemble" in its name.
+// It picks the endpoint (/plot/plot_ensemble), the type folder and the variable
+// group; a hand-written list once left out stereo_ensemble, whose view then went
+// to /plot/plot_vector and drew an instantaneous frame.
+export const isEnsembleDataSource = (ds: DataSourceType): boolean => ds.includes("ensemble");
+
 interface DataSourceAvailability {
   exists: boolean;
   frame_count: number;
@@ -227,10 +234,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     dataSource === "uncalibrated_instantaneous" || dataSource === "uncalibrated_ensemble",
     [dataSource]
   );
-  const isEnsemble = useMemo(() =>
-    dataSource === "calibrated_ensemble" || dataSource === "uncalibrated_ensemble" || dataSource === "merged_ensemble",
-    [dataSource]
-  );
+  const isEnsemble = useMemo(() => isEnsembleDataSource(dataSource), [dataSource]);
   const isMerged = useMemo(() =>
     dataSource === "merged_instantaneous" || dataSource === "merged_ensemble" || dataSource === "merged_statistics",
     [dataSource]
@@ -408,7 +412,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Helper to derive type_name from dataSource
   const getTypeNameFromDataSource = useCallback((ds: DataSourceType): string => {
-    if (ds.includes('ensemble')) {
+    if (isEnsembleDataSource(ds)) {
       return 'ensemble';
     }
     return 'instantaneous';
@@ -448,7 +452,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       return;
     }
 
-    const isEnsembleSource = dataSource.includes('ensemble');
+    const isEnsembleSource = isEnsembleDataSource(dataSource);
     const isStatisticsSource = dataSource.includes('statistics');
     const isUncalibratedSource = dataSource.includes('uncalibrated');
 
@@ -1778,7 +1782,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // Guard: ensure type is compatible with dataSource before rendering
     // This prevents race conditions where dataSource changed but type hasn't updated yet
     const varSource = type.includes(':') ? type.split(':')[0] : 'inst';
-    const isEnsembleSource = dataSource.includes('ensemble');
+    const isEnsembleSource = isEnsembleDataSource(dataSource);
     const isUncalibratedSource = dataSource.includes('uncalibrated');
     const isStatisticsSource = dataSource.includes('statistics');
 
