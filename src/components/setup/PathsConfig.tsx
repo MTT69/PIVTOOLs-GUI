@@ -13,6 +13,7 @@ import { ValidationAlert } from "./ValidationAlert";
 import { SourceDiagnosis } from "./SourceDiagnosis";
 import { ValidationDetails } from "./ValidationDetails";
 import { RunImport } from "./RunImport";
+import { useFeatures } from "@/hooks/useFeatures";
 import type { DoubleFrameAutoSelect } from "@/hooks/useDoubleFrameAutoSelect";
 
 interface PathsConfigProps {
@@ -26,6 +27,8 @@ interface PathsConfigProps {
 }
 
 export default function PathsConfig({ config, updateConfig, validation, reloadConfig, cameraAutoSelect }: PathsConfigProps) {
+  // "Import acquisition run" is offered only where the backend runs with PIVTOOLS_ACQUISITION=1.
+  const { acquisitionRuns } = useFeatures();
   const [baseDirs, setBaseDirs] = useState<string[]>([]);
   const [sourceDirs, setSourceDirs] = useState<string[]>([]);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
@@ -199,7 +202,7 @@ export default function PathsConfig({ config, updateConfig, validation, reloadCo
               >
                 <Plus className="h-4 w-4" /> Add Source {config.images?.image_type === "lavision_set" ? "File" : "Directory"}
               </Button>
-              <RunImport reloadConfig={reloadConfig} />
+              {acquisitionRuns && <RunImport reloadConfig={reloadConfig} />}
             </div>
           </CardContent>
         </Card>

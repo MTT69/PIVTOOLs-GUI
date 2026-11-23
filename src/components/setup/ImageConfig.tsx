@@ -14,6 +14,7 @@ import { ValidationAlert } from "./ValidationAlert";
 import { InlineSuggestion } from "./SourceDiagnosis";
 import { cn } from "@/lib/utils";
 import { errorMessage, fetchJson } from "@/lib/api";
+import { useFeatures } from "@/hooks/useFeatures";
 import { pairStatus, strideFramePairs } from "@/lib/pairCount";
 import { CONTAINER_FRAME_TYPES, PRESET_STRIDES, imageTypeDefaults } from "@/lib/sourceDiagnosis";
 
@@ -91,6 +92,10 @@ export default function ImageConfig({ config, updateConfig, validation, sections
   const [savingMeta, setSavingMeta] = useState<string>("");
   const [cameraSubfolders, setCameraSubfolders] = useState<string[]>([]);
   const [imageType, setImageType] = useState<string>("standard");
+  // The .pivraw type is offered only where the backend runs with PIVTOOLS_ACQUISITION=1,
+  // and always while it is the configured type, so a .pivraw config never shows a blank type.
+  const features = useFeatures();
+  const offerPivraw = features.acquisitionRuns || imageType === "pivraw";
   const [useCameraSubfoldersIM7, setUseCameraSubfoldersIM7] = useState<boolean>(false);
   const [framePairPreview, setFramePairPreview] = useState<any>(null);
   // The preview request's own failure (its 400 text, e.g. a .pivraw run that cannot be paired).
@@ -433,7 +438,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     <SelectContent>
                       <SelectItem value="standard">Standard (TIFF/PNG/JPG)</SelectItem>
                       <SelectItem value="cine">Phantom CINE</SelectItem>
-                      <SelectItem value="pivraw">PIVTOOLs acquisition run (.pivraw)</SelectItem>
+                      {offerPivraw && <SelectItem value="pivraw">PIVTOOLs acquisition run (.pivraw)</SelectItem>}
                       <SelectItem value="lavision_set">LaVision recording (.set + .ims folder)</SelectItem>
                       <SelectItem value="lavision_im7">LaVision images (.im7)</SelectItem>
                     </SelectContent>
@@ -445,6 +450,7 @@ export default function ImageConfig({ config, updateConfig, validation, sections
                     {imageType === "lavision_im7" && "LaVision image sequence"}
                     {imageType === "standard" && "Standard image sequences"}
                   </p>
+                  {features.error && <p className="text-xs text-red-600 mt-1">{features.error}</p>}
                 </div>
                 <div>
                   <Label htmlFor="num_images">{imageType === "lavision_set" ? "Number of entries" : CONTAINER_FRAME_TYPES.has(imageType) ? "Number of frames" : "Number of Image Files"}</Label>
