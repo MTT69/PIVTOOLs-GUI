@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
-import { useVectorViewer, GroupedVariables, DataSourceType } from "@/hooks/useVectorViewer";
+import { useVectorViewer, GroupedVariables, DataSourceType, isEnsembleDataSource } from "@/hooks/useVectorViewer";
 import { useStatisticsCalculation } from "@/hooks/useStatisticsCalculation";
 import DataSourceToggle from "@/components/shared/DataSourceToggle";
 import ColormapSelect from "@/components/shared/ColormapSelect";
@@ -129,7 +129,7 @@ const getFilteredVars = (
   allVars: GroupedVariables,
   dataSource: DataSourceType
 ): GroupedVariables => {
-  const isEnsembleSource = dataSource.includes('ensemble');
+  const isEnsembleSource = isEnsembleDataSource(dataSource);
   const isStatisticsSource = dataSource.includes('statistics');
 
   if (isEnsembleSource) {
@@ -168,7 +168,7 @@ const getFilteredVars = (
 // the backend map that labels the rendered PNG \u2014 keep the two in sync.
 
 // Inline Vector Merging Hook
-const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: string) => {
+const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions: number[], maxFrameCount: number, config?: any, dataSource?: DataSourceType) => {
   const [selectedCameras, setSelectedCameras] = useState<number[]>([]);
   const [merging, setMerging] = useState(false);
   const [mergingJobId, setMergingJobId] = useState<string | null>(null);
@@ -184,7 +184,7 @@ const useVectorMerging = (backendUrl: string, basePathIdx: number, cameraOptions
 
   // Derive effective type_name from dataSource (avoids async config race)
   const effectiveTypeName = useMemo(() => {
-    if (dataSource?.includes('ensemble')) return 'ensemble';
+    if (dataSource && isEnsembleDataSource(dataSource)) return 'ensemble';
     return configTypeName;
   }, [dataSource, configTypeName]);
 
@@ -437,6 +437,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     isStereoData,  // Based on selected dataSource (not config)
     isMeanVar,
     canTransform,
+    transformUnavailableReason,
     canEditCoordinates,
     canMerge,
     canViewMerged,
@@ -478,7 +479,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
     () => (type.includes(':') ? type.split(':').slice(1).join(':') : type),
     [type]
   );
-  const nanReasonPipeline: NanReasonPipeline = dataSource.includes('ensemble')
+  const nanReasonPipeline: NanReasonPipeline = isEnsembleDataSource(dataSource)
     ? 'ensemble'
     : 'instantaneous';
   const showNanReasonLegend = isNanReasonVar(selectedVarName);
@@ -612,7 +613,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
   useEffect(() => {
     if (mergingStatus === "completed" && !hasRefreshedAfterMergeCompletion.current) {
       hasRefreshedAfterMergeCompletion.current = true;
-      const target: DataSourceType = dataSource.includes('ensemble')
+      const target: DataSourceType = isEnsembleDataSource(dataSource)
         ? 'merged_ensemble' : 'merged_instantaneous';
       setPendingMergeSwitch(target);
       fetchAvailableDataSources(true);
@@ -1535,11 +1536,14 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                 </Button>
               )}
 
-              {/* Transforms - For calibrated data (including merged), not statistics/mean vars or stereo */}
-              {canTransform && !isStatistics && !isMeanVar && !isStereoData && (
+              {/* Transforms - For calibrated per-camera and merged data, not statistics/mean vars.
+                  On stereo and uncalibrated data the control is disabled with the reason. */}
+              {!isStatistics && !isMeanVar && (
                 <Button
-                  variant={showTransforms ? "default" : "outline"}
+                  variant={showTransforms && canTransform ? "default" : "outline"}
                   onClick={() => setShowTransforms(!showTransforms)}
+                  disabled={!canTransform}
+                  title={transformUnavailableReason ?? undefined}
                   className="flex items-center gap-2"
                 >
                   Transforms
@@ -1552,6 +1556,9 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </Button>
+              )}
+              {!isStatistics && !isMeanVar && transformUnavailableReason && (
+                <span className="text-xs text-gray-500">{transformUnavailableReason}</span>
               )}
 
               {/* Merging - Only for calibrated instantaneous with multiple cameras, not stereo */}
@@ -1843,7 +1850,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
             )}
 
             {/* Transforms Panel - For calibrated data (including merged), not statistics/mean vars or stereo */}
-            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isMeanVar && !isStereoData && (
+            {showTransforms && canTransform && imageSrc && !error && !isStatistics && !isMeanVar && (
               <div className="p-4 bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg">
                 <h3 className="text-lg font-semibold text-purple-900 mb-3">Transformations</h3>
                 <p className="text-xs text-purple-700 mb-3">
@@ -1977,8 +1984,8 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     </div>
                   </div>
 
-                  {/* Camera selection for batch transforms */}
-                  {cameraOptions.length > 1 && (
+                  {/* Camera selection for batch transforms; the Merged tree is one tree */}
+                  {cameraOptions.length > 1 && !isMerged && (
                     <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200">
                       <label className="text-sm font-semibold text-gray-700 mr-2">Cameras:</label>
                       {cameraOptions.map((cam: number) => (
@@ -2006,7 +2013,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                     <Button
                       size="default"
                       onClick={() => applyTransformationToAllFrames(appliedTransforms)}
-                      disabled={loading || appliedTransforms.length === 0 || transformCameras.length === 0 || frameJobBlock !== null}
+                      disabled={loading || appliedTransforms.length === 0 || (!isMerged && transformCameras.length === 0) || frameJobBlock !== null}
                       title={frameJobBlock ?? undefined}
                       className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold"
                     >
@@ -2014,7 +2021,7 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                         <path d="M21 14h-5a2 2 0 0 1-2-2V7" />
                         <path d="M14 2L7 9l7 7" />
                       </svg>
-                      Apply to All Frames{cameraOptions.length > 1 && transformCameras.length < cameraOptions.length ? ` (${transformCameras.length} cam${transformCameras.length !== 1 ? 's' : ''})` : ''}
+                      Apply to All Frames{!isMerged && cameraOptions.length > 1 && transformCameras.length < cameraOptions.length ? ` (${transformCameras.length} cam${transformCameras.length !== 1 ? 's' : ''})` : ''}
                     </Button>
                     <Button
                       size="default"

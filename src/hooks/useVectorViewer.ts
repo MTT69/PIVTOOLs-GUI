@@ -48,6 +48,13 @@ export type DataSourceType =
   | "merged_statistics"
   | "stereo_statistics";
 
+// The one rule for "this data source is an ensemble result": every ensemble
+// source (calibrated, uncalibrated, merged, stereo) has "ensemble" in its name.
+// It picks the endpoint (/plot/plot_ensemble), the type folder and the variable
+// group; a hand-written list once left out stereo_ensemble, whose view then went
+// to /plot/plot_vector and drew an instantaneous frame.
+export const isEnsembleDataSource = (ds: DataSourceType): boolean => ds.includes("ensemble");
+
 interface DataSourceAvailability {
   exists: boolean;
   frame_count: number;
@@ -227,10 +234,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     dataSource === "uncalibrated_instantaneous" || dataSource === "uncalibrated_ensemble",
     [dataSource]
   );
-  const isEnsemble = useMemo(() =>
-    dataSource === "calibrated_ensemble" || dataSource === "uncalibrated_ensemble" || dataSource === "merged_ensemble",
-    [dataSource]
-  );
+  const isEnsemble = useMemo(() => isEnsembleDataSource(dataSource), [dataSource]);
   const isMerged = useMemo(() =>
     dataSource === "merged_instantaneous" || dataSource === "merged_ensemble" || dataSource === "merged_statistics",
     [dataSource]
@@ -267,7 +271,15 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   }, [config?.calibration?.active]);
 
   // Feature availability based on data source
-  const canTransform = useMemo(() => !isUncalibrated, [isUncalibrated]);
+  // Transforms act on calibrated per-camera and Merged trees only: the operations
+  // are written for 2C calibrated fields, and the backend refuses stereo and
+  // uncalibrated data. The reason is shown where the Transforms control would be.
+  const transformUnavailableReason = useMemo(() => {
+    if (isUncalibrated) return "Transforms are not supported on uncalibrated data yet";
+    if (isStereoData) return "Transforms are not supported on stereo data yet";
+    return null;
+  }, [isUncalibrated, isStereoData]);
+  const canTransform = transformUnavailableReason === null;
   const canEditCoordinates = useMemo(() => !isUncalibrated, [isUncalibrated]);
   // Merging is NOT allowed for stereo (already 3D combined data) or uncalibrated
   const canMerge = useMemo(() => !isUncalibrated && !isStereoData && !isStereo, [isUncalibrated, isStereoData, isStereo]);
@@ -364,6 +376,12 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   const [appliedTransforms, setAppliedTransforms] = useState<string[]>([]);
   // Track available runs for validation
   const [availableRuns, setAvailableRuns] = useState<number[]>([]);
+  // The location whose runs (check_runs) have resolved. A data-source switch keeps
+  // the previous source's run until they do, so the colour-range request waits for
+  // runsKey to match: otherwise it asks for a pass the new source may not have.
+  const runsKey = `${effectiveDir}|${dataSource}|${camera}|${stereoInstPairKey}|${stereoEnsPairKey}`;
+  const [resolvedRunsKey, setResolvedRunsKey] = useState<string | null>(null);
+  const latestRunsKeyRef = useRef<string>("");
   // Separate state for run input to allow empty string while typing
   const [runInput, setRunInput] = useState<string>("1");
   // Error message for invalid run
@@ -376,8 +394,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
   // This ensures cache entries are invalidated when ANY display setting changes,
   // without relying on effect ordering for a version counter.
   const buildCacheKey = useCallback((frameIdx: number) => {
-    return `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-${cmap}-${lower}-${upper}-${xOffset}-${yOffset}-${xlimMinRef.current}-${xlimMaxRef.current}-${ylimMinRef.current}-${ylimMaxRef.current}-${plotTitleRef.current}-${uTauRef.current}-${nuViscRef.current}-${isUncalibrated}-${merged}-${isStereoData}`;
-  }, [effectiveDir, camera, type, run, cmap, lower, upper, xOffset, yOffset, isUncalibrated, merged, isStereoData]);
+    return `${effectiveDir}-${camera}-${frameIdx}-${type}-${run}-${cmap}-${lower}-${upper}-${xOffset}-${yOffset}-${xlimMinRef.current}-${xlimMaxRef.current}-${ylimMinRef.current}-${ylimMaxRef.current}-${plotTitleRef.current}-${uTauRef.current}-${nuViscRef.current}-${isUncalibrated}-${merged}-${isStereoData}-${dataSource}-${stereoInstPairKey}-${stereoEnsPairKey}`;
+  }, [effectiveDir, camera, type, run, cmap, lower, upper, xOffset, yOffset, isUncalibrated, merged, isStereoData, dataSource, stereoInstPairKey, stereoEnsPairKey]);
 
   // Invalidate prefetch cache when rendering-affecting settings change
   useEffect(() => {
@@ -408,11 +426,43 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   // Helper to derive type_name from dataSource
   const getTypeNameFromDataSource = useCallback((ds: DataSourceType): string => {
-    if (ds.includes('ensemble')) {
+    if (isEnsembleDataSource(ds)) {
       return 'ensemble';
     }
     return 'instantaneous';
   }, []);
+
+  // The type folder (instantaneous / ensemble) of the current view.
+  const viewTypeName = useMemo(() => getTypeNameFromDataSource(dataSource), [dataSource, getTypeNameFromDataSource]);
+
+  // The location of a result tree: camera, merged, calibrated or uncalibrated,
+  // type folder and stereo pair. Every viewer request that reads or writes a
+  // result tree carries it (GETs through appendLocationParams, POSTs by spreading
+  // it into the JSON body), so no request can act on a tree other than the one on
+  // screen: a mean view on uncalibrated data once read the calibrated statistics,
+  // and a transform on a stereo view rewrote the mono tree. An ensemble type folder
+  // takes the ensemble camera pair, the rest the instantaneous one.
+  const locationOf = useCallback((typeName: string) => ({
+    camera,
+    merged,
+    is_uncalibrated: isUncalibrated,
+    type_name: typeName,
+    is_stereo: isStereoData,
+    camera_pair: isStereoData ? (typeName === "ensemble" ? stereoEnsPair : stereoInstPair) : null,
+  }), [camera, merged, isUncalibrated, isStereoData, stereoInstPair, stereoEnsPair]);
+
+  // locationOf as query params, for the GET routes (parse_plot_params).
+  const appendLocationParams = useCallback((params: URLSearchParams, typeName: string) => {
+    const loc = locationOf(typeName);
+    params.set("camera", String(loc.camera));
+    params.set("merged", loc.merged ? "1" : "0");
+    params.set("is_uncalibrated", loc.is_uncalibrated ? "1" : "0");
+    params.set("type_name", loc.type_name);
+    if (loc.camera_pair) {
+      params.set("is_stereo", "1");
+      params.set("camera_pair", loc.camera_pair.join(","));
+    }
+  }, [locationOf]);
 
   // Auto-select appropriate variable when data source changes
   // IMPORTANT: Only auto-correct type when dataSource actually changes, NOT when user manually selects a variable
@@ -427,7 +477,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       return;
     }
 
-    const isEnsembleSource = dataSource.includes('ensemble');
+    const isEnsembleSource = isEnsembleDataSource(dataSource);
     const isStatisticsSource = dataSource.includes('statistics');
     const isUncalibratedSource = dataSource.includes('uncalibrated');
 
@@ -580,15 +630,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       // NOTE: coordinate offsets are persisted server-side via /calibration/set_datum
       // (they rewrite coordinates.mat); /plot_vector does not read x_offset/y_offset.
       // Axis limits - only send if both min and max are provided (use refs for latest values)
@@ -632,7 +674,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       // would otherwise report "done" while the current render is still in flight.
       if (plotRequestIdRef.current === requestId) setLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, parseVarType, isStereoData, stereoInstPair, buildCacheKey, appendWallUnitsParams]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, xOffset, yOffset, parseVarType, appendLocationParams, viewTypeName, buildCacheKey, appendWallUnitsParams]);
 
   // Prefetch a single frame for smooth playback
   const prefetchFrame = useCallback(async (frameIdx: number) => {
@@ -661,15 +703,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       // NOTE: coordinate offsets are persisted server-side via /calibration/set_datum
       // (they rewrite coordinates.mat); /plot_vector does not read x_offset/y_offset.
       // Axis limits - only send if both min and max are provided (use refs for latest values)
@@ -707,7 +741,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       prefetchInProgressRef.current.delete(cacheKey);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, merged, isUncalibrated, xOffset, yOffset, isStereoData, stereoInstPair, parseVarType, buildCacheKey, appendWallUnitsParams]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, xOffset, yOffset, parseVarType, appendLocationParams, viewTypeName, buildCacheKey, appendWallUnitsParams]);
 
   // Prefetch surrounding frames for smooth playback
   const prefetchSurrounding = useCallback((currentIdx: number, count: number = 5) => {
@@ -835,15 +869,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", String(camera));
-      params.set("merged", isMerged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Add stereo params when viewing stereo ensemble data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoEnsPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       // Axis limits - only send if both min and max are provided (use refs for latest values)
       if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
         params.set("xlim_min", String(Number(xlimMinRef.current)));
@@ -887,7 +913,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       if (plotRequestIdRef.current === requestId) setLoading(false);
     }
-  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, camera, isMerged, isUncalibrated, isStereoData, stereoEnsPair, parseVarType, appendWallUnitsParams]);
+  }, [effectiveDir, type, run, lower, upper, cmap, backendUrl, appendLocationParams, viewTypeName, parseVarType, appendWallUnitsParams]);
 
   // Unified fetch function that chooses the right endpoint based on data source
   const fetchCurrentView = useCallback(async () => {
@@ -909,14 +935,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       const url = `${backendUrl}/plot/check_stat_vars?${params.toString()}`;
       const json = await fetchJson(url);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
@@ -928,7 +947,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setStatVarsLoading(false);
     }
-  }, [effectiveDir, camera, merged, backendUrl, isStereoData, stereoInstPair]);
+  }, [effectiveDir, backendUrl, appendLocationParams, viewTypeName]);
 
   const fetchFrameVars = useCallback(async () => {
     setFrameVarsLoading(true);
@@ -939,15 +958,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", String(index));
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       const url = `${backendUrl}/plot/check_vars?${params.toString()}`;
       const json = await fetchJson(url);
       const vars = Array.isArray(json.vars) ? json.vars.map(String) : [];
@@ -959,7 +970,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setFrameVarsLoading(false);
     }
-  }, [effectiveDir, camera, merged, isUncalibrated, backendUrl, isStereoData, stereoInstPair]); // Note: removed index - vars are same across frames
+  }, [effectiveDir, backendUrl, appendLocationParams, viewTypeName]); // Note: removed index - vars are same across frames
 
   // Fetch all variables grouped by source (instantaneous, instantaneous_stats, mean_stats)
   const fetchAllVars = useCallback(async () => {
@@ -976,15 +987,11 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("frame", "1"); // Just check frame 1 - vars are same across all frames
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      // check_all_vars lists the instantaneous tree's sources (frames, per-frame
+      // and mean statistics) on camera_pair and the ensemble on its own pair.
+      appendLocationParams(params, "instantaneous");
+      const ensemblePair = locationOf("ensemble").camera_pair;
+      if (ensemblePair) params.set("ensemble_camera_pair", ensemblePair.join(","));
       const url = `${backendUrl}/plot/check_all_vars?${params.toString()}`;
       const json = await fetchJson(url);
       // check_all_vars answers every source's list, empty when the source is
@@ -1009,7 +1016,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setAllVarsLoading(false);
     }
-  }, [effectiveDir, camera, merged, isUncalibrated, backendUrl, isStereoData, stereoInstPair]); // Note: removed index - vars are same across frames
+  }, [effectiveDir, backendUrl, appendLocationParams, locationOf]); // Note: removed index - vars are same across frames
 
   const fetchLimits = useCallback(async () => {
     const requestId = ++limitsRequestIdRef.current;
@@ -1019,19 +1026,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) throw new Error("Please provide a base path");
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      params.set("type_name", getTypeNameFromDataSource(dataSource));
+      // Same location as the image request for this view.
+      appendLocationParams(params, viewTypeName);
       // The prefixed dropdown name: check_limits reads the source's own files from it.
       params.set("var", type);
-      // Same location as the image request for this view: ensemble views use the
-      // ensemble camera pair (fetchEnsembleImage), the rest the instantaneous one.
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = isEnsemble ? stereoEnsPair : stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      // The pass the view draws: check_limits reads only that pass of each file,
+      // and requires it.
+      params.set("run", String(run));
       const url = `${backendUrl}/plot/check_limits?${params.toString()}`;
       const json = await fetchJson(url);
       // A superseded limits request must not overwrite the newer variable's range.
@@ -1052,7 +1053,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       if (limitsRequestIdRef.current === requestId) setLimitsLoading(false);
     }
-  }, [effectiveDir, camera, merged, isUncalibrated, dataSource, getTypeNameFromDataSource, isEnsemble, type, backendUrl, setLower, setUpper, isStereoData, stereoInstPair, stereoEnsPair]);
+  }, [effectiveDir, appendLocationParams, viewTypeName, type, run, backendUrl, setLower, setUpper]);
 
   const fetchAvailableRuns = useCallback(async () => {
     try {
@@ -1060,17 +1061,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (!basePath) return [];
       const params = new URLSearchParams();
       params.set("base_path", basePath);
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
-      // Pass type_name so backend checks correct data source (ensemble vs instantaneous)
-      params.set("type_name", isEnsemble ? "ensemble" : "instantaneous");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      // type_name makes the backend check the right data source (ensemble vs instantaneous).
+      appendLocationParams(params, viewTypeName);
       const url = `${backendUrl}/plot/check_runs?${params.toString()}`;
       const json = await fetchJson(url);
       const runs =Array.isArray(json.runs) ? json.runs.map(Number).filter((n: number) => Number.isFinite(n) && n > 0) : [];
@@ -1078,7 +1070,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } catch (e) {
       return [];
     }
-  }, [effectiveDir, camera, merged, isEnsemble, isUncalibrated, backendUrl, isStereoData, stereoInstPair]);
+  }, [effectiveDir, backendUrl, appendLocationParams, viewTypeName]);
 
   const handlePlayToggle = () => {
     setPlaying(p => !p);
@@ -1104,14 +1096,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       if (run && run > 0) params.set("run", String(run));
       if (lower.trim() !== "") params.set("lower_limit", String(Number(lower)));
       if (upper.trim() !== "") params.set("upper_limit", String(Number(upper)));
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        params.set("is_stereo", "1");
-        const cameraPair = stereoInstPair;
-        params.set("camera_pair", cameraPair.join(","));
-      }
+      appendLocationParams(params, viewTypeName);
       // Axis limits - only send if both min and max are provided (use refs for latest values)
       if (xlimMinRef.current.trim() !== "" && xlimMaxRef.current.trim() !== "") {
         params.set("xlim_min", String(Number(xlimMinRef.current)));
@@ -1156,7 +1141,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       if (plotRequestIdRef.current === requestId) setStatsLoading(false);
     }
-  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, camera, merged, isStereoData, stereoInstPair, parseVarType, appendWallUnitsParams]);
+  }, [effectiveDir, index, type, run, lower, upper, cmap, backendUrl, appendLocationParams, viewTypeName, parseVarType, appendWallUnitsParams]);
 
   // Fetch a correlation-quality time-series figure (server-rendered PNG).
   // These are not per-frame or cursor-mapped: no frame param, and the
@@ -1174,9 +1159,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const params = new URLSearchParams();
       params.set("base_path", basePath);
       params.set("which", varName);
-      params.set("camera", String(camera));
-      params.set("merged", merged ? "1" : "0");
-      params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
+      appendLocationParams(params, viewTypeName);
       if (run && run > 0) params.set("run", String(run));
 
       const url = `${backendUrl}/plot/plot_corr_quality?${params.toString()}`;
@@ -1190,7 +1173,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       if (plotRequestIdRef.current === requestId) setLoading(false);
     }
-  }, [effectiveDir, type, run, backendUrl, camera, merged, isUncalibrated, parseVarType]);
+  }, [effectiveDir, type, run, backendUrl, appendLocationParams, viewTypeName, parseVarType]);
 
   // Every effect below waits on availabilityReady. Until check_available_data has
   // answered, dataSource is still the "calibrated_instantaneous" default rather than
@@ -1219,15 +1202,28 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     }
   }, [availabilityReady, effectiveDir, camera, merged, isUncalibrated, fetchAllVars]);
 
-  // Auto-apply robust (p5/p95) colour limits when the source or variable changes.
-  // Keyed to source/variable/camera/merged (via fetchLimits), so it recomputes a
-  // sensible global range on load and on variable switch, but does NOT re-fire on
-  // manual lower/upper edits within the same variable — those are preserved.
+  // Auto-apply robust (p5/p95) colour limits when the source, variable or viewed
+  // pass changes. Keyed to source/variable/pass/location (via fetchLimits), so it
+  // recomputes the range of the pass on screen on load, on variable switch and on
+  // pass switch, but does NOT re-fire on manual lower/upper edits within the same
+  // variable and pass — those are preserved.
   // Correlation-quality figures are rendered server-side and take no colour range.
   // When no range is computed for this view, an earlier view's limits error no
   // longer applies: it is cleared, and a request still in flight is superseded so
   // it cannot write its result (or its error) into this view.
+  // It also waits for this location's runs (runsReady): until they resolve, `run`
+  // is the previous source's and the request could ask for a pass that is absent.
+  // Mean mode fetches no runs and keeps its pass.
+  const runsReady = meanMode || resolvedRunsKey === runsKey;
   useEffect(() => {
+    if (!runsReady) {
+      // The location changed: a limits request still in flight is for the old
+      // one, so it is superseded and its error no longer applies.
+      limitsRequestIdRef.current++;
+      setLimitsLoading(false);
+      setLimitsError(null);
+      return;
+    }
     if (availabilityReady && effectiveDir && parseVarType(type).varSource !== "corrq") {
       void fetchLimits();
     } else {
@@ -1235,7 +1231,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setLimitsLoading(false);
       setLimitsError(null);
     }
-  }, [availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
+  }, [runsReady, availabilityReady, effectiveDir, type, camera, merged, fetchLimits, parseVarType]);
 
   // Auto-render when we have a valid configuration
   // Only set hasRendered here for meanMode; non-mean modes wait for
@@ -1315,21 +1311,14 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   const updateOffsets = async () => {
     try {
-      const body: Record<string, any> = {
+      const body = {
         base_path: effectiveDir,
         base_path_idx: basePathIdx,
-        camera: camera,
         run: run,
-        type_name: getTypeNameFromDataSource(dataSource),
         x_offset: Number(xOffset) || 0,
         y_offset: Number(yOffset) || 0,
-        merged: merged ? 1 : 0,
+        ...locationOf(viewTypeName),
       };
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        body.use_stereo = true;
-        body.camera_pair = stereoInstPair;
-      }
       const url = `${backendUrl}/calibration/set_datum`;
       await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
@@ -1343,23 +1332,16 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   const sendDatumToBackend = async (x: number, y: number) => {
     try {
-      const body: Record<string, any> = {
+      const body = {
         base_path: effectiveDir,
         base_path_idx: basePathIdx,
-        camera: camera,
         run: run,
-        type_name: getTypeNameFromDataSource(dataSource),
         x: x,
         y: y,
         x_offset: Number(xOffset) || 0,
         y_offset: Number(yOffset) || 0,
-        merged: merged ? 1 : 0,
+        ...locationOf(viewTypeName),
       };
-      // Add stereo params when viewing stereo data
-      if (isStereoData) {
-        body.use_stereo = true;
-        body.camera_pair = stereoInstPair;
-      }
       const url = `${backendUrl}/calibration/set_datum`;
       await postJson(url, body);
       // Server-side datum changed - clear cache to force fresh render
@@ -1381,20 +1363,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       const fetchCorner = async (xPercent: number, yPercent: number) => {
         const params = new URLSearchParams();
         params.set("base_path", basePath);
-        params.set("camera", String(camera));
+        appendLocationParams(params, viewTypeName);
         params.set("frame", String(index));
         params.set("var", varName);
         params.set("var_source", varSource);
         params.set("run", String(run));
-        params.set("merged", merged ? "1" : "0");
         params.set("x_percent", xPercent.toString());
         params.set("y_percent", yPercent.toString());
-        // Add stereo params when viewing stereo data
-        if (isStereoData) {
-          params.set("is_stereo", "1");
-          const cameraPair = stereoInstPair;
-          params.set("camera_pair", cameraPair.join(","));
-        }
         const url = `${backendUrl}/plot/get_vector_at_position?${params.toString()}`;
         const json = await fetchJson(url);
         if (json.error) throw new Error(json.error);
@@ -1432,21 +1407,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     const { varSource, varName } = parseVarType(type);
     const params = new URLSearchParams();
     params.set("base_path", effectiveDir);
-    params.set("camera", String(camera));
+    appendLocationParams(params, viewTypeName);
     params.set("frame", String(index));
     params.set("var", varName);
     params.set("var_source", varSource);
     params.set("run", String(run));
-    params.set("merged", merged ? "1" : "0");
-    params.set("is_uncalibrated", isUncalibrated ? "1" : "0");
     params.set("x_percent", xPercent.toString());
     params.set("y_percent", yPercent.toString());
-    // Add stereo params when viewing stereo data
-    if (isStereoData) {
-      params.set("is_stereo", "1");
-      const cameraPair = stereoInstPair;
-      params.set("camera_pair", cameraPair.join(","));
-    }
     // Pass axis limits so backend can correctly map percentage to visible region
     // Prefer limits from plot metadata (actual rendered limits) over user-provided strings
     if (meta?.axes_bbox?.xlim) {
@@ -1468,7 +1435,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       params.set("ylim_max", String(convY(Number(ylimMax))));
     }
     return params;
-  }, [effectiveDir, camera, index, type, run, merged, isUncalibrated, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, isStereoData, stereoInstPair, wallUnitsActive, mmFromYPlus]);
+  }, [effectiveDir, appendLocationParams, viewTypeName, index, type, run, xlimMin, xlimMax, ylimMin, ylimMax, meta, parseVarType, wallUnitsActive, mmFromYPlus]);
 
   const fetchValueAt = useCallback((xPercent: number, yPercent: number) => {
     if (pendingFetchRef.current) return;
@@ -1765,18 +1732,25 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
   useEffect(() => {
     if (!availabilityReady || !effectiveDir || meanMode) return;
+    const key = runsKey;
+    latestRunsKeyRef.current = key;
     fetchAvailableRuns().then(runs => {
+      // A newer location's runs were asked for since: this answer is not theirs.
+      if (latestRunsKeyRef.current !== key) return;
       setAvailableRuns(runs);
       if (runs.length > 0) {
         const maxRun = Math.max(...runs);
         setRun(maxRun);
         setRunInput(String(maxRun));
       }
+      setResolvedRunsKey(key);
       setHasRendered(true);
     }).catch(() => {
+      if (latestRunsKeyRef.current !== key) return;
+      setResolvedRunsKey(key);
       setHasRendered(true);
     });
-  }, [availabilityReady, effectiveDir, meanMode, fetchAvailableRuns]);
+  }, [availabilityReady, effectiveDir, meanMode, fetchAvailableRuns, runsKey]);
 
   // Sync runInput when run changes from other sources (e.g., API response)
   useEffect(() => {
@@ -1840,7 +1814,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     // Guard: ensure type is compatible with dataSource before rendering
     // This prevents race conditions where dataSource changed but type hasn't updated yet
     const varSource = type.includes(':') ? type.split(':')[0] : 'inst';
-    const isEnsembleSource = dataSource.includes('ensemble');
+    const isEnsembleSource = isEnsembleDataSource(dataSource);
     const isUncalibratedSource = dataSource.includes('uncalibrated');
     const isStatisticsSource = dataSource.includes('statistics');
 
@@ -2008,10 +1982,9 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setError(null);
       const result = await postJson(`${backendUrl}/plot/transform_frame`, {
         base_path: effectiveDir,
-        camera: camera,
         frame: index,
         transformation,
-        merged: merged,
+        ...locationOf(viewTypeName),
       });
       if (result.success) {
         // Use the backend's simplified transformation list
@@ -2029,7 +2002,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+  }, [backendUrl, effectiveDir, index, locationOf, viewTypeName, handleRender]);
 
   const clearTransforms = useCallback(async () => {
     try {
@@ -2037,9 +2010,8 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
       setError(null);
       const result = await postJson(`${backendUrl}/plot/clear_transform`, {
         base_path: effectiveDir,
-        camera: camera,
         frame: index,
-        merged: merged,
+        ...locationOf(viewTypeName),
       });
       if (result.success) {
         setAppliedTransforms([]);
@@ -2068,7 +2040,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, index, merged, handleRender]);
+  }, [backendUrl, effectiveDir, index, locationOf, viewTypeName, handleRender]);
 
   // clearOperationsList removed — clearTransforms now handles both backend restore and UI list clearing
 
@@ -2092,11 +2064,13 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
 
       const result = await postJson(`${backendUrl}/plot/transform_all_frames`, {
         base_path: effectiveDir,
-        camera: camera,
+        // The source frame: the one whose pending transformations are applied.
+        frame: index,
         transformations,
-        merged: merged,
         image_count: maxFrameCount,
-        cameras: transformCameras.length < cameraOptions.length ? transformCameras : undefined,
+        // The Merged tree is one tree; a camera selection applies to per-camera data only.
+        cameras: !merged && transformCameras.length < cameraOptions.length ? transformCameras : undefined,
+        ...locationOf(viewTypeName),
       });
       if (result.job_id) {
         setTransformationJob({
@@ -2116,7 +2090,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     } finally {
       setLoading(false);
     }
-  }, [backendUrl, effectiveDir, camera, merged, maxFrameCount, transformCameras, cameraOptions]);
+  }, [backendUrl, effectiveDir, index, merged, locationOf, viewTypeName, maxFrameCount, transformCameras, cameraOptions]);
 
   const pollTransformationStatus = useCallback(async (jobId: string) => {
     try {
@@ -2302,6 +2276,7 @@ export const useVectorViewer = ({ backendUrl, config }: UseVectorViewerProps) =>
     hasStereoData,
     isStereoData,
     canTransform,
+    transformUnavailableReason,
     canEditCoordinates,
     canMerge,
     canViewMerged,
