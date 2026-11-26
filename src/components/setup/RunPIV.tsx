@@ -81,7 +81,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
   // The backend refused an ensemble resume because PIVTOOLs' version changed since the run started.
-  const [showCodeChangeDialog, setShowCodeChangeDialog] = useState(false);
+  // Old and new code identity ("0.7.0 (a1b2c3d)") when an ensemble resume was refused for a code change.
+  const [codeChange, setCodeChange] = useState<{ old: string; new: string } | null>(null);
   const [isCheckingOutput, setIsCheckingOutput] = useState(false);
   // Why a run was not started (the output check or the clear failed).
   const [runStartError, setRunStartError] = useState<string | null>(null);
@@ -174,7 +175,12 @@ const RunPIV: React.FC<RunPIVProps> = ({
         await startJob(mode, settings);
       } catch (error) {
         if (error instanceof ApiError && error.body?.status === CODE_VERSION_CHANGED) {
-          setShowCodeChangeDialog(true);
+          const { old: oldCode, new: newCode } = error.body;
+          if (typeof oldCode !== 'string' || typeof newCode !== 'string') {
+            setRunStartError('The backend refused the resume because the code changed, but did not say from which version to which.');
+          } else {
+            setCodeChange({ old: oldCode, new: newCode });
+          }
         }
         // Any other refusal is already shown by the job context's error display.
       }
@@ -211,7 +217,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
 
   // Handle user confirming the resume although the code version changed
   const handleConfirmCodeChange = async () => {
-    setShowCodeChangeDialog(false);
+    setCodeChange(null);
     try {
       await startJob(mode, settings, true);
     } catch {
@@ -624,13 +630,13 @@ const RunPIV: React.FC<RunPIVProps> = ({
         </div>
 
         {/* Code Version Changed Dialog (ensemble resume) */}
-        <AlertDialog open={showCodeChangeDialog} onOpenChange={setShowCodeChangeDialog}>
+        <AlertDialog open={codeChange !== null} onOpenChange={(open) => { if (!open) setCodeChange(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Code version changed</AlertDialogTitle>
               <AlertDialogDescription>
-                Code version changed since this run started. Continue? The resumed passes are computed by the
-                current PIVTOOLs version, the earlier passes by the version that started the run.
+                Code changed since this run started: {codeChange?.old} → {codeChange?.new}. Continue? The resumed
+                passes are computed by the current code, the earlier passes by the code that started the run.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

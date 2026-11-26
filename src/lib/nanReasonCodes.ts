@@ -28,7 +28,7 @@ export const NAN_REASON_INST: Record<number, NanReasonEntry> = {
   1: { stage: "post-C-call", meaning: "peak-fit failure (no peak / LM did not converge)" },
   7: {
     stage: "window preparation (C)",
-    meaning: "too little data (over a quarter of the window outside the frame or under the mask)",
+    meaning: "too little data (over 25 % of the window outside the frame or under the mask)",
   },
   6: {
     stage: "residual gate on passes 2 and later",
@@ -54,7 +54,7 @@ export const NAN_REASON_ENS: Record<number, NanReasonEntry> = {
   6: { stage: "displacement check", meaning: "displacement > 3/4 window (in accumulator)" },
   7: {
     stage: "pre-fitting",
-    meaning: "too little data (over a quarter of the window outside the frame or under the mask, or a stored-plane lag with no valid pixel pair)",
+    meaning: "too little data (over 25 % of the window, in single mode of the frame-A window, outside the frame or under the mask)",
   },
   10: { stage: "outlier detection", meaning: "velocity outlier (median test)" },
   11: {
