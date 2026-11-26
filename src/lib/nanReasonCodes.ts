@@ -26,7 +26,10 @@ export const NAN_REASON_INST: Record<number, NanReasonEntry> = {
   [-1]: { stage: "mask", meaning: "masked window" },
   0: { stage: "init / rescue reset", meaning: "valid" },
   1: { stage: "post-C-call", meaning: "peak-fit failure (no peak / LM did not converge)" },
-  6: { stage: "post-C-call", meaning: "large-displacement rejection" },
+  6: {
+    stage: "C peak search / residual gate on passes 2 and later",
+    meaning: "taller correlation peak beyond the quarter-window search reach, or (after the first pass) a fitted residual beyond a quarter window",
+  },
   9: { stage: "end of pass", meaning: "unclassified (in nan_mask, no stage claimed it)" },
   10: { stage: "outlier stage", meaning: "outlier detection (primary peak)" },
   12: { stage: "secondary loop", meaning: "outlier detection (substituted secondary peak)" },

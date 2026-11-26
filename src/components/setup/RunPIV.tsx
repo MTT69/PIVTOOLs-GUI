@@ -61,7 +61,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // Select the appropriate job and settings based on mode
   const job = mode === 'ensemble' ? ensembleJob : instantaneousJob;
   const settings = mode === 'ensemble' ? ensembleSettings : instantaneousSettings;
-  const { isLoading, isPolling, progress, statusImage, logs, datasetNumber, datasetTotal, datasetLabel } = job;
+  const { isLoading, isPolling, progress, statusImage, logs, datasetNumber, datasetTotal, datasetLabel, jobState, jobError, failedUnits } = job;
+
+  // What the status line says once a job is no longer running.
+  const endedLabel =
+    jobState === 'completed' ? 'Completed!'
+    : jobState === 'failed' ? `Failed: ${jobError ?? 'the run reported no error line; see the log'}`
+    : jobState === 'cancelled' ? 'Cancelled'
+    : null;
 
   // --- UI State (local to component) ---
   const [varType, setVarType] = useState<string>(settings.varType);
@@ -74,6 +81,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
   const [isCheckingOutput, setIsCheckingOutput] = useState(false);
+  // Why a run was not started (the output check or the clear failed).
+  const [runStartError, setRunStartError] = useState<string | null>(null);
   const [memoryWarning, setMemoryWarning] = useState<string | null>(null);
   // A slow /memory_check reply (it reads one image) must not overwrite a newer one.
   const memoryCheckSeqRef = useRef(0);
@@ -151,6 +160,7 @@ const RunPIV: React.FC<RunPIVProps> = ({
   // Check if output data already exists before starting a run
   const handleRunClick = async () => {
     if (activePaths.length === 0) return;
+    setRunStartError(null);
 
     // Ensemble resume REQUIRES the existing ensemble_result.mat (passes 1..N-1);
     // the overwrite dialog's only affirmative action deletes it, so skip the check.
@@ -181,9 +191,10 @@ const RunPIV: React.FC<RunPIVProps> = ({
         await startJob(mode, settings);
       }
     } catch (error) {
+      // Running blind could write into a folder the check would have stopped, so the
+      // run does not start; the backend's reason is shown instead.
       console.error("[RunPIV] Error checking for existing output:", errorMessage(error));
-      // On error, just run anyway
-      await startJob(mode, settings);
+      setRunStartError(`Could not check the output folders, so the run was not started: ${errorMessage(error)}`);
     } finally {
       setIsCheckingOutput(false);
     }
@@ -204,7 +215,11 @@ const RunPIV: React.FC<RunPIVProps> = ({
       });
       console.log('[RunPIV] Clear result:', result);
     } catch (error) {
+      // A failed clear leaves the old output in place, and the backend would refuse
+      // the run into a populated folder; stop here and say why.
       console.error("[RunPIV] Error clearing output:", errorMessage(error));
+      setRunStartError(`Could not clear the existing output, so the run was not started: ${errorMessage(error)}`);
+      return;
     } finally {
       setIsCheckingOutput(false);
     }
@@ -254,9 +269,9 @@ const RunPIV: React.FC<RunPIVProps> = ({
           setFrameVars(allowed);
         }
       } catch (error) {
-        // If frame doesn't exist yet, just keep the default vars
-        console.log("Waiting for frames to be available...", errorMessage(error));
-        // Don't throw error, just keep the default variables
+        // The backend refuses to read a folder whose run is still running (and the
+        // first frame may not exist yet), so the default variable list stays.
+        console.log("Variables not readable during the run; keeping the defaults:", errorMessage(error));
       } finally {
         setFrameVarsLoading(false);
       }
@@ -357,6 +372,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
           </Alert>
         )}
 
+        {runStartError && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Run not started</AlertTitle>
+            <AlertDescription className="text-sm whitespace-pre-wrap">{runStartError}</AlertDescription>
+          </Alert>
+        )}
+
         {memoryWarning && (
           <Alert className="border-yellow-500 bg-yellow-50">
             <AlertTriangle className="h-4 w-4 text-yellow-600" />
@@ -452,8 +475,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
         {showProgressBar && (
           <div className="space-y-2">
             <Progress value={progress} />
-            <p className="text-sm text-center font-medium text-gray-500">
-              {isPolling ? `Processing... ${progress}%` : (progress === 100 ? "Completed!" : "Idle")}
+            <p className={`text-sm text-center font-medium ${!isPolling && jobState === 'failed' ? 'text-red-600' : 'text-gray-500'}`}>
+              {isPolling ? `Processing... ${progress}%` : (endedLabel ?? "Idle")}
             </p>
             {/* Multi-dataset runs only. datasetLabel is null once every dataset is
                 complete, so a finished run never shows a stale name. */}
@@ -474,10 +497,29 @@ const RunPIV: React.FC<RunPIVProps> = ({
                   Processing...
                 </span>
               ) : (
-                progress === 100 ? "Complete!" : "Ready to run"
+                <span className={jobState === 'failed' ? 'text-red-600' : undefined}>
+                  {endedLabel ?? "Ready to run"}
+                </span>
               )}
             </p>
           </div>
+        )}
+
+        {failedUnits.length > 0 && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>
+              {failedUnits.length === 1 ? "1 dataset failed" : `${failedUnits.length} datasets failed`}
+              {isPolling ? "; the others continue" : ""}
+            </AlertTitle>
+            <AlertDescription className="text-sm whitespace-pre-wrap">
+              {failedUnits.map(u => (
+                <div key={`${u.pathIdx}-${u.camera}`}>
+                  {basename(sourcePaths[u.pathIdx] ?? `path ${u.pathIdx + 1}`)}, camera {u.camera}: {u.error ?? "no error recorded"}
+                </div>
+              ))}
+            </AlertDescription>
+          </Alert>
         )}
 
         {showFrameViewer && (

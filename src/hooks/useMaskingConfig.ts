@@ -26,8 +26,8 @@ export function useMaskingConfig(
     const configMode = initialConfig?.mode;
     return configMode === 'rectangular' ? 'pixel_border' : 'polygon';
   });
-  const [rectangularTop, setRectangularTop] = useState(initialConfig?.rectangular?.top ?? 64);
-  const [rectangularBottom, setRectangularBottom] = useState(initialConfig?.rectangular?.bottom ?? 64);
+  const [rectangularTop, setRectangularTop] = useState(initialConfig?.rectangular?.top ?? 0);
+  const [rectangularBottom, setRectangularBottom] = useState(initialConfig?.rectangular?.bottom ?? 0);
   const [rectangularLeft, setRectangularLeft] = useState(initialConfig?.rectangular?.left ?? 0);
   const [rectangularRight, setRectangularRight] = useState(initialConfig?.rectangular?.right ?? 0);
   const [predictorFill, setPredictorFill] = useState<PredictorFill>(initialConfig?.predictor_fill ?? 'harmonic');
@@ -51,8 +51,8 @@ export function useMaskingConfig(
 
   useEffect(() => {
     if (initialConfig?.rectangular) {
-      setRectangularTop(initialConfig.rectangular.top ?? 64);
-      setRectangularBottom(initialConfig.rectangular.bottom ?? 64);
+      setRectangularTop(initialConfig.rectangular.top ?? 0);
+      setRectangularBottom(initialConfig.rectangular.bottom ?? 0);
       setRectangularLeft(initialConfig.rectangular.left ?? 0);
       setRectangularRight(initialConfig.rectangular.right ?? 0);
     }

@@ -515,7 +515,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												setTopInputValue('0');
 												updateRectangularTop(0);
 											} else {
-												const numVal = Math.max(0, Number(topInputValue));
+												const numVal = Math.max(0, Math.round(Number(topInputValue)));
 												setTopInputValue(String(numVal));
 												updateRectangularTop(numVal);
 											}
@@ -539,7 +539,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												setBottomInputValue('0');
 												updateRectangularBottom(0);
 											} else {
-												const numVal = Math.max(0, Number(bottomInputValue));
+												const numVal = Math.max(0, Math.round(Number(bottomInputValue)));
 												setBottomInputValue(String(numVal));
 												updateRectangularBottom(numVal);
 											}
@@ -563,7 +563,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												setLeftInputValue('0');
 												updateRectangularLeft(0);
 											} else {
-												const numVal = Math.max(0, Number(leftInputValue));
+												const numVal = Math.max(0, Math.round(Number(leftInputValue)));
 												setLeftInputValue(String(numVal));
 												updateRectangularLeft(numVal);
 											}
@@ -587,7 +587,7 @@ const Masking: React.FC<{ config?: any; updateConfig?: (path: string[], value: a
 												setRightInputValue('0');
 												updateRectangularRight(0);
 											} else {
-												const numVal = Math.max(0, Number(rightInputValue));
+												const numVal = Math.max(0, Math.round(Number(rightInputValue)));
 												setRightInputValue(String(numVal));
 												updateRectangularRight(numVal);
 											}

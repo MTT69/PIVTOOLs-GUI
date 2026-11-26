@@ -698,6 +698,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                       Uncalibrated Instantaneous ({availableDataSources.uncalibrated_instantaneous.frame_count} frames)
                     </SelectItem>
                   )}
+                  {availableDataSources.uncalibrated_instantaneous.unfinished && (
+                    <SelectItem value="uncalibrated_instantaneous_unfinished" disabled>
+                      Uncalibrated Instantaneous: {availableDataSources.uncalibrated_instantaneous.unfinished}
+                    </SelectItem>
+                  )}
                   {/* Ensemble options */}
                   {availableDataSources.calibrated_ensemble.exists && (
                     <SelectItem value="calibrated_ensemble">
@@ -707,6 +712,11 @@ export default function VectorViewer({ backendUrl = "/backend", config }: { back
                   {availableDataSources.uncalibrated_ensemble.exists && (
                     <SelectItem value="uncalibrated_ensemble">
                       Uncalibrated Ensemble (Mean)
+                    </SelectItem>
+                  )}
+                  {availableDataSources.uncalibrated_ensemble.unfinished && (
+                    <SelectItem value="uncalibrated_ensemble_unfinished" disabled>
+                      Uncalibrated Ensemble: {availableDataSources.uncalibrated_ensemble.unfinished}
                     </SelectItem>
                   )}
                   {/* Stereo options - show when stereo data exists (file-based detection) */}

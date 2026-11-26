@@ -18,7 +18,6 @@ import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import GainNormalisationToggle from "@/components/shared/GainNormalisationToggle";
 import CameraSelector from "@/components/shared/CameraSelector";
-import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
 import { useNumericInput } from "@/hooks/useNumericInput";
 
 interface InstantaneousPIVProps {
@@ -290,27 +289,22 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                 <div className="space-y-2">
                   <Label className="text-sm">Image Warp Interpolation</Label>
                   <Select
-                    value={config?.instantaneous_piv?.image_warp_interpolation || 'cubic'}
+                    value={config?.instantaneous_piv?.image_warp_interpolation || 'lanczos4'}
                     onValueChange={(value) => updateConfigValue(['instantaneous_piv', 'image_warp_interpolation'], value)}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
-                      <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
+                      <SelectItem value="lanczos4">Lanczos-4 (8×8, default)</SelectItem>
+                      <SelectItem value="lanczos3">Lanczos-3 (6×6)</SelectItem>
+                      <SelectItem value="cubic">Cubic (4×4)</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Interpolation kernel for image warping during predictor-corrector passes. Cubic is faster; Lanczos-3 preserves sharper particle images.
+                    Interpolation kernel for image warping during predictor-corrector passes. Lanczos-4 (default) keeps the warp bias at or below 0.003 px for 2–5 px particles and costs about 4–7 % run time. Cubic biases vectors by 0.04–0.09 px for 3–10 px particles.
                   </p>
                 </div>
-
-                <BoundaryConditionEditor
-                  section="instantaneous_piv"
-                  conditions={config?.instantaneous_piv?.predictor_boundary_conditions || []}
-                  updateConfigValue={updateConfigValue}
-                />
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -405,7 +399,7 @@ export default function InstantaneousPIV({ config, updateConfig }: Instantaneous
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Full saves all 12 fields per pass (including nan_reason invalidation codes). Minimal saves only ux, uy, and mask — sufficient for calibration, statistics, and most post-processing. Minimal is significantly faster.
+                    Full saves all 13 fields per pass (including nan_reason invalidation codes). Minimal saves only ux, uy, and mask — sufficient for calibration, statistics, and most post-processing. Minimal is significantly faster.
                   </p>
                 </div>
 

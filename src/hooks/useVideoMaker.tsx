@@ -7,6 +7,8 @@ interface DataSourceInfo {
   frame_count: number;
   path: string | null;
   camera_pair?: number[] | null;
+  // Set when the folder's PIV run is running or failed: not offered, and why.
+  unfinished?: string;
 }
 
 interface DataSourcesAvailability {
@@ -397,6 +399,9 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
   const hasAnyData = useMemo(() => {
     return dataSourceOptions.length > 0;
   }, [dataSourceOptions]);
+
+  // Why the uncalibrated source is not offered, when its PIV run is unfinished.
+  const uncalibratedUnfinished = dataSources?.uncalibrated?.unfinished ?? null;
 
   // Check if current data source is stereo
   const isStereoData = useMemo(() => dataSource === 'stereo', [dataSource]);
@@ -789,6 +794,7 @@ export function useVideoMaker(backendUrl: string = '/backend', config?: any) {
     dataSource,
     setDataSource,
     dataSourceOptions,
+    uncalibratedUnfinished,
     hasAnyData,
     isStereoData,
     // Variables state

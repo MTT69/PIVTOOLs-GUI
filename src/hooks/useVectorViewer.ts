@@ -60,6 +60,9 @@ interface DataSourceAvailability {
   frame_count: number;
   variables: string[];
   camera_pair?: number[] | null;
+  // Set when the folder's PIV run is running or failed: the source is not offered,
+  // and this says why.
+  unfinished?: string;
 }
 
 export interface AvailableDataSources {

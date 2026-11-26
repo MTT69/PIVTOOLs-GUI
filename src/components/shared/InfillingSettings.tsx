@@ -71,7 +71,6 @@ const InfillingSettings = memo(function InfillingSettings({
               <SelectContent>
                 <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                 <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
-                <SelectItem value="biharmonic">Biharmonic</SelectItem>
                 <SelectItem value="harmonic">Harmonic (smooth least-squares, noise-robust)</SelectItem>
               </SelectContent>
             </Select>
@@ -151,7 +150,7 @@ const InfillingSettings = memo(function InfillingSettings({
             <div className="space-y-1">
               <Label className="text-xs">Method</Label>
               <Select
-                value={infillingConfig.final_pass?.method || 'biharmonic'}
+                value={infillingConfig.final_pass?.method || 'harmonic'}
                 onValueChange={(value) => updateFinalPass('method', value)}
               >
                 <SelectTrigger className="h-8 text-sm">
@@ -160,7 +159,6 @@ const InfillingSettings = memo(function InfillingSettings({
                 <SelectContent>
                   <SelectItem value="nearest">Nearest Valid Neighbour</SelectItem>
                   <SelectItem value="knn">K-Nearest Neighbors</SelectItem>
-                  <SelectItem value="biharmonic">Biharmonic</SelectItem>
                   <SelectItem value="harmonic">Harmonic (smooth least-squares, noise-robust)</SelectItem>
                 </SelectContent>
               </Select>

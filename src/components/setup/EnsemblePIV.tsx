@@ -18,7 +18,6 @@ import InfillingSettings from "@/components/shared/InfillingSettings";
 import PerformanceSettings from "@/components/shared/PerformanceSettings";
 import GainNormalisationToggle from "@/components/shared/GainNormalisationToggle";
 import CameraSelector from "@/components/shared/CameraSelector";
-import BoundaryConditionEditor from "@/components/shared/BoundaryConditionEditor";
 import { useNumericInput } from "@/hooks/useNumericInput";
 
 interface EnsemblePIVProps {
@@ -59,7 +58,7 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
   const [outlierOpen, setOutlierOpen] = useState(false);
   const [infillingOpen, setInfillingOpen] = useState(false);
   const [ensembleOptionsOpen, setEnsembleOptionsOpen] = useState(false);
-  const [predictorBoundaryOpen, setPredictorBoundaryOpen] = useState(false);
+  const [predictorSettingsOpen, setPredictorSettingsOpen] = useState(false);
   const [correlationFittingOpen, setCorrelationFittingOpen] = useState(false);
 
   // Helper function to save camera selection to backend
@@ -482,16 +481,16 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
             )}
           </div>
 
-          {/* Predictor & Boundary Settings */}
+          {/* Predictor Settings */}
           <div>
-            <Button variant="outline" className="w-full justify-between" onClick={() => setPredictorBoundaryOpen(!predictorBoundaryOpen)}>
+            <Button variant="outline" className="w-full justify-between" onClick={() => setPredictorSettingsOpen(!predictorSettingsOpen)}>
               <span className="flex items-center gap-2">
                 <Sliders className="h-4 w-4" />
-                Predictor & Boundary Settings
+                Predictor Settings
               </span>
-              <ChevronRight className={`h-4 w-4 transition-transform ${predictorBoundaryOpen ? 'rotate-90' : ''}`} />
+              <ChevronRight className={`h-4 w-4 transition-transform ${predictorSettingsOpen ? 'rotate-90' : ''}`} />
             </Button>
-            {predictorBoundaryOpen && (
+            {predictorSettingsOpen && (
               <div className="mt-4 space-y-4 p-4 bg-gray-50 rounded-lg">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -528,27 +527,22 @@ export default function EnsemblePIV({ config, updateConfig }: EnsemblePIVProps) 
                 <div className="space-y-2">
                   <Label className="text-sm">Image Warp Interpolation</Label>
                   <Select
-                    value={config?.ensemble_piv?.image_warp_interpolation || 'cubic'}
+                    value={config?.ensemble_piv?.image_warp_interpolation || 'lanczos4'}
                     onValueChange={(value) => updateConfigValue(['ensemble_piv', 'image_warp_interpolation'], value)}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cubic">Cubic (4×4, fast)</SelectItem>
-                      <SelectItem value="lanczos">Lanczos-3 (6×6, sharper)</SelectItem>
+                      <SelectItem value="lanczos4">Lanczos-4 (8×8, default)</SelectItem>
+                      <SelectItem value="lanczos3">Lanczos-3 (6×6)</SelectItem>
+                      <SelectItem value="cubic">Cubic (4×4)</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Interpolation for image dewarping. Cubic is fastest. Lanczos-3 preserves particle sharpness better (~1.5× slower). Predictor-field upscaling between passes is always cubic.
+                    Interpolation for image warping. Lanczos-4 (default) keeps the warp bias at or below 0.003 px for 2–5 px particles and costs about 4–7 % run time; cubic biases vectors by 0.04–0.09 px for 3–10 px particles. Predictor-field upscaling between passes is always cubic.
                   </p>
                 </div>
-
-                <BoundaryConditionEditor
-                  section="ensemble_piv"
-                  conditions={config?.ensemble_piv?.predictor_boundary_conditions || []}
-                  updateConfigValue={updateConfigValue}
-                />
               </div>
             )}
           </div>

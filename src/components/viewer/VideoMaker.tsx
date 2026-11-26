@@ -88,6 +88,7 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
     dataSource,
     setDataSource,
     dataSourceOptions,
+    uncalibratedUnfinished,
     hasAnyData,
     isStereoData,
     // Runs state
@@ -218,6 +219,9 @@ export default function VideoMaker({ backendUrl = '/backend', config }: { backen
                       </Select>
                     ) : (
                       <span className="text-sm text-red-500">No data available</span>
+                    )}
+                    {uncalibratedUnfinished && (
+                      <span className="text-xs text-amber-700">Uncalibrated not offered: {uncalibratedUnfinished}</span>
                     )}
                   </div>
                 </div>

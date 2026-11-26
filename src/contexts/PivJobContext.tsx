@@ -19,8 +19,50 @@ interface StatusImage {
   error: string | null;
 }
 
+// The job's state as /backend/piv_status reports it.
+type JobState = 'running' | 'completed' | 'failed' | 'cancelled';
+const JOB_STATES: readonly JobState[] = ['running', 'completed', 'failed', 'cancelled'];
+
+// One dataset unit (source path x camera) whose run manifest says failed.
+export interface UnitFailure {
+  pathIdx: number;
+  camera: number;
+  error: string | null;
+}
+
+function readJobState(status: { state?: unknown }): JobState {
+  const state = status.state;
+  if (typeof state === 'string' && (JOB_STATES as readonly string[]).includes(state)) {
+    return state as JobState;
+  }
+  throw new Error(`piv_status returned no valid job state (got ${JSON.stringify(state)})`);
+}
+
+// One entry of get_uncalibrated_count's "units" list.
+interface RawUnitStatus {
+  path_idx: number;
+  camera: number;
+  status: 'running' | 'complete' | 'failed' | null;
+  error: string | null;
+}
+
+function readUnitFailures(units: unknown): UnitFailure[] {
+  if (!Array.isArray(units)) {
+    throw new Error('get_uncalibrated_count returned no units list');
+  }
+  return (units as RawUnitStatus[])
+    .filter(u => u.status === 'failed')
+    .map(u => ({ pathIdx: u.path_idx, camera: u.camera, error: u.error ?? null }));
+}
+
 interface PivJobState {
   jobId: string | null;
+  // null until a job has been started in this session.
+  jobState: JobState | null;
+  // The failed job's error line, from the run itself.
+  jobError: string | null;
+  // Dataset units the run marked failed; the other units still finish.
+  failedUnits: UnitFailure[];
   isPolling: boolean;
   isLoading: boolean;
   progress: number;
@@ -67,6 +109,9 @@ interface PivJobContextType {
 
 const defaultJobState: PivJobState = {
   jobId: null,
+  jobState: null,
+  jobError: null,
+  failedUnits: [],
   isPolling: false,
   isLoading: false,
   progress: 0,
@@ -214,7 +259,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
 
         // Query backend to check if job is still running
         const status = await fetchJson(`/backend/piv_status?job_id=${data.jobId}`);
-        if (status.running) {
+        if (readJobState(status) === 'running') {
           // Progress is reported against the path pairs the job was launched with.
           // A record without them (written by an older build) cannot be scored, so
           // drop it rather than resume with a denominator we would have to invent.
@@ -229,11 +274,14 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           setJob(prev => ({
             ...prev,
             jobId: data.jobId,
+            jobState: 'running',
+            jobError: null,
+            failedUnits: [],
             isPolling: true,
             activePaths: data.activePaths,
           }));
         } else {
-          // Job completed - clean up storage
+          // Job ended while the page was closed - clean up storage
           localStorage.removeItem(storageKey);
         }
       } catch (e) {
@@ -298,9 +346,14 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         // result written over a different job's state.
         if (cancelled) return;
 
-        let jobRunning = true;
+        // null means "this poll told us nothing": keep polling and keep the last state.
+        let jobState: JobState | null = null;
+        let jobError: string | null = null;
         if (jobStatusResult.status === 'fulfilled') {
-          jobRunning = jobStatusResult.value.running ?? true;
+          jobState = readJobState(jobStatusResult.value);
+          jobError = jobStatusResult.value.error ?? null;
+        } else {
+          console.error(`PIV job status poll failed: ${errorMessage(jobStatusResult.reason)}`);
         }
 
         // null means "this poll told us nothing" — keep the previous value instead
@@ -309,10 +362,12 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         let datasetInfo: { number: number | null; total: number; label: string | null } | null = null;
         let currentDatasetIdx: number | null = null;
         let availableFrames: number[] = [];
+        let failedUnits: UnitFailure[] | null = null;
 
         if (statusResult.status === 'fulfilled') {
           const data = statusResult.value;
           currentProgress = Math.round(data.percent ?? 0);
+          failedUnits = readUnitFailures(data.units);
           datasetInfo = {
             number: data.dataset_number ?? null,
             total: data.total ?? 0,
@@ -368,7 +423,9 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
 
         setInstantaneousJob(prev => {
           const newProgress = currentProgress ?? prev.progress;
-          const shouldStopPolling = newProgress >= 100 && !jobRunning;
+          // The job's own state decides the end, never the progress figure: a failed
+          // run can stop short of 100 % and must still end the poll and say so.
+          const shouldStopPolling = jobState !== null && jobState !== 'running';
 
           if (shouldStopPolling) {
             localStorage.removeItem(STORAGE_KEY_INSTANTANEOUS);
@@ -377,6 +434,9 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           return {
             ...prev,
             progress: newProgress,
+            jobState: jobState ?? prev.jobState,
+            jobError: jobState !== null ? jobError : prev.jobError,
+            failedUnits: failedUnits ?? prev.failedUnits,
             ...(datasetInfo
               ? {
                   datasetNumber: datasetInfo.number,
@@ -413,9 +473,10 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
   }, [instantaneousJob.isPolling, instantaneousJob.jobId, instantaneousJob.activePaths]);
 
   // Polling effect for ensemble mode.
-  // Ensemble progress comes from log scraping (get_ensemble_progress_from_logs), not
-  // from counting files, so its percentage is left as-is here. Only the log handling
-  // and the now-required active_paths parameter are shared with instantaneous.
+  // Ensemble progress is counted from the run manifests (passes saved per unit),
+  // not from vector files, so its percentage is taken as reported. The job state,
+  // failed units, log handling and the active_paths parameter work as in
+  // instantaneous.
   useEffect(() => {
     if (!ensembleJob.isPolling || !ensembleJob.jobId) return;
 
@@ -462,24 +523,25 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         // See the instantaneous effect: a late commit would land on another job.
         if (cancelled) return;
 
-        let jobRunning = true;
+        let jobState: JobState | null = null;
+        let jobError: string | null = null;
         if (jobStatusResult.status === 'fulfilled') {
-          jobRunning = jobStatusResult.value.running ?? true;
+          jobState = readJobState(jobStatusResult.value);
+          jobError = jobStatusResult.value.error ?? null;
+        } else {
+          console.error(`Ensemble job status poll failed: ${errorMessage(jobStatusResult.reason)}`);
         }
 
         let currentProgress = 0;
         let currentDatasetIdx: number | null = null;
         let availableFrames: number[] = [];
+        let failedUnits: UnitFailure[] | null = null;
         if (statusResult.status === 'fulfilled') {
           const data = statusResult.value;
           currentProgress = Math.round(data.percent ?? 0);
-          // The ensemble payload comes from log scraping and carries no per-dataset
-          // position, so this pins the preview to the FIRST selected dataset for the
-          // whole run -- it does not follow the dataset actually being written. That
-          // matches the pre-2026-08-02 behaviour (which used sourcePathIdx, always 0)
-          // and is not a regression, but it is a known gap: giving ensemble a real
-          // per-dataset position needs get_ensemble_progress_from_logs to report one.
-          currentDatasetIdx = data.current_dataset_idx ?? activePaths[0] ?? null;
+          failedUnits = readUnitFailures(data.units);
+          // The dataset being written, from the run manifests; the preview follows it.
+          currentDatasetIdx = data.current_dataset_idx ?? null;
 
           if (data.files && Array.isArray(data.files)) {
             availableFrames = data.files.map((f: string) => {
@@ -527,7 +589,8 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
 
         setEnsembleJob(prev => {
           const newProgress = Math.max(prev.progress, currentProgress);
-          const shouldStopPolling = newProgress >= 100 && !jobRunning;
+          // As in instantaneous: the job's own state ends the poll, not the progress.
+          const shouldStopPolling = jobState !== null && jobState !== 'running';
 
           if (shouldStopPolling) {
             localStorage.removeItem(STORAGE_KEY_ENSEMBLE);
@@ -536,6 +599,9 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
           return {
             ...prev,
             progress: newProgress,
+            jobState: jobState ?? prev.jobState,
+            jobError: jobState !== null ? jobError : prev.jobError,
+            failedUnits: failedUnits ?? prev.failedUnits,
             // Only update statusImage if we fetched a new one (newStatusImage !== null)
             statusImage: newStatusImage !== null ? newStatusImage : prev.statusImage,
             isPolling: !shouldStopPolling,
@@ -575,6 +641,9 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
       statusImage: { src: null, error: null },
       progress: 0,
       logs: '',
+      jobState: null,
+      jobError: null,
+      failedUnits: [],
       datasetNumber: null,
       datasetTotal: 0,
       datasetLabel: null,
@@ -604,6 +673,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
       setJob(prev => ({
         ...prev,
         jobId,
+        jobState: 'running',
         isLoading: false,
         isPolling: true,
         // Snapshot: the job's denominator must not follow later checkbox changes.
@@ -638,6 +708,8 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         isPolling: false,
         isLoading: false,
         progress: 0,
+        jobState: 'cancelled',
+        jobError: null,
         jobId: null,
         datasetNumber: null,
         datasetTotal: 0,
