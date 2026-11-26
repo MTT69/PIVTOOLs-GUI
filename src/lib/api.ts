@@ -18,28 +18,36 @@
 
 export class ApiError extends Error {
   readonly status: number;
+  /** The parsed JSON error body, or null when the response was not JSON. Lets a caller branch on a machine-readable field such as `status`. */
+  readonly body: Record<string, unknown> | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, body: Record<string, unknown> | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
 const ERROR_BODY_PREVIEW_CHARS = 120;
 
-/** Best message for a non-2xx response: the JSON `error`, else status + a text snippet. */
-async function readErrorMessage(res: Response): Promise<string> {
+/** Build the ApiError for a non-2xx response: the JSON `error` as message (else status + a text snippet), and the parsed body. */
+async function readError(res: Response): Promise<ApiError> {
   const text = await res.text();
+  let body: Record<string, unknown> | null = null;
   try {
-    const body = JSON.parse(text);
-    if (body && typeof body.error === "string" && body.error) return body.error;
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
   } catch {
     // Not JSON — a proxy page or a plain-text failure. Fall through.
   }
+  if (body && typeof body.error === "string" && body.error) {
+    return new ApiError(body.error, res.status, body);
+  }
   const snippet = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   const head = snippet.slice(0, ERROR_BODY_PREVIEW_CHARS);
-  return head ? `${res.status} ${res.statusText}: ${head}` : `${res.status} ${res.statusText}`;
+  const message = head ? `${res.status} ${res.statusText}: ${head}` : `${res.status} ${res.statusText}`;
+  return new ApiError(message, res.status, body);
 }
 
 /** GET (or any `init.method`) a backend route and return its parsed JSON body. Throws `ApiError` on non-2xx. */
@@ -48,7 +56,7 @@ export async function fetchJson<T = any>(input: string, init?: RequestInit): Pro
     ...init,
     headers: { Accept: "application/json", ...(init?.headers ?? {}) },
   });
-  if (!res.ok) throw new ApiError(await readErrorMessage(res), res.status);
+  if (!res.ok) throw await readError(res);
   return res.json() as Promise<T>;
 }
 

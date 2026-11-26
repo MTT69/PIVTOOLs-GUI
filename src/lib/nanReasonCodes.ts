@@ -4,7 +4,7 @@
 //   ensemble       pivtools_cli/piv/piv_backend/single_pass_accumulator.py (module docstring)
 //                  pivtools_cli/piv/piv_backend/kspace_lm_fitting.py (STATUS_* constants)
 //
-// The two pipelines do NOT share one taxonomy. They agree on -1 / 0 / 10 and
+// The two pipelines do NOT share one taxonomy. They agree on -1 / 0 / 7 / 10 and
 // diverge elsewhere: codes 2/3/5/11 are ensemble-only, 9/12/13 are
 // instantaneous-only, and 1 and 6 carry different meanings on each side. Always
 // decode against the pipeline the data actually came from.
@@ -26,9 +26,13 @@ export const NAN_REASON_INST: Record<number, NanReasonEntry> = {
   [-1]: { stage: "mask", meaning: "masked window" },
   0: { stage: "init / rescue reset", meaning: "valid" },
   1: { stage: "post-C-call", meaning: "peak-fit failure (no peak / LM did not converge)" },
+  7: {
+    stage: "window preparation (C)",
+    meaning: "too little data (over a quarter of the window outside the frame or under the mask)",
+  },
   6: {
-    stage: "C peak search / residual gate on passes 2 and later",
-    meaning: "taller correlation peak beyond the quarter-window search reach, or (after the first pass) a fitted residual beyond a quarter window",
+    stage: "residual gate on passes 2 and later",
+    meaning: "large displacement (after the first pass, a fitted residual beyond a quarter window)",
   },
   9: { stage: "end of pass", meaning: "unclassified (in nan_mask, no stage claimed it)" },
   10: { stage: "outlier stage", meaning: "outlier detection (primary peak)" },
@@ -48,6 +52,10 @@ export const NAN_REASON_ENS: Record<number, NanReasonEntry> = {
   4: { stage: "post-fit validation", meaning: "singular phase solve (kspace_linear only)" },
   5: { stage: "post-fit validation", meaning: "negative variance" },
   6: { stage: "displacement check", meaning: "displacement > 3/4 window (in accumulator)" },
+  7: {
+    stage: "pre-fitting",
+    meaning: "too little data (over a quarter of the window outside the frame or under the mask, or a stored-plane lag with no valid pixel pair)",
+  },
   10: { stage: "outlier detection", meaning: "velocity outlier (median test)" },
   11: {
     stage: "outlier detection",

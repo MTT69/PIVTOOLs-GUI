@@ -5,7 +5,6 @@ export interface MaskingConfig {
   enabled: boolean;
   mode: 'file' | 'rectangular';
   mask_file_pattern?: string;
-  mask_threshold?: number;
   rectangular?: {
     top: number;
     bottom: number;

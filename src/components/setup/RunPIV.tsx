@@ -23,8 +23,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { usePivJobContext } from '@/contexts/PivJobContext';
-import { fetchJson, postJson, errorMessage } from '@/lib/api';
+import { usePivJobContext, CODE_VERSION_CHANGED } from '@/contexts/PivJobContext';
+import { fetchJson, postJson, errorMessage, ApiError } from '@/lib/api';
 
 // Helper to display a user-friendly path name
 const basename = (p: string) => p?.replace(/\\/g, "/").split("/").filter(Boolean).pop() || p;
@@ -80,6 +80,8 @@ const RunPIV: React.FC<RunPIVProps> = ({
   const [frameVars, setFrameVars] = useState<string[]>(['ux', 'uy', 'nan_mask', 'peak_mag']);
   const [frameVarsLoading, setFrameVarsLoading] = useState(false);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
+  // The backend refused an ensemble resume because PIVTOOLs' version changed since the run started.
+  const [showCodeChangeDialog, setShowCodeChangeDialog] = useState(false);
   const [isCheckingOutput, setIsCheckingOutput] = useState(false);
   // Why a run was not started (the output check or the clear failed).
   const [runStartError, setRunStartError] = useState<string | null>(null);
@@ -168,7 +170,14 @@ const RunPIV: React.FC<RunPIVProps> = ({
     const resumeFromPass = mode === 'ensemble' ? (config?.ensemble_piv?.resume_from_pass ?? 0) : 0;
     if (resumeFromPass > 0) {
       console.log(`[RunPIV] resume_from_pass=${resumeFromPass} — skipping overwrite check, resuming`);
-      await startJob(mode, settings);
+      try {
+        await startJob(mode, settings);
+      } catch (error) {
+        if (error instanceof ApiError && error.body?.status === CODE_VERSION_CHANGED) {
+          setShowCodeChangeDialog(true);
+        }
+        // Any other refusal is already shown by the job context's error display.
+      }
       return;
     }
 
@@ -197,6 +206,16 @@ const RunPIV: React.FC<RunPIVProps> = ({
       setRunStartError(`Could not check the output folders, so the run was not started: ${errorMessage(error)}`);
     } finally {
       setIsCheckingOutput(false);
+    }
+  };
+
+  // Handle user confirming the resume although the code version changed
+  const handleConfirmCodeChange = async () => {
+    setShowCodeChangeDialog(false);
+    try {
+      await startJob(mode, settings, true);
+    } catch {
+      // The job context's error display shows the reason.
     }
   };
 
@@ -603,6 +622,23 @@ const RunPIV: React.FC<RunPIVProps> = ({
             Clear Output
           </Button>
         </div>
+
+        {/* Code Version Changed Dialog (ensemble resume) */}
+        <AlertDialog open={showCodeChangeDialog} onOpenChange={setShowCodeChangeDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Code version changed</AlertDialogTitle>
+              <AlertDialogDescription>
+                Code version changed since this run started. Continue? The resumed passes are computed by the
+                current PIVTOOLs version, the earlier passes by the version that started the run.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleConfirmCodeChange}>Continue</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Overwrite Confirmation Dialog */}
         <AlertDialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>

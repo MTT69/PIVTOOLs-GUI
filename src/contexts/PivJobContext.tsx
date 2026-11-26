@@ -10,6 +10,9 @@ const STALE_JOB_HOURS = 24;
 // read and the payload flat instead of growing with the length of the run.
 const LOG_TAIL_LINES = 500;
 
+/** `status` of the backend's 409 when an ensemble resume finds a different PIVTOOLs version (`pivtools_gui/app.py` run_piv). */
+export const CODE_VERSION_CHANGED = 'code_version_changed';
+
 // Storage keys for localStorage persistence
 const STORAGE_KEY_INSTANTANEOUS = 'pivtools_instantaneous_job';
 const STORAGE_KEY_ENSEMBLE = 'pivtools_ensemble_job';
@@ -99,7 +102,8 @@ interface StoredJobData {
 interface PivJobContextType {
   instantaneousJob: PivJobState;
   ensembleJob: PivJobState;
-  startJob: (mode: 'instantaneous' | 'ensemble', settings: PivJobSettings) => Promise<void>;
+  /** `allowCodeChange`: resume an ensemble run although PIVTOOLs' version changed since it started (the user confirmed). */
+  startJob: (mode: 'instantaneous' | 'ensemble', settings: PivJobSettings, allowCodeChange?: boolean) => Promise<void>;
   cancelJob: (mode: 'instantaneous' | 'ensemble') => Promise<void>;
   resetJob: (mode: 'instantaneous' | 'ensemble') => void;
   updateSettings: (mode: 'instantaneous' | 'ensemble', settings: Partial<PivJobSettings>) => void;
@@ -629,7 +633,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
     };
   }, [ensembleJob.isPolling, ensembleJob.jobId, ensembleJob.activePaths]);
 
-  const startJob = useCallback(async (mode: 'instantaneous' | 'ensemble', settings: PivJobSettings) => {
+  const startJob = useCallback(async (mode: 'instantaneous' | 'ensemble', settings: PivJobSettings, allowCodeChange = false) => {
     const setJob = mode === 'instantaneous' ? setInstantaneousJob : setEnsembleJob;
     const storageKey = mode === 'instantaneous' ? STORAGE_KEY_INSTANTANEOUS : STORAGE_KEY_ENSEMBLE;
     const lastImageUpdateRef = mode === 'instantaneous' ? instantaneousLastImageUpdateRef : ensembleLastImageUpdateRef;
@@ -658,6 +662,7 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         sourcePathIdx: settings.sourcePathIdx,
         active_paths: settings.activePaths,
         mode: mode,
+        allow_code_change: allowCodeChange,
       });
       const jobId = data.job_id;
 
@@ -680,10 +685,12 @@ export function PivJobProvider({ children, config, activeTab, onJobComplete }: P
         activePaths: settings.activePaths,
       }));
     } catch (error) {
+      // A version change on resume is a question for the user (RunPIV asks it), not a failure.
+      const versionChanged = error instanceof ApiError && error.body?.status === CODE_VERSION_CHANGED;
       setJob(prev => ({
         ...prev,
         isLoading: false,
-        statusImage: { src: null, error: `Failed to start PIV: ${errorMessage(error)}` },
+        statusImage: { src: null, error: versionChanged ? null : `Failed to start PIV: ${errorMessage(error)}` },
       }));
       throw error;
     }
